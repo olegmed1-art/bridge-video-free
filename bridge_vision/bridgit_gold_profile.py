@@ -28,10 +28,6 @@ class BridgitGoldProfileError(ValueError):
     pass
 
 
-class BridgitGoldProfileOutputError(RuntimeError):
-    """The validated gold reference could not be written locally."""
-
-
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as stream:
@@ -183,7 +179,7 @@ def build_autonomous_gold_profile(
 
     reference = output_dir / "gold-v2-reference.png"
     if not cv2.imwrite(str(reference), canvas):
-        raise BridgitGoldProfileOutputError("cannot write gold-v2 reference")
+        raise BridgitGoldProfileError("cannot write gold-v2 reference")
     reference_sha = _sha256(reference)
     profile: dict[str, Any] = {
         "schema": rank_layout.PROFILE_SCHEMA,

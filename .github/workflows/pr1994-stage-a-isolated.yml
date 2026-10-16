@@ -1,0 +1,42 @@
+name: PR1994 StageA isolated SQL
+on:
+  pull_request:
+    paths:
+      - database/pr1994_stage_a.py
+      - database/tests/pr1994-audit-closure/run.py
+      - database/scripts/reconcile_pr1994_audit.sql
+      - database/migrations/0351_autopilot_paused_evidence_reconcile.sql
+      - database/migrations/0323_autopilot_failure_continuation.sql
+      - database/migrations/0324a_autopilot_dynamic_role_registry.sql
+      - database/migrations/0325_autopilot_durable_dependency_wakeup.sql
+      - tests/test_pr1994_stage_a.py
+      - tests/pr1994_stage_a_fixture.py
+      - tests/test_pr1994_stage_a_fixture.py
+      - .github/workflows/pr1994-stage-a-isolated.yml
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify exact accepted head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Fixture lifecycle regressions without Docker
+        env:
+          PYTHONPATH: .
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest tests.test_pr1994_stage_a_fixture -v
+      - name: Install exact client for synthetic fixtures
+        run: python3 -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Real TLS synthetic DB and client boundary tests
+        env:
+          PYTHONPATH: .
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 tests/test_pr1994_stage_a.py

@@ -4,7 +4,18 @@ on:
   pull_request:
     paths:
       - 'bridge_school_api/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_api_smoke_workflow_contract.py'
+      - 'tests/test_runtime_app_incident_probe.py'
+      - 'tests/test_api_health_contract.py'
+      - 'tests/test_api_response_headers.py'
       - 'tests/test_ai_api_routes.py'
       - 'tests/test_ai_final_decision_contract.py'
       - 'tests/test_ai_policy_contract.py'
@@ -12,6 +23,8 @@ on:
       - 'tests/test_ai_auction_scoring.py'
       - 'tests/test_knowledge_read_api.py'
       - 'tests/test_tournament_auction_stepwise_model_v3.py'
+      - 'tests/test_tournament_shape_exercises.py'
+      - 'tests/test_tournament_strength_proposal.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -19,7 +32,18 @@ on:
     branches: [main]
     paths:
       - 'bridge_school_api/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_api_smoke_workflow_contract.py'
+      - 'tests/test_runtime_app_incident_probe.py'
+      - 'tests/test_api_health_contract.py'
+      - 'tests/test_api_response_headers.py'
       - 'tests/test_ai_api_routes.py'
       - 'tests/test_ai_final_decision_contract.py'
       - 'tests/test_ai_policy_contract.py'
@@ -27,6 +51,8 @@ on:
       - 'tests/test_ai_auction_scoring.py'
       - 'tests/test_knowledge_read_api.py'
       - 'tests/test_tournament_auction_stepwise_model_v3.py'
+      - 'tests/test_tournament_shape_exercises.py'
+      - 'tests/test_tournament_strength_proposal.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -54,7 +80,14 @@ jobs:
       - name: Compile API package
         run: python -m compileall -q bridge_school_api
       - name: Verify database DSN security contract
-        run: PYTHONPATH=. python tests/test_api_dsn_contract.py
+        run: |
+          PYTHONPATH=. python tests/test_api_dsn_contract.py
+          python tests/test_api_smoke_workflow_contract.py
+      - name: Verify secret-safe incident diagnostics and health responses
+        run: |
+          PYTHONPATH=. python -m unittest discover -s tests -p test_runtime_app_incident_probe.py -v
+          PYTHONPATH=. python tests/test_api_health_contract.py
+          PYTHONPATH=. python tests/test_api_response_headers.py
       - name: Verify AI decision and policy contracts
         run: >-
           PYTHONPATH=. pytest -q
@@ -65,6 +98,10 @@ jobs:
           tests/test_ai_auction_scoring.py
           tests/test_knowledge_read_api.py
           tests/test_tournament_auction_stepwise_model_v3.py
+      - name: Verify tournament shape and derived proposal contracts
+        run: |
+          PYTHONPATH=. python -m unittest discover -s tests -p test_tournament_shape_exercises.py -v
+          PYTHONPATH=. python -m unittest discover -s tests -p test_tournament_strength_proposal.py -v
       - name: Import FastAPI application
         run: python -c "from app import app; assert app.title == 'Bridge School API'"
       - name: Build API container
@@ -72,13 +109,18 @@ jobs:
       - name: Verify API container identity and application import
         run: >-
           docker run --rm --network none bridge-school-api:ci
-          python -c "import os; from bridge_school_api.main import app; assert os.getuid() == 65532 and os.getgid() == 65532 and app.title == 'Bridge School API'"
+          python -c "import os; from bridge_school_api.main import app; assert os.getuid() == 65532 and os.getgid() == 65532 and app.title == 'Bridge School API'; from bridge_school_api.tournament_strength_proposal import load_policy; assert load_policy()['status'] == 'PROPOSAL'"
+      - name: Verify actual API image staging route without database or network
+        run: >-
+          docker run --rm --network none
+          -v "$PWD/tests/test_api_runtime_bundle.py:/tmp/test_api_runtime_bundle.py:ro"
+          bridge-school-api:ci python -I -B /tmp/test_api_runtime_bundle.py --smoke /app
 
   production-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: api-static
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -97,17 +139,30 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${BRIDGE_APP_DATABASE_URL:-}" || { echo 'BRIDGE_APP_DATABASE_URL is not configured'; exit 1; }
+      - name: Verify production database connection read-only
+        timeout-minutes: 1
+        shell: bash
+        env:
+          VERCEL_ENV: production
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          timeout --kill-after=5s 20s python -m bridge_school_api.incident_db_probe --connect
       - name: Start API
         shell: bash
         env:
+          VERCEL_ENV: production
           BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
           BRIDGE_API_TOKEN: github-actions-smoke-token
         run: |
           set -euo pipefail
-          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/bridge-school-api.log 2>&1 &
+          # Only this CI process fails on its first DB connection error.
+          python -c "from bridge_school_api import db; db.CONNECT_ATTEMPTS = 1; import uvicorn; uvicorn.run('app:app', host='127.0.0.1', port=8000, workers=1)" >/tmp/bridge-school-api.log 2>&1 &
           echo $! >/tmp/bridge-school-api.pid
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8000/healthz >/tmp/health.json; then
+            # Wait for the local listener without invoking a database route.
+            if (: >/dev/tcp/127.0.0.1/8000) 2>/dev/null; then
+              curl --fail --silent --connect-timeout 2 --max-time 5 http://127.0.0.1:8000/healthz >/tmp/health.json
               exit 0
             fi
             sleep 1
@@ -120,7 +175,7 @@ jobs:
           BRIDGE_API_TOKEN: github-actions-smoke-token
         run: |
           set -euo pipefail
-          curl --fail --silent \
+          curl --fail --silent --connect-timeout 2 --max-time 15 \
             -H "Authorization: Bearer ${BRIDGE_API_TOKEN}" \
             http://127.0.0.1:8000/v1/overview >/tmp/overview.json
           python - <<'PY'

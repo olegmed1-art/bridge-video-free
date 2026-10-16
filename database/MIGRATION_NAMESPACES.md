@@ -14,3 +14,13 @@ To prevent repeated sequence collisions between parallel Bridge School workstrea
 - Other future ranges must be reserved here before first use if a parallel workstream needs collision-free numbering.
 
 The GitHub workflow `migration-namespace-guard.yml` enforces these reservations on pull requests and pushes to `main`. This reservation is organizational only; it does not promote migrations to production. Production remains controlled by the separate manual `database-production` workflow and its explicit `MIGRATE` confirmation gate.
+
+## Immutable historical exception
+
+`0401_autopilot_codex_ack_fingerprint_not_null.sql` retains its already-applied
+identity while restoring the exact artifact from commit
+`60aed1154e0a55612708c44b67841e373a359f9f`. The guard accepts only that exact
+filename and SHA256
+`bea4b407a63256f83f5eecbd8b220406070046edb34d87f849d645b39134dcc7`.
+This does not reserve additional Autopilot numbers in the Video range or
+permit modified historical source. Use 0300-0399 for new Autopilot migrations.

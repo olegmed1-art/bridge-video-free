@@ -1,0 +1,62 @@
+name: Native maintenance journal store preparation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-maintenance-store-prepare.yml'
+      - 'ops/native_maintenance_store*.py'
+      - 'tests/test_native_maintenance_store.py'
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed main for journal storage preparation under HOLD
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && inputs.expected_main_sha == github.sha && 'oracle-light-backup-mutation' || format('native-store-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_store.py' -v
+
+  prepare:
+    needs: contract
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' && github.actor == github.repository_owner &&
+      github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Prepare fixed journal store under supervised HOLD checks
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          PYTHONPATH=. python ops/native_maintenance_store_runner.py "$work/key" "$work/known_hosts"

@@ -1,5 +1,6 @@
 name: Autopilot Universal Video 0056 disposable Neon evidence
 
+# RETIRED 2026-09-29: legacy shadow branch used as disposable-Neon parent/evidence; historical only.
 on:
   push:
     branches: [codex/oracle-autopilot-lite-shadow]
@@ -14,7 +15,7 @@ concurrency:
 
 jobs:
   evidence:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
+    if: ${{ false }} # retired legacy shadow branch
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: database-production

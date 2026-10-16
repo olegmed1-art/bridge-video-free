@@ -21,11 +21,18 @@ jobs:
       UNIVERSAL_VIDEO_WHISPER_MODEL: tiny
       UNIVERSAL_VIDEO_ASR_THREADS: '2'
       UNIVERSAL_VIDEO_MAX_SOURCE_BYTES: '104857600'
+      UNIVERSAL_VIDEO_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: Verify exact event head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
 
       - name: Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -100,7 +107,7 @@ jobs:
           assert manifest['source_reuse_safe'] is True
           assert manifest['source']['fingerprint'] == manifest['source_fingerprint']
           assert len(manifest['processing_fingerprint']) == 64
-          assert manifest['processing_revision'] == os.environ['GITHUB_SHA']
+          assert manifest['processing_revision'] == os.environ['UNIVERSAL_VIDEO_SOURCE_COMMIT']
           assert manifest['processing_whisper_model'] == 'tiny'
           assert manifest['transcript']['qc_blocks'] == 1
           assert manifest['transcript']['qc_allowed_failed'] == 0
@@ -128,6 +135,8 @@ jobs:
           python - <<'PY'
           import hashlib
           import json
+          import subprocess
+          import sys
           from pathlib import Path
 
           manifest_path=Path('/tmp/universal-video-output/synthetic-engine-smoke/manifest.json')
@@ -139,32 +148,34 @@ jobs:
               'processing_fingerprint': manifest['processing_fingerprint'],
               'manifest_sha256': hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
           }
-          Path('/tmp/universal-video-before.json').write_text(json.dumps(state), encoding='utf-8')
-          PY
-
-          python -m universal_video.runner /tmp/universal-video-job.json \
-            --output-root /tmp/universal-video-output >/tmp/universal-video-repeat.json
-
-          python - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-
-          manifest_path=Path('/tmp/universal-video-output/synthetic-engine-smoke/manifest.json')
-          before=json.loads(Path('/tmp/universal-video-before.json').read_text(encoding='utf-8'))
-          repeat=json.loads(Path('/tmp/universal-video-repeat.json').read_text(encoding='utf-8'))
+          before = state
+          root = manifest_path.parent
+          def inventory():
+              return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in root.rglob('*') if p.is_file()}
+          before_inventory = inventory()
+          attempt = subprocess.run(
+              [sys.executable, '-m', 'universal_video.runner', '/tmp/universal-video-job.json',
+               '--output-root', '/tmp/universal-video-output'],
+              capture_output=True, text=True, timeout=120,
+          )
           after=json.loads(manifest_path.read_text(encoding='utf-8'))
           after_sha=hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
-          assert repeat == after
           assert after['job_hash'] == before['job_hash']
           assert after['source_fingerprint'] == before['source_fingerprint']
           assert after['processing_fingerprint'] == before['processing_fingerprint']
           assert after['status'] in {'COMPLETED','REVIEW'}
           if before['status'] == 'COMPLETED':
+              assert attempt.returncode == 0, attempt.stderr
+              assert json.loads(attempt.stdout) == after
               assert after_sha == before['manifest_sha256']
               print('UNIVERSAL_VIDEO_COMPLETED_IDEMPOTENCY_SMOKE_PASS')
           else:
               assert before['status'] == 'REVIEW'
-              print('UNIVERSAL_VIDEO_REVIEW_RERUN_SEMANTICS_PASS')
+              assert attempt.returncode != 0
+              assert 'existing result cannot be reused safely' in attempt.stderr
+              assert after_sha == before['manifest_sha256']
+              assert inventory() == before_inventory
+              print('UNIVERSAL_VIDEO_REVIEW_PRESERVATION_SMOKE_PASS')
           PY

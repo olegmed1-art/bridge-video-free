@@ -1,0 +1,88 @@
+name: Autopilot paused event scope synthetic contract
+
+on:
+  push:
+    branches:
+      - 'review/autopilot-paused-event-scope-64ed9690-20261006'
+    paths:
+      - '.github/workflows/autopilot-paused-reconcile.yml'
+      - 'tests/test_autopilot_paused_reconcile_workflow_contract.py'
+      - '.github/workflows/autopilot-paused-event-scope-synthetic.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-paused-event-scope-synthetic-review
+  cancel-in-progress: false
+
+jobs:
+  synthetic-contract:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/review/autopilot-paused-event-scope-64ed9690-20261006'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Verify exact review branch before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'olegmed1-art/bridge-video-free'
+          test "$GITHUB_EVENT_NAME" = 'push'
+          test "$GITHUB_REF" = 'refs/heads/review/autopilot-paused-event-scope-64ed9690-20261006'
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout exactly the three reviewed files
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/autopilot-paused-reconcile.yml
+            /tests/test_autopilot_paused_reconcile_workflow_contract.py
+            /.github/workflows/autopilot-paused-event-scope-synthetic.yml
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'synthetic_source_sha=%s\n' "$GITHUB_SHA"
+          sha256sum --check <<'PINS'
+          0aa01ee7077ec9b994e7d8201910006d3289f7e034841b17fe46ddbe16b51a1c  .github/workflows/autopilot-paused-reconcile.yml
+          e7039be9299dced35da1d80a7da656daa407be1bdedd0cb347c495034af6b269  tests/test_autopilot_paused_reconcile_workflow_contract.py
+          PINS
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.14'
+
+      - name: Install only synthetic test dependencies
+        run: python -I -B -m pip install --disable-pip-version-check 'pytest==8.4.2' 'PyYAML==6.0.2'
+
+      - name: Run exact synthetic workflow contract
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: >-
+          python -I -B -m pytest -q -c /dev/null --rootdir=.
+          --noconftest -p no:cacheprovider
+          tests/test_autopilot_paused_reconcile_workflow_contract.py
+
+      - name: Run installed actionlint when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v actionlint >/dev/null 2>&1; then
+            actionlint -version
+            actionlint \
+              .github/workflows/autopilot-paused-reconcile.yml \
+              .github/workflows/autopilot-paused-event-scope-synthetic.yml
+            echo 'ACTIONLINT_PASS'
+          else
+            echo 'ACTIONLINT_NOT_RUN: actionlint is not installed; no tool downloaded'
+          fi

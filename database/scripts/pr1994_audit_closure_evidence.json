@@ -1,0 +1,36 @@
+{
+  "scope": "PR1994_ONE_ITEM_AUDIT_FINDING_CLOSURE",
+  "original_audit_head": "4c26b6eda7617563a6372d1fc0eb82beadd4e910",
+  "summary_read_by": "parent",
+  "original_artifact_digest_independently_verified": false,
+  "finding": "Malformed manifest test rows raise uncaught exceptions and preserve stale status=ok output.",
+  "reproductions": [
+    "tests=[null]",
+    "tests=[{\"suite\":\"fast\"}]"
+  ],
+  "fix_commit": "788fc557e677c2c98ad2986245baa626c68aab42",
+  "final_pr1994_head": "ab3977b27940401a26bcb1da2f2b13d1e9203143",
+  "merge_commit": "849d6c70cb3462877c65fa87272380238a498eb1",
+  "verified_main": "546f52d6bab7f836dcb4f6325a6caa79c982f16e",
+  "implementation_blob": "3f916d83c8114190ec6f947e2b7c0015f215047a",
+  "regression_blob": "0bf92f910e2a8761c718b6608f515702e12c2cb9",
+  "fix_validation": {
+    "fast_run": 36532755110,
+    "final_head_checks_success": 16,
+    "malformed_manifest_cli_cases": 26,
+    "numeric_id_compatibility_cases": 2
+  },
+  "closure_action": "CLOSE_SUPERSEDED",
+  "closure_result_code": "TARGET_SUPERSEDED_BY_CURRENT_MAIN",
+  "excludes": [
+    "PR1847",
+    "OWNER_HOLD item",
+    "native prepare issue1853",
+    "mailbox rotation",
+    "worker activation",
+    "credentials",
+    "service changes"
+  ],
+  "production_apply_authorized": false,
+  "private_case_binding": "Supply only through reviewed owner parameters; do not publish identifiers or private task URLs."
+}

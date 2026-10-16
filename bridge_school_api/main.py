@@ -24,6 +24,7 @@ from .dds3 import DDSUnavailable, solve_table
 from .dds3.readiness import engine_readiness
 from .dds3.remote import RemoteDDS3Config, compute_remote, remote_engine_readiness
 from .knowledge import router as knowledge_router
+from .incident_db_probe import probe as incident_db_configuration
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 ASSISTANT_LAB_DISPATCHER = "vercel-capability-v1"
@@ -58,7 +59,12 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
     prefix = "Bearer "
     if not authorization or not authorization.startswith(prefix):
         raise HTTPException(status_code=401, detail="missing bearer token")
-    if not secrets.compare_digest(authorization[len(prefix):], configured):
+    try:
+        matches = secrets.compare_digest(authorization[len(prefix):], configured)
+    except TypeError:
+        # compare_digest rejects non-ASCII strings; malformed headers fail closed.
+        matches = False
+    if not matches:
         raise HTTPException(status_code=403, detail="invalid bearer token")
 
 
@@ -344,7 +350,13 @@ def healthz() -> JSONResponse:
             cur.execute("SELECT current_user AS principal, count(*) AS school_count FROM public.school WHERE stable_name = %s GROUP BY current_user", (EXPECTED_SCHOOL,))
             row = cur.fetchone()
     except Exception as exc:
-        logger.error("database_health_check_failed category=%s type=%s sqlstate=%s", _database_failure_category(exc), type(exc).__name__, getattr(exc, "sqlstate", None))
+        logger.error(
+            "database_health_check_failed category=%s type=%s sqlstate=%s config=%s",
+            _database_failure_category(exc),
+            type(exc).__name__,
+            getattr(exc, "sqlstate", None),
+            incident_db_configuration(),
+        )
         raise HTTPException(status_code=503, detail="service unavailable") from exc
     if not row or row["principal"] != EXPECTED_PRINCIPAL or row["school_count"] != 1:
         raise HTTPException(status_code=503, detail="service unavailable")

@@ -1,0 +1,1301 @@
+{
+  "kind": "SINGLE_FRAME_AUTO_GEOMETRY_SHADOW_SMOKE",
+  "source_frame_sha256": "b7a960a7bfcf3e3cbc4dc191988baa2d31ec740d72fb58e2a9c61f77ef103c13",
+  "sprite_sha256": "52eb9c97c9685758f48beb6e84013e9289bdb97f8a31b4ae8e46a0ecee3a37fb",
+  "geometry": "PINNED_BORDER_SEAT_BANDS",
+  "source_board_read_single_frame_only": {
+    "status": "READ",
+    "number": 1,
+    "digit_scores": [
+      0.9375
+    ],
+    "region_xyxy": [
+      1228,
+      40,
+      1269,
+      78
+    ]
+  },
+  "source_pts_verified": false,
+  "episode_verified": false,
+  "paired_frame_available": false,
+  "accuracy_evaluated": false,
+  "manual_16_slot_comparison": {
+    "manual_observed_count": 9,
+    "manual_unknown_count": 7,
+    "auto_accepted_near_manual_slots": [
+      {
+        "slot_index": 1,
+        "auto_card": "TC"
+      },
+      {
+        "slot_index": 2,
+        "auto_card": "JD"
+      },
+      {
+        "slot_index": 6,
+        "auto_card": "AD"
+      },
+      {
+        "slot_index": 7,
+        "auto_card": "AS"
+      },
+      {
+        "slot_index": 8,
+        "auto_card": "TH"
+      },
+      {
+        "slot_index": 11,
+        "auto_card": "JS"
+      },
+      {
+        "slot_index": 12,
+        "auto_card": "JH"
+      },
+      {
+        "slot_index": 14,
+        "auto_card": "5D"
+      },
+      {
+        "slot_index": 15,
+        "auto_card": "4S"
+      }
+    ]
+  },
+  "runs": {
+    "original": {
+      "candidate_count": 50,
+      "cards": [
+        {
+          "card": "4C",
+          "confidence": 0.7944,
+          "box": {
+            "x": 1156,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "3C",
+          "confidence": 0.7851,
+          "box": {
+            "x": 1183,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "2C",
+          "confidence": 0.8964,
+          "box": {
+            "x": 1210,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "AD",
+          "confidence": 0.8026,
+          "box": {
+            "x": 1178,
+            "y": 369,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "KD",
+          "confidence": 0.8986,
+          "box": {
+            "x": 1210,
+            "y": 369,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "AS",
+          "confidence": 0.9284,
+          "box": {
+            "x": 1146,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "QS",
+          "confidence": 0.9862,
+          "box": {
+            "x": 1210,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TC",
+          "confidence": 0.9917,
+          "box": {
+            "x": 466,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7C",
+          "confidence": 0.9897,
+          "box": {
+            "x": 501,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JD",
+          "confidence": 0.9822,
+          "box": {
+            "x": 650,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TD",
+          "confidence": 0.9799,
+          "box": {
+            "x": 685,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TH",
+          "confidence": 0.9825,
+          "box": {
+            "x": 317,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7H",
+          "confidence": 0.9815,
+          "box": {
+            "x": 387,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JS",
+          "confidence": 0.9841,
+          "box": {
+            "x": 799,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TS",
+          "confidence": 0.9908,
+          "box": {
+            "x": 834,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7S",
+          "confidence": 0.9898,
+          "box": {
+            "x": 904,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JH",
+          "confidence": 0.8628,
+          "box": {
+            "x": 13,
+            "y": 281,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JC",
+          "confidence": 0.9009,
+          "box": {
+            "x": 94,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "5D",
+          "confidence": 0.8361,
+          "box": {
+            "x": 13,
+            "y": 369,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "4S",
+          "confidence": 0.954,
+          "box": {
+            "x": 13,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "3S",
+          "confidence": 0.9171,
+          "box": {
+            "x": 45,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "2S",
+          "confidence": 0.9885,
+          "box": {
+            "x": 77,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        }
+      ],
+      "unknown": [
+        {
+          "index": 0,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8411,
+          "margin": 0.0164
+        },
+        {
+          "index": 1,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8781,
+          "margin": 0.0719
+        },
+        {
+          "index": 2,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8023,
+          "margin": 0.018
+        },
+        {
+          "index": 8,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "E"
+        },
+        {
+          "index": 10,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.9626,
+          "margin": 0.0368
+        },
+        {
+          "index": 12,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.4467,
+          "margin": 0.0292
+        },
+        {
+          "index": 13,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9837,
+          "margin": 0.0247
+        },
+        {
+          "index": 14,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9816,
+          "margin": 0.0187
+        },
+        {
+          "index": 17,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9901,
+          "margin": 0.0278
+        },
+        {
+          "index": 20,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9811,
+          "margin": 0.0358
+        },
+        {
+          "index": 21,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.991,
+          "margin": 0.0515
+        },
+        {
+          "index": 22,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.99,
+          "margin": 0.0275
+        },
+        {
+          "index": 23,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9902,
+          "margin": 0.0268
+        },
+        {
+          "index": 24,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "N"
+        },
+        {
+          "index": 25,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "N"
+        },
+        {
+          "index": 27,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9818,
+          "margin": 0.0346
+        },
+        {
+          "index": 29,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9914,
+          "margin": 0.0517
+        },
+        {
+          "index": 30,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9903,
+          "margin": 0.0507
+        },
+        {
+          "index": 31,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9833,
+          "margin": 0.0271
+        },
+        {
+          "index": 32,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9775,
+          "margin": 0.0605
+        },
+        {
+          "index": 35,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9901,
+          "margin": 0.0387
+        },
+        {
+          "index": 38,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.8584,
+          "margin": 0.0549
+        },
+        {
+          "index": 39,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "W"
+        },
+        {
+          "index": 40,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "W"
+        },
+        {
+          "index": 41,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.7596,
+          "margin": 0.0607
+        },
+        {
+          "index": 44,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.8523,
+          "margin": 0.0579
+        },
+        {
+          "index": 48,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.9813,
+          "margin": 0.0587
+        },
+        {
+          "index": 49,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.5596,
+          "margin": 0.0173
+        }
+      ],
+      "card_count": 22,
+      "unknown_count": 28
+    },
+    "shift_1px": {
+      "candidate_count": 50,
+      "cards": [
+        {
+          "card": "4C",
+          "confidence": 0.7944,
+          "box": {
+            "x": 1157,
+            "y": 326,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "3C",
+          "confidence": 0.7851,
+          "box": {
+            "x": 1184,
+            "y": 326,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "2C",
+          "confidence": 0.8964,
+          "box": {
+            "x": 1211,
+            "y": 326,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "AD",
+          "confidence": 0.8026,
+          "box": {
+            "x": 1179,
+            "y": 370,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "KD",
+          "confidence": 0.8986,
+          "box": {
+            "x": 1211,
+            "y": 370,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "AS",
+          "confidence": 0.9284,
+          "box": {
+            "x": 1147,
+            "y": 414,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "QS",
+          "confidence": 0.9862,
+          "box": {
+            "x": 1211,
+            "y": 414,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TC",
+          "confidence": 0.9917,
+          "box": {
+            "x": 467,
+            "y": 2,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7C",
+          "confidence": 0.9897,
+          "box": {
+            "x": 502,
+            "y": 2,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JD",
+          "confidence": 0.9822,
+          "box": {
+            "x": 651,
+            "y": 2,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TD",
+          "confidence": 0.9799,
+          "box": {
+            "x": 686,
+            "y": 2,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TH",
+          "confidence": 0.9825,
+          "box": {
+            "x": 318,
+            "y": 785,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7H",
+          "confidence": 0.9815,
+          "box": {
+            "x": 388,
+            "y": 785,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JS",
+          "confidence": 0.9841,
+          "box": {
+            "x": 800,
+            "y": 785,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TS",
+          "confidence": 0.9908,
+          "box": {
+            "x": 835,
+            "y": 785,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7S",
+          "confidence": 0.9898,
+          "box": {
+            "x": 905,
+            "y": 785,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JH",
+          "confidence": 0.8628,
+          "box": {
+            "x": 14,
+            "y": 282,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JC",
+          "confidence": 0.9009,
+          "box": {
+            "x": 95,
+            "y": 326,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "5D",
+          "confidence": 0.8361,
+          "box": {
+            "x": 14,
+            "y": 370,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "4S",
+          "confidence": 0.954,
+          "box": {
+            "x": 14,
+            "y": 414,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "3S",
+          "confidence": 0.9171,
+          "box": {
+            "x": 46,
+            "y": 414,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "2S",
+          "confidence": 0.9885,
+          "box": {
+            "x": 78,
+            "y": 414,
+            "w": 109,
+            "h": 147
+          }
+        }
+      ],
+      "unknown": [
+        {
+          "index": 0,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8411,
+          "margin": 0.0164
+        },
+        {
+          "index": 1,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8781,
+          "margin": 0.0719
+        },
+        {
+          "index": 2,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8023,
+          "margin": 0.018
+        },
+        {
+          "index": 8,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "E"
+        },
+        {
+          "index": 10,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.9626,
+          "margin": 0.0368
+        },
+        {
+          "index": 12,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.4467,
+          "margin": 0.0292
+        },
+        {
+          "index": 13,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9837,
+          "margin": 0.0247
+        },
+        {
+          "index": 14,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9816,
+          "margin": 0.0187
+        },
+        {
+          "index": 17,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9901,
+          "margin": 0.0278
+        },
+        {
+          "index": 20,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9811,
+          "margin": 0.0358
+        },
+        {
+          "index": 21,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.991,
+          "margin": 0.0515
+        },
+        {
+          "index": 22,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.99,
+          "margin": 0.0275
+        },
+        {
+          "index": 23,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9902,
+          "margin": 0.0268
+        },
+        {
+          "index": 24,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "N"
+        },
+        {
+          "index": 25,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "N"
+        },
+        {
+          "index": 27,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9818,
+          "margin": 0.0346
+        },
+        {
+          "index": 29,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9914,
+          "margin": 0.0517
+        },
+        {
+          "index": 30,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9903,
+          "margin": 0.0507
+        },
+        {
+          "index": 31,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9833,
+          "margin": 0.0271
+        },
+        {
+          "index": 32,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9775,
+          "margin": 0.0605
+        },
+        {
+          "index": 35,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9901,
+          "margin": 0.0387
+        },
+        {
+          "index": 38,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.8584,
+          "margin": 0.0549
+        },
+        {
+          "index": 39,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "W"
+        },
+        {
+          "index": 40,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "W"
+        },
+        {
+          "index": 41,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.7596,
+          "margin": 0.0607
+        },
+        {
+          "index": 44,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.8523,
+          "margin": 0.0579
+        },
+        {
+          "index": 48,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.9813,
+          "margin": 0.0587
+        },
+        {
+          "index": 49,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.5596,
+          "margin": 0.0173
+        }
+      ],
+      "card_count": 22,
+      "unknown_count": 28
+    },
+    "jpeg_q95": {
+      "candidate_count": 49,
+      "cards": [
+        {
+          "card": "4C",
+          "confidence": 0.7943,
+          "box": {
+            "x": 1156,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "3C",
+          "confidence": 0.785,
+          "box": {
+            "x": 1183,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "2C",
+          "confidence": 0.8962,
+          "box": {
+            "x": 1210,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "AD",
+          "confidence": 0.7942,
+          "box": {
+            "x": 1178,
+            "y": 369,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "KD",
+          "confidence": 0.8901,
+          "box": {
+            "x": 1210,
+            "y": 369,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "AS",
+          "confidence": 0.9284,
+          "box": {
+            "x": 1146,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "QS",
+          "confidence": 0.9827,
+          "box": {
+            "x": 1210,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TC",
+          "confidence": 0.9917,
+          "box": {
+            "x": 466,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7C",
+          "confidence": 0.9897,
+          "box": {
+            "x": 501,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JD",
+          "confidence": 0.9749,
+          "box": {
+            "x": 650,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TD",
+          "confidence": 0.97,
+          "box": {
+            "x": 685,
+            "y": 1,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TH",
+          "confidence": 0.9734,
+          "box": {
+            "x": 317,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7H",
+          "confidence": 0.9751,
+          "box": {
+            "x": 387,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JS",
+          "confidence": 0.9801,
+          "box": {
+            "x": 799,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "TS",
+          "confidence": 0.9907,
+          "box": {
+            "x": 834,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "7S",
+          "confidence": 0.9898,
+          "box": {
+            "x": 904,
+            "y": 784,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JH",
+          "confidence": 0.8532,
+          "box": {
+            "x": 13,
+            "y": 281,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "JC",
+          "confidence": 0.8958,
+          "box": {
+            "x": 94,
+            "y": 325,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "4S",
+          "confidence": 0.9539,
+          "box": {
+            "x": 13,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "3S",
+          "confidence": 0.917,
+          "box": {
+            "x": 45,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        },
+        {
+          "card": "2S",
+          "confidence": 0.9885,
+          "box": {
+            "x": 77,
+            "y": 413,
+            "w": 109,
+            "h": 147
+          }
+        }
+      ],
+      "unknown": [
+        {
+          "index": 0,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "E"
+        },
+        {
+          "index": 1,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8698,
+          "margin": 0.0683
+        },
+        {
+          "index": 2,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.8018,
+          "margin": 0.0183
+        },
+        {
+          "index": 8,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "E"
+        },
+        {
+          "index": 10,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.9626,
+          "margin": 0.0368
+        },
+        {
+          "index": 12,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "E",
+          "best_score": 0.4464,
+          "margin": 0.0293
+        },
+        {
+          "index": 13,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9768,
+          "margin": 0.0223
+        },
+        {
+          "index": 14,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9742,
+          "margin": 0.0179
+        },
+        {
+          "index": 17,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9901,
+          "margin": 0.028
+        },
+        {
+          "index": 20,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9737,
+          "margin": 0.0333
+        },
+        {
+          "index": 21,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.991,
+          "margin": 0.0517
+        },
+        {
+          "index": 22,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9899,
+          "margin": 0.0276
+        },
+        {
+          "index": 23,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "N",
+          "best_score": 0.9902,
+          "margin": 0.0269
+        },
+        {
+          "index": 24,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "N"
+        },
+        {
+          "index": 26,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9747,
+          "margin": 0.0324
+        },
+        {
+          "index": 28,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9913,
+          "margin": 0.0517
+        },
+        {
+          "index": 29,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9902,
+          "margin": 0.0508
+        },
+        {
+          "index": 30,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.976,
+          "margin": 0.0254
+        },
+        {
+          "index": 31,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9694,
+          "margin": 0.0573
+        },
+        {
+          "index": 34,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "S",
+          "best_score": 0.9901,
+          "margin": 0.0387
+        },
+        {
+          "index": 37,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.8502,
+          "margin": 0.0514
+        },
+        {
+          "index": 38,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "W"
+        },
+        {
+          "index": 39,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "W"
+        },
+        {
+          "index": 40,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.7571,
+          "margin": 0.0573
+        },
+        {
+          "index": 42,
+          "reason": "CORNER_OCCLUDED",
+          "seat": "W"
+        },
+        {
+          "index": 43,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.8427,
+          "margin": 0.055
+        },
+        {
+          "index": 47,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.4929,
+          "margin": 0.0127
+        },
+        {
+          "index": 48,
+          "reason": "CARD_UNCERTAIN",
+          "seat": "W",
+          "best_score": 0.974,
+          "margin": 0.0555
+        }
+      ],
+      "card_count": 21,
+      "unknown_count": 28
+    }
+  },
+  "observer_version": "bridgit-gambler-partial-pixels-v3"
+}

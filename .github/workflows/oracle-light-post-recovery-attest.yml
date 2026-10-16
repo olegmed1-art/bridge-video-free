@@ -1,0 +1,43 @@
+name: Oracle Light post-recovery containment attest
+
+on:
+  pull_request:
+    paths: ['.github/workflows/oracle-light-post-recovery-attest.yml', 'ops/oracle_light_post_recovery_attest.py']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/oracle-light-post-recovery-attest.yml', 'ops/oracle_light_post_recovery_attest.py']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-light-post-recovery-attest
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Check script syntax
+        run: python -m py_compile ops/oracle_light_post_recovery_attest.py
+      - name: Attest exact stopped HOLD and root owned secret source
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 ubuntu@92.5.47.149 'sudo -n /usr/bin/python3 -' < ops/oracle_light_post_recovery_attest.py

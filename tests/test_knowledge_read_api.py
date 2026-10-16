@@ -92,7 +92,8 @@ def test_knowledge_routes_are_mounted_with_api_token_dependency() -> None:
     )
     assert {
         route.path for route in mounted[0].original_router.routes
-    } == {"/v1/knowledge/query", "/v1/knowledge/runtime/l1"}
+    } == {"/v1/knowledge/query", "/v1/knowledge/runtime/l1", "/v1/knowledge/teacher/book",
+              "/v1/knowledge/validation/runtime-identity", "/v1/knowledge/internal/video-staging/{candidate_id}"}
 
 
 def test_source_lane_reads_only_approved_source_facts(monkeypatch) -> None:
@@ -214,3 +215,150 @@ def test_runtime_rejects_other_system_profiles() -> None:
 
     assert error.value.status_code == 404
     assert error.value.detail["code"] == "RUNTIME_PROFILE_GAP"
+
+
+_STAGING_URL = '/v1/knowledge/internal/video-staging/11111111-1111-1111-1111-111111111111'
+_LOCAL_TOKEN = 'local-security-contract-test-only'
+
+
+def _staging_get(headers=None):
+    """Exercise the real ASGI route with the API CI's installed dependencies."""
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    async def request():
+        messages = []
+        request_sent = False
+
+        async def receive():
+            nonlocal request_sent
+            if not request_sent:
+                request_sent = True
+                return {'type': 'http.request', 'body': b'', 'more_body': False}
+            await asyncio.Event().wait()
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {
+            'type': 'http', 'asgi': {'version': '3.0', 'spec_version': '2.4'},
+            'http_version': '1.1', 'method': 'GET', 'scheme': 'http',
+            'path': _STAGING_URL, 'raw_path': _STAGING_URL.encode('ascii'),
+            'query_string': b'', 'root_path': '',
+            'headers': [(key.lower().encode('ascii'), value.encode('ascii'))
+                        for key, value in (headers or {}).items()],
+            'client': ('127.0.0.1', 12345), 'server': ('testserver', 80),
+        }
+        await asyncio.wait_for(app(scope, receive, send), timeout=5)
+        starts = [message for message in messages if message['type'] == 'http.response.start']
+        bodies = [message for message in messages if message['type'] == 'http.response.body']
+        assert len(starts) == 1 and bodies and not bodies[-1].get('more_body', False)
+        body = b''.join(message.get('body', b'') for message in bodies)
+        return SimpleNamespace(
+            status_code=starts[0]['status'], text=body.decode('utf-8'),
+            headers={key.decode('latin-1').lower(): value.decode('latin-1')
+                     for key, value in starts[0]['headers']},
+            json=lambda: json.loads(body),
+        )
+
+    return asyncio.run(request())
+
+
+def _staging_fault_response(monkeypatch, error):
+
+    class Connection:
+        @contextmanager
+        def transaction(self):
+            raise error
+            yield
+
+    @contextmanager
+    def connect():
+        yield Connection()
+
+    monkeypatch.setenv('BRIDGE_API_TOKEN', _LOCAL_TOKEN)
+    monkeypatch.setattr(knowledge, 'connect', connect)
+    return _staging_get(headers={'Authorization': 'Bearer ' + _LOCAL_TOKEN})
+
+
+@pytest.mark.parametrize('message', [
+    'SYNTHETIC_PRIVATE_EXCEPTION_MARKER',
+    'PRIVATE_' + 'X' * 8192,
+    '\u0421\u0415\u041a\u0420\u0415\u0422\u041d\u042b\u0419_\u041c\u0410\u0420\u041a\u0415\u0420',
+    'Traceback (most recent call last):\n/private/synthetic.py:42 PRIVATE_MARKER',
+    'postgresql://synthetic:PRIVATE_MARKER@example.invalid/private',
+    'SOURCE_HASH_BINDING_MISMATCH_PRIVATE_MARKER',
+    '',
+])
+@pytest.mark.parametrize('blocked_error', [False, True])
+def test_internal_staging_never_returns_arbitrary_exception_text(monkeypatch, message, blocked_error):
+    from bridge_contracts.video_teacher_read import _Blocked
+    error = _Blocked(message) if blocked_error else ValueError(message)
+    response = _staging_fault_response(monkeypatch, error)
+    assert response.status_code == 200
+    assert response.json() == {
+        'schema': 'video-school-internal-staging-read-v1', 'status': 'BLOCKED',
+        'gaps': ['READ_CONTRACT_INCOMPLETE'], 'accepted_canon': [],
+        'canon_write_allowed': False, 'student_delivery_allowed': False,
+    }
+    assert 'no-store' in response.headers['cache-control']
+
+
+@pytest.mark.parametrize('code', [
+    'READ_ONLY_CONNECTION_REQUIRED', 'REPEATABLE_READ_REQUIRED',
+    'SOURCE_HASH_BINDING_MISMATCH', 'REPLAY_HASH_MISMATCH', 'READ_BINDING_STALE_OR_REVOKED',
+])
+def test_internal_staging_preserves_known_diagnostic_codes(monkeypatch, code):
+    response = _staging_fault_response(monkeypatch, ValueError(code))
+    assert response.status_code == 200
+    assert response.json()['gaps'] == [code]
+    assert response.json()['status'] == 'BLOCKED'
+    assert response.json()['accepted_canon'] == []
+
+
+def test_internal_staging_does_not_format_exception_or_join_multiple_args(monkeypatch):
+    class UnformattableError(ValueError):
+        def __str__(self):
+            raise AssertionError('exception formatting must not be used')
+    response = _staging_fault_response(monkeypatch, UnformattableError('PRIVATE_MARKER'))
+    assert response.status_code == 200
+    assert response.json()['gaps'] == ['READ_CONTRACT_INCOMPLETE']
+    response = _staging_fault_response(monkeypatch, ValueError('READ_ONLY_CONNECTION_REQUIRED', 'PRIVATE_MARKER'))
+    assert response.json()['gaps'] == ['READ_CONTRACT_INCOMPLETE']
+
+
+def test_internal_staging_keeps_driver_error_generic(monkeypatch):
+    import psycopg
+    response = _staging_fault_response(monkeypatch, psycopg.OperationalError('PRIVATE_DRIVER_MARKER'))
+    assert response.status_code == 200
+    assert response.json()['gaps'] == ['READ_CONTRACT_INCOMPLETE']
+    assert 'PRIVATE_DRIVER_MARKER' not in response.text
+
+
+def test_internal_staging_auth_rejects_before_connection(monkeypatch):
+    calls = []
+
+    def unexpected_connect():
+        calls.append(True)
+        raise AssertionError('unauthorized connection')
+
+    monkeypatch.setenv('BRIDGE_API_TOKEN', _LOCAL_TOKEN)
+    monkeypatch.setattr(knowledge, 'connect', unexpected_connect)
+    assert _staging_get().status_code == 401
+    assert _staging_get(headers={'Authorization': 'Bearer wrong'}).status_code == 403
+    assert calls == []
+
+
+def test_internal_staging_connection_failure_uses_existing_safe_handler(monkeypatch, caplog):
+    import psycopg
+
+    def failed_connect():
+        raise psycopg.OperationalError('SYNTHETIC_PRIVATE_CONNECTION_MARKER')
+
+    monkeypatch.setenv('BRIDGE_API_TOKEN', _LOCAL_TOKEN)
+    monkeypatch.setattr(knowledge, 'connect', failed_connect)
+    response = _staging_get(headers={'Authorization': 'Bearer ' + _LOCAL_TOKEN})
+    assert response.status_code == 503
+    assert response.json() == {'detail': 'service unavailable'}
+    assert 'SYNTHETIC_PRIVATE_CONNECTION_MARKER' not in response.text + caplog.text

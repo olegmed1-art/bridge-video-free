@@ -49,6 +49,7 @@ _REASONS = frozenset(
         "DIARIZATION_ENGINE_FAILED",
         "UNSUPPORTED_STATUS",
         "SEGMENT_COUNT_MISMATCH",
+        "SEGMENT_SOURCE_MISMATCH",
         "NO_SPEAKER_LABELS",
         "SPEAKER_COLLAPSE_RISK",
         "TOO_MANY_SPEAKERS",
@@ -208,6 +209,28 @@ def _probability(value: Any) -> float | None:
     return number if math.isfinite(number) and 0.0 <= number <= 1.0 else None
 
 
+def _source_segment_aligned(base: Mapping[str, Any], raw: Mapping[str, Any]) -> bool:
+    """A producer may annotate, but must not reorder or replace source rows."""
+    for field in ("start", "end"):
+        before, after = base.get(field), raw.get(field)
+        if type(before) not in (int, float) or type(after) not in (int, float):
+            return False
+        try:
+            if not math.isfinite(before) or not math.isfinite(after) or before != after:
+                return False
+        except OverflowError:
+            return False
+    if not 0 <= base["start"] < base["end"]:
+        return False
+    if "segment_id" in base or "segment_id" in raw:
+        if "segment_id" not in base or "segment_id" not in raw:
+            return False
+        source_id = base["segment_id"]
+        if not isinstance(source_id, str) or not source_id.strip() or source_id != raw["segment_id"]:
+            return False
+    return True
+
+
 def run_speaker_structure(
     video_path: Path,
     transcript: Sequence[Mapping[str, Any]],
@@ -265,6 +288,28 @@ def run_speaker_structure(
         return _unavailable(original, revision=revision, reason="SEGMENT_COUNT_MISMATCH", min_label_coverage=normalized_min_coverage)
     if len(raw_segments) != len(original) or any(not isinstance(segment, Mapping) for segment in raw_segments):
         return _unavailable(original, revision=revision, reason="SEGMENT_COUNT_MISMATCH", min_label_coverage=normalized_min_coverage)
+    if any(not _source_segment_aligned(base, raw) for base, raw in zip(original, raw_segments)):
+        return _unavailable(
+            original,
+            revision=revision,
+            reason="SEGMENT_SOURCE_MISMATCH",
+            min_label_coverage=normalized_min_coverage,
+        )
+    # Equal intervals are ambiguous without distinct source IDs. Even a
+    # positionally equal timeline must not turn a reordered producer into PASS.
+    source_keys = [(row["start"], row["end"], row.get("segment_id")) for row in original]
+    interval_counts = Counter((start, end) for start, end, _ in source_keys)
+    ambiguous = len(set(source_keys)) != len(source_keys) or any(
+        interval_counts[(start, end)] > 1 and source_id is None
+        for start, end, source_id in source_keys
+    )
+    if ambiguous:
+        return _unavailable(
+            original,
+            revision=revision,
+            reason="SEGMENT_SOURCE_MISMATCH",
+            min_label_coverage=normalized_min_coverage,
+        )
     rejected_candidate = _candidate_observation(raw_segments, raw_report)
 
     source_labels: list[str] = []

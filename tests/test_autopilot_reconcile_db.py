@@ -4,6 +4,7 @@ import pytest
 
 from oracle_autopilot import reconcile_db as db
 from oracle_autopilot.reconcile_diagnostics import error_code
+from oracle_autopilot import reconcile_diagnostics as diagnostic
 
 
 class Connection:
@@ -93,3 +94,75 @@ def test_connection_uses_normalizer_and_omits_startup_options(monkeypatch):
 ])
 def test_diagnostics_never_echo_exception_text(text, code):
     assert error_code(RuntimeError(text)) == code
+
+
+class DiagnosticConnection(Connection):
+    read_only = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def execute(self, sql, params=()):
+        assert self.read_only
+        super().execute(sql, params)
+        self.sql = sql
+        return self
+
+    def fetchone(self):
+        if self.sql == 'SELECT 1':
+            return (1,)
+        if 'current_user = ' in self.sql:
+            return self.identity
+        if 'has_schema_privilege' in self.sql:
+            return (False, False, False)
+        return (0,)
+
+
+@pytest.mark.parametrize('identity,success', [((True, True), True), ((False, True), False)])
+def test_neon_diagnostic_direct_connection_closes_and_never_forwards_uri_options(monkeypatch, identity, success):
+    monkeypatch.setenv('AUTOPILOT_DB_BACKEND', 'neon')
+    conn = DiagnosticConnection(identity)
+    dsn = ('postgresql://bridge_school_worker_principal:test-password@'
+           + diagnostic.EXPECTED_HOST + '/neondb?sslmode=require&channel_binding=require'
+           '&hostaddr=192.0.2.1&options=-c%20search_path%3Devil')
+    def connect(*args, **kwargs):
+        assert not args  # No original URI, including routing overrides.
+        assert kwargs['host'] == diagnostic.EXPECTED_HOST.replace('-pooler.', '.')
+        assert kwargs['user'] == 'bridge_school_worker_principal'
+        assert kwargs['dbname'] == 'neondb'
+        assert kwargs['sslmode'] == 'verify-full'
+        assert kwargs['channel_binding'] == 'require' and kwargs['gssencmode'] == 'disable'
+        assert 'hostaddr' not in kwargs and 'evil' not in kwargs['options']
+        assert 'default_transaction_read_only=on' in kwargs['options']
+        return conn
+    monkeypatch.setattr(diagnostic.psycopg, 'connect', connect)
+    assert diagnostic.probe(dsn, 'production_gateway', gateway=True) is success
+    assert conn.closed
+
+
+def test_oracle_diagnostic_keeps_pinned_local_route(monkeypatch):
+    monkeypatch.setenv('AUTOPILOT_DB_BACKEND', 'postgresql')
+    monkeypatch.setenv('AUTOPILOT_PG_DATABASE', 'autopilot')
+    conn = DiagnosticConnection((True, True))
+    dsn = 'postgresql://bridge_school_worker_principal:test-password@127.0.0.1:55432/autopilot?sslmode=verify-full'
+    def connect(*args, **kwargs):
+        assert args == (dsn,) and 'host' not in kwargs and 'options' not in kwargs
+        return conn
+    monkeypatch.setattr(diagnostic.psycopg, 'connect', connect)
+    assert diagnostic.probe(dsn, 'production_gateway', gateway=True)
+    assert conn.closed
+
+
+def test_diagnostic_connection_failure_redacts_driver_text(monkeypatch, capsys):
+    monkeypatch.setenv('AUTOPILOT_DB_BACKEND', 'neon')
+    def connect(*args, **kwargs):
+        raise RuntimeError('postgresql://SECRET@host/db')
+    monkeypatch.setattr(diagnostic.psycopg, 'connect', connect)
+    dsn = ('postgresql://bridge_school_worker_principal:test-password@'
+           + diagnostic.EXPECTED_HOST + '/neondb?sslmode=require&channel_binding=require')
+    assert not diagnostic.probe(dsn, 'production_gateway', gateway=True)
+    output = capsys.readouterr()
+    assert 'UNCLASSIFIED' in output.out and 'SECRET' not in output.out + output.err

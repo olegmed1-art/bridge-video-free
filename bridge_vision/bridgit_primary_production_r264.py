@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable
 
-from bridge_vision.bridgit_gold_profile import BridgitGoldProfileError, build_autonomous_gold_profile
+from bridge_vision.bridgit_gold_profile_r264 import BridgitGoldProfileError, build_autonomous_gold_profile
 from bridge_vision.bridgit_primary_video_r264 import PrimaryVideoInputError, recognize_video_primary
 from bridge_vision.gambler_classic_reference import GamblerClassicReferenceError, MAX_SPRITE_BYTES
 from bridge_vision.gambler_reference_authority import PINNED_GAMBLER_CLASSIC_SPRITE_SHA256

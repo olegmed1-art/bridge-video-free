@@ -1,5 +1,6 @@
 """Run approved autopilot consumers under a server routing lease on trusted main."""
 from __future__ import annotations
+from enum import Enum
 import hashlib
 import json
 import os
@@ -26,6 +27,72 @@ TARGETS = {
     'health': ('AUTOPILOT_HEALTH_DATABASE_URL','bridge_school_health_principal','database.runtime_health_preflight',()),
     'mailbox': ('DATABASE_URL','autopilot_callback_login','ops.github_autopilot_db_route',('--mailbox-read',)),
 }
+
+
+class RoutingStage(Enum):
+    ARGUMENTS = 'ARGUMENTS'
+    CONTEXT = 'CONTEXT'
+    SSH_KEY = 'SSH_KEY'
+    SSH_HOST_KEY = 'SSH_HOST_KEY'
+    LEASE_START = 'LEASE_START'
+    LEASE_HEADER = 'LEASE_HEADER'
+    TARGET_SETUP = 'TARGET_SETUP'
+    CONSUMER = 'CONSUMER'
+    ROUTE_WAIT = 'ROUTE_WAIT'
+    MAILBOX_DRIVER = 'MAILBOX_DRIVER'
+    MAILBOX_DSN = 'MAILBOX_DSN'
+    MAILBOX_CONNECT = 'MAILBOX_CONNECT'
+    MAILBOX_QUERY = 'MAILBOX_QUERY'
+    MAILBOX_RESULT = 'MAILBOX_RESULT'
+    UNKNOWN = 'UNKNOWN'
+
+
+class LeaseHeaderReason(Enum):
+    EOF = 'HEADER_EOF'
+    PROCESS_EXITED = 'HEADER_PROCESS_EXITED'
+    TIMEOUT = 'HEADER_TIMEOUT'
+    TOO_LARGE = 'HEADER_TOO_LARGE'
+    DECODE_INVALID = 'HEADER_DECODE_INVALID'
+    JSON_INVALID = 'HEADER_JSON_INVALID'
+    RECORD_INVALID = 'HEADER_RECORD_INVALID'
+    LEASE_CLOSED = 'HEADER_LEASE_CLOSED'
+    UNKNOWN = 'HEADER_UNKNOWN'
+
+
+class LeaseHeaderError(RuntimeError):
+    def __init__(self, reason):
+        self.reason = reason if type(reason) is LeaseHeaderReason else LeaseHeaderReason.UNKNOWN
+        # No exception text or producer payload is retained in args.
+        super().__init__()
+
+
+_failure_stage = RoutingStage.ARGUMENTS
+
+
+def report_routing_failure(exc=None, *, reason=None):
+    # Never stringify exceptions, arguments, environment values or route records.
+    stage = _failure_stage if type(_failure_stage) is RoutingStage else RoutingStage.UNKNOWN
+    detail = ''
+    if stage.name.startswith('MAILBOX_') and exc is not None:
+        allowed_types = {'ImportError', 'ModuleNotFoundError', 'KeyError', 'ValueError',
+                         'OperationalError', 'InterfaceError', 'ProgrammingError',
+                         'InvalidPassword', 'InvalidAuthorizationSpecification',
+                         'InvalidCatalogName', 'InsufficientPrivilege'}
+        try:
+            error_type = type(exc).__name__
+        except Exception:
+            error_type = None
+        error_type = error_type if type(error_type) is str and error_type in allowed_types else 'OTHER'
+        try:
+            sqlstate = getattr(exc, 'sqlstate', None)
+        except Exception:
+            sqlstate = None
+        sqlstate = sqlstate if type(sqlstate) is str and sqlstate in {'28P01', '28000', '08000', '08001',
+                    '08006', '3D000', '42501', '53300', '57P03'} else 'NONE'
+        detail = ' error_type='+error_type+' sqlstate='+sqlstate
+    print('AUTOPILOT_DATABASE_ROUTING_FAILED stage='+stage.value+detail, file=sys.stderr)
+    if stage is RoutingStage.LEASE_HEADER and type(reason) is LeaseHeaderReason:
+        print('AUTOPILOT_LEASE_HEADER_DIAGNOSTIC reason='+reason.value, file=sys.stderr)
 
 
 def mask(value):
@@ -111,23 +178,43 @@ def header(process):
             if value == b'\n':
                 return bytes(data)
             if not value:
-                raise RuntimeError('route_eof')
+                raise LeaseHeaderError(LeaseHeaderReason.EOF)
             data.extend(value)
         elif process.poll() is not None:
-            raise RuntimeError('route_process_exited')
-    raise RuntimeError('route_header_timeout_or_size')
+            raise LeaseHeaderError(LeaseHeaderReason.PROCESS_EXITED)
+    reason = LeaseHeaderReason.TOO_LARGE if len(data)>16384 else LeaseHeaderReason.TIMEOUT
+    raise LeaseHeaderError(reason)
+
+
+def read_lease_record(process, minimum_epoch):
+    raw = header(process)
+    try:
+        record = parse_record(raw, minimum_epoch)
+    except UnicodeDecodeError:
+        raise LeaseHeaderError(LeaseHeaderReason.DECODE_INVALID) from None
+    except json.JSONDecodeError:
+        raise LeaseHeaderError(LeaseHeaderReason.JSON_INVALID) from None
+    except (AssertionError, KeyError, TypeError):
+        raise LeaseHeaderError(LeaseHeaderReason.RECORD_INVALID) from None
+    if record is not None and record['route']['backend']!='paused':
+        if process.poll() is not None:
+            raise LeaseHeaderError(LeaseHeaderReason.LEASE_CLOSED)
+    return record
 
 
 def execute_under_lease(ssh, selection, environment, work):
+    global _failure_stage
     minimum_epoch = 0
     deadline = time.monotonic()+600
     while time.monotonic()<deadline:
+        _failure_stage = RoutingStage.LEASE_START
         lease = subprocess.Popen(ssh+['-T','-L','127.0.0.1:55432:127.0.0.1:55432',
             'autopilot-db-tunnel@'+HOST,'route-v1'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,bufsize=0)
         child = None
         try:
-            record = parse_record(header(lease),minimum_epoch)
+            _failure_stage = RoutingStage.LEASE_HEADER
+            record = read_lease_record(lease,minimum_epoch)
             if record is None or record['route']['backend']=='paused':
                 if record:
                     minimum_epoch = record['route']['epoch']
@@ -135,7 +222,7 @@ def execute_under_lease(ssh, selection, environment, work):
                 time.sleep(2)
                 continue
             route = record['route']
-            assert lease.poll() is None
+            _failure_stage = RoutingStage.TARGET_SETUP
             ca = work/'ca.crt'
             ca.write_text(record['ca_pem'])
             ca.chmod(0o600)
@@ -149,6 +236,7 @@ def execute_under_lease(ssh, selection, environment, work):
                 mask(value)
                 child_env[env_name] = value
                 child_env.update(AUTOPILOT_PG_HOST='127.0.0.1',AUTOPILOT_PG_PORT='55432',AUTOPILOT_PG_DATABASE='autopilot')
+            _failure_stage = RoutingStage.CONSUMER
             lease.stdin.write(b'.')
             child = subprocess.Popen([sys.executable,'-m',module,*args],env=child_env,start_new_session=True)
             start = heartbeat = time.monotonic()
@@ -165,10 +253,13 @@ def execute_under_lease(ssh, selection, environment, work):
             if child is not None:
                 stop(child,group=True)
             stop(lease)
+    _failure_stage = RoutingStage.ROUTE_WAIT
     raise RuntimeError('route_paused_timeout')
 
 
 def main(selection):
+    global _failure_stage
+    _failure_stage = RoutingStage.CONTEXT
     assert selection in TARGETS
     assert os.environ.get('GITHUB_ACTIONS')=='true'
     assert os.environ.get('GITHUB_REPOSITORY')=='olegmed1-art/bridge-video-free'
@@ -177,6 +268,7 @@ def main(selection):
         raise SystemExit(128+signum)
     signal.signal(signal.SIGTERM,cancelled)
     signal.signal(signal.SIGINT,cancelled)
+    _failure_stage = RoutingStage.SSH_KEY
     environment = os.environ.copy()
     private = environment.pop('SSH_PRIVATE_KEY')
     os.environ.pop('SSH_PRIVATE_KEY',None)
@@ -188,6 +280,7 @@ def main(selection):
         key.chmod(0o600)
         del private
         subprocess.run(['ssh-keygen','-y','-P','','-f',str(key)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+        _failure_stage = RoutingStage.SSH_HOST_KEY
         scanner = Path(__file__).resolve().parents[1]/'ops/oracle_known_hosts_from_scan.sh'
         subprocess.run(['bash',str(scanner),HOST,'SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go',str(work/'known_hosts')],
                        check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
@@ -198,25 +291,72 @@ def main(selection):
         return execute_under_lease(ssh,selection,environment,work)
 
 
+def mailbox_dsn(raw):
+    """Use the callback identity and pinned backend; never choose another host."""
+    from oracle_autopilot.database_target import backend, validate_pinned_dsn
+    if backend() == 'postgresql':
+        return validate_pinned_dsn(raw, expected_user='autopilot_callback_login')
+    try:
+        value = raw.strip()
+        parsed = urlsplit(value)
+        query = parse_qs(parsed.query, strict_parsing=True, keep_blank_values=True)
+        valid = (
+            not any(ord(c)<32 or ord(c)==127 for c in value)
+            and parsed.scheme in {'postgres', 'postgresql'}
+            # This single read-only query retains both existing mailbox pins;
+            # callback ingestion has its own direct-connection contract.
+            and parsed.hostname in {SOURCE, SOURCE.replace('.c-5.', '-pooler.c-5.')}
+            and parsed.port in {None, 5432}
+            and unquote(parsed.username or '') == 'autopilot_callback_login'
+            and bool(parsed.password) and parsed.path == '/neondb' and not parsed.fragment
+            and set(query) <= {'sslmode', 'channel_binding', 'connect_timeout', 'application_name'}
+            and all(len(v)==1 for v in query.values())
+            and query.get('sslmode') in (['require'], ['verify-full'])
+            and query.get('channel_binding') == ['require']
+        )
+        if not valid:
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('MAILBOX_DSN_INVALID') from None
+    return value
+
+
 def mailbox_read():
+    global _failure_stage
+    _failure_stage = RoutingStage.MAILBOX_DRIVER
     import psycopg
-    with psycopg.connect(os.environ['DATABASE_URL'],autocommit=True,connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute('SET statement_timeout = 10000')
-            cur.execute('SELECT mailbox_pr,used_dispatches,max_dispatches,readiness FROM autopilot.mailbox_rotation_readiness()')
-            rows = cur.fetchall()
-            assert len(rows)==1 and len(rows[0])==4
-            assert all('\n' not in str(v) and '|' not in str(v) for v in rows[0])
-            print('|'.join(str(v) for v in rows[0]))
+    _failure_stage = RoutingStage.MAILBOX_DSN
+    dsn = mailbox_dsn(os.environ['DATABASE_URL'])
+    _failure_stage = RoutingStage.MAILBOX_CONNECT
+    with psycopg.connect(dsn,autocommit=True,connect_timeout=10,
+                        options='-c default_transaction_read_only=on') as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                _failure_stage = RoutingStage.MAILBOX_QUERY
+                cur.execute('SET TRANSACTION READ ONLY')
+                cur.execute('SET LOCAL statement_timeout = 10000')
+                cur.execute('SELECT mailbox_pr,used_dispatches,max_dispatches,readiness FROM autopilot.mailbox_rotation_readiness()')
+                rows = cur.fetchall()
+                _failure_stage = RoutingStage.MAILBOX_RESULT
+                assert len(rows)==1 and len(rows[0])==4
+                assert all('\n' not in str(v) and '|' not in str(v) for v in rows[0])
+                print('|'.join(str(v) for v in rows[0]))
 
 
-if __name__ == '__main__':
+def cli():
+    global _failure_stage
+    _failure_stage = RoutingStage.ARGUMENTS
     try:
         if sys.argv[1:] == ['--mailbox-read']:
             mailbox_read()
-        else:
-            assert len(sys.argv)==2
-            sys.exit(main(sys.argv[1]))
-    except Exception:
-        print('AUTOPILOT_DATABASE_ROUTING_FAILED',file=sys.stderr)
-        sys.exit(1)
+            return 0
+        assert len(sys.argv)==2
+        return main(sys.argv[1])
+    except Exception as exc:
+        reason = exc.reason if type(exc) is LeaseHeaderError else None
+        report_routing_failure(exc, reason=reason)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(cli())

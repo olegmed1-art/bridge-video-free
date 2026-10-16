@@ -1,6 +1,7 @@
 google-auth==2.56.3
 requests==2.34.2
 faster-whisper==1.2.1
+av==16.1.0
 pillow==12.3.0
 ImageHash==4.3.2
 opencv-python-headless==5.0.0.93

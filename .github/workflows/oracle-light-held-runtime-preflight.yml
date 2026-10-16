@@ -7,6 +7,12 @@ on:
       - 'ops/oracle_light_held_runtime_preflight.py'
       - 'tests/test_light_held_runtime_preflight.py'
   workflow_dispatch:
+    inputs:
+      direct_root_read_only:
+        description: 'Run only the reviewed direct Oracle root read; no legacy jobs or admission'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +23,7 @@ concurrency:
 
 jobs:
   contract:
+    if: github.event_name != 'workflow_dispatch' || inputs.direct_root_read_only != true
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -34,7 +41,7 @@ jobs:
 
   probe:
     needs: contract
-    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.direct_root_read_only != true
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -76,3 +83,176 @@ jobs:
             exit 1
           fi
           cat "$work/result"
+
+  direct-root-read-only:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.direct_root_read_only == true &&
+      github.actor == 'olegmed1-art' &&
+      github.actor_id == '315099490' &&
+      github.triggering_actor == 'olegmed1-art' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify owner checkout and current main
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]]
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/git/ref/heads/main --jq .object.sha)" == "$WORKFLOW_SHA" ]]
+          git diff --exit-code HEAD --
+      - name: Direct collector observation only
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -I -B - <<'PY'
+          import ast, base64, fcntl, hashlib, json, os, pathlib, re, secrets, shlex, signal, stat, subprocess, sys, time, types
+          IP = "92.5.47.149"
+          FP = "SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go"
+          BASE = "/home/ubuntu/ibm-uv-supervisor-private-20261004/"
+          BASIS = BASE + "diagnostic-v9-primary-r4-r2-candidate-20261006/"
+          PROBE = BASE + "collect-and-admit-source-only-final-r2-20261006/"
+          SPEC = (
+           ("diagnostic_process", BASIS+"diagnostic_process.py", "d5b5a2ff2bf14f84b5d3307cf642cbd9cdd3e0476a6fa4123a4e9047a6bd7f17"),
+           ("controller_channel", BASIS+"controller_channel.py", "897facd6ea5e6667b182eff9a4bf1d4a1a074069a7b6809cfd4acf25627853e9"),
+           ("admin_capture_schema", PROBE+"admin_capture_schema.py", "66a801cb958a438f49094be22a01f60c0a52a952dee2be4c7b3c46128d267af5"),
+           ("collect_and_admit", PROBE+"collect_and_admit.py", "d2e38a7127fc77261adc6861092dbedc2e3b080e0585ee7871e87233b2ecb61f"),
+           ("readonly_admin_probe", PROBE+"readonly_admin_probe.py", "3c8ef14f4bc0d1a10ea01c27482c94438115ac238cc2b24242abb1e686c24648"),
+          )
+          def need(v, code):
+           if not v: raise RuntimeError(code)
+          def memfd(raw, name):
+           fd = os.memfd_create(name, os.MFD_CLOEXEC|os.MFD_ALLOW_SEALING)
+           try:
+            os.fchmod(fd, 0o600)
+            offset = 0
+            while offset < len(raw):
+             n = os.write(fd, raw[offset:]);need(n>0, "MEMFD_WRITE");offset += n
+            fcntl.fcntl(fd, fcntl.F_ADD_SEALS, fcntl.F_SEAL_WRITE|fcntl.F_SEAL_GROW|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_SEAL)
+            return fd
+           except BaseException:os.close(fd);raise
+          def command(argv, end, limit):
+           need(time.monotonic()<end, "SETUP_DEADLINE")
+           p = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, timeout=max(.001,end-time.monotonic()))
+           need(p.returncode==0 and 0<len(p.stdout)<=limit and time.monotonic()<=end, "SETUP_OR_ACCESS_REFUSED")
+           return p.stdout
+          def source_command():
+           code = """import os,stat,hashlib,json,base64
+          assert os.getuid()==1001
+          spec=SPEC_VALUE
+          cache={}
+          for name,path,pin in spec:
+           fds=[];fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);fds.append(fd)
+           try:
+            parts=path.split('/')[1:]
+            for part in parts[:-1]:
+             fd=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd);fds.append(fd)
+             s=os.fstat(fd);assert s.st_uid in (0,1001) and not s.st_mode&0o022
+            assert os.fstat(fd).st_uid==1001 and stat.S_IMODE(os.fstat(fd).st_mode)==0o700
+            leaf=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+            try:
+             s=os.fstat(leaf);assert stat.S_ISREG(s.st_mode) and s.st_uid==1001 and stat.S_IMODE(s.st_mode)==0o600 and s.st_nlink==1 and 0<s.st_size<=131072
+             raw=os.read(leaf,131073);t=os.fstat(leaf)
+             assert len(raw)==s.st_size and hashlib.sha256(raw).hexdigest()==pin and (s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns)==(t.st_dev,t.st_ino,t.st_size,t.st_mtime_ns,t.st_ctime_ns)
+             cache[name]=base64.b64encode(raw).decode()
+            finally:os.close(leaf)
+           finally:
+            for fd in reversed(fds):os.close(fd)
+          print(json.dumps(cache,sort_keys=True))
+          """
+           return "/usr/bin/python3 -I -B -c "+shlex.quote(code.replace("SPEC_VALUE",repr(SPEC)))
+          STAGE = "OWNER_SCOPE"
+          def main():
+           global STAGE
+           need(os.environ.get("GITHUB_REPOSITORY")=="olegmed1-art/bridge-video-free"
+                and os.environ.get("GITHUB_REF")=="refs/heads/main"
+                and os.environ.get("GITHUB_EVENT_NAME")=="workflow_dispatch"
+                and os.environ.get("GITHUB_ACTOR")=="olegmed1-art"
+                and os.environ.get("GITHUB_ACTOR_ID")=="315099490"
+                and os.environ.get("GITHUB_TRIGGERING_ACTOR")=="olegmed1-art"
+                and os.environ.get("GITHUB_RUN_ATTEMPT")=="1", "OWNER_SCOPE")
+           sha=os.environ.get("GITHUB_SHA","")
+           run=os.environ.get("GITHUB_RUN_ID","")
+           need(re.fullmatch("[0-9a-f]{40}",sha) and re.fullmatch("[1-9][0-9]*",run), "OWNER_ID")
+           end=time.monotonic()+35
+           signal.signal(signal.SIGALRM,lambda *_:(_ for _ in ()).throw(RuntimeError("SETUP_DEADLINE")))
+           signal.alarm(40)
+           key=known=None
+           try:
+            # Existing workflow secret only; no credential retrieval or persistent key file.
+            STAGE="OWNER_KEY_SETUP"
+            secret=os.environ.pop("SSH_PRIVATE_KEY","")
+            need(bool(secret) and len(secret)<=65536, "OWNER_SSH_KEY_ABSENT")
+            key=memfd(secret.replace("\r","").encode(),"existing-owner-ssh")
+            del secret
+            keypath="/proc/"+str(os.getpid())+"/fd/"+str(key)
+            command(["/usr/bin/ssh-keygen","-y","-P","","-f",keypath],min(end,time.monotonic()+3),65536)
+            STAGE="HOST_TRUST"
+            scan=command(["/usr/bin/ssh-keyscan","-T","3","-t","ed25519",IP],min(end,time.monotonic()+4),65536)
+            rows=[x.split() for x in scan.decode().splitlines() if x and not x.startswith("#")]
+            need(len(rows)==1 and len(rows[0])==3 and rows[0][:2]==[IP,"ssh-ed25519"],"HOST_KEY_SCOPE")
+            need("SHA256:"+base64.b64encode(hashlib.sha256(base64.b64decode(rows[0][2],validate=True)).digest()).decode().rstrip("=")==FP,"HOST_FINGERPRINT")
+            known=memfd(scan,"oracle-public-trust")
+            knownpath="/proc/"+str(os.getpid())+"/fd/"+str(known)
+            argv=["/usr/bin/ssh","-F","/dev/null","-T","-i",keypath,
+                  "-o","BatchMode=yes","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes",
+                  "-o","HostKeyAlgorithms=ssh-ed25519","-o","GlobalKnownHostsFile=/dev/null",
+                  "-o","UserKnownHostsFile="+knownpath,"-o","UpdateHostKeys=no",
+                  "-o","VerifyHostKeyDNS=no","-o","ForwardAgent=no","-o","ClearAllForwardings=yes",
+                  "-o","ConnectTimeout=3","-o","ConnectionAttempts=1","ubuntu@"+IP,source_command()]
+            STAGE="SOURCE_CLOSURE_READ"
+            raw=command(argv,min(end,time.monotonic()+10),1048576)
+            def pairs(items):
+             out={}
+             for k,v in items:need(k not in out,"CLOSURE_DUPLICATE");out[k]=v
+             return out
+            bundle=json.loads(raw,object_pairs_hook=pairs)
+            need(type(bundle) is dict and set(bundle)=={n for n,_,_ in SPEC},"CLOSURE_SCOPE")
+            STAGE="SOURCE_CLOSURE_VERIFY"
+            cache={}
+            for name,_,pin in SPEC:
+             need(type(bundle[name]) is str,"CLOSURE_SCHEMA")
+             data=base64.b64decode(bundle[name],validate=True)
+             need(0<len(data)<=131072 and hashlib.sha256(data).hexdigest()==pin,"CLOSURE_PIN")
+             ast.parse(data);cache[name]=data
+            # Every custom module is frozen and pinned before any custom import.
+            for name,_,pin in SPEC:
+             m=types.ModuleType(name);m.__file__="<verified-direct-probe>/"+name+".py";sys.modules[name]=m
+             exec(compile(cache[name],m.__file__,"exec"),m.__dict__);m.__source_sha256__=pin
+            closure=hashlib.sha256(json.dumps({n:p for n,_,p in SPEC},sort_keys=True,separators=(",",":")).encode()).hexdigest()
+            binding={"instance_id":"02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2","control_run":int(run),
+                     "nonce":secrets.token_hex(16),"source_sha":sha,"runtime_package_sha":closure}
+            STAGE="DIRECT_ROOT_READ"
+            checked_start_ms=int(time.time()*1000)
+            value=sys.modules["readonly_admin_probe"].check(sys.modules["collect_and_admit"],
+                route_reviewed=True,binding=binding,key_path=keypath,known_path=knownpath,
+                deadline=min(end,time.monotonic()+15))
+            value["checked_start_ms"]=checked_start_ms
+            value["checked_finished_ms"]=int(time.time()*1000)
+            value["source_closure_sha256"]=closure
+            value["package_binding_scope"]="DIRECT_PROBE_CLOSURE_ONLY_NOT_INSTALLED_RUNTIME"
+            print(json.dumps(value,sort_keys=True,separators=(",",":")))
+           finally:
+            signal.alarm(0)
+            for fd in (known,key):
+             if fd is not None:os.close(fd)
+          if __name__=="__main__":
+           try:main()
+           except BaseException:
+            print(json.dumps({"kind":"READONLY_ROOT_PROBE_REFUSED","stage":STAGE,"live_go":False,"armed":False},sort_keys=True))
+            raise SystemExit(78) from None
+          PY

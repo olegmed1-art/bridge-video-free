@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from uuid import UUID
+
+import psycopg
 
 from fastapi import APIRouter, HTTPException, Query
 
+from bridge_contracts.book_world import render_teacher_book
+
 from .db import connect
+from .book_runtime_identity import observe_runtime_identity, RuntimeIdentityUnavailable
 from .l1_canonical_registry import (
     ACTIVE_DOMAIN_RULE_IDS,
     RULE_ID_FINGERPRINT,
@@ -17,6 +23,16 @@ from .l1_canonical_runtime_v4 import ENGINE_VERSION, evaluate
 router = APIRouter(prefix="/v1/knowledge", tags=["knowledge-read"])
 
 CONTRACT_VERSION = "CANON_KB_READ_V1"
+
+
+@router.get('/internal/video-staging/{candidate_id}')
+def internal_video_staging(candidate_id: UUID) -> dict:
+    """Existing protected service router; no student or canon publication."""
+    from database.video_staging_read import read_internal_school_video_candidate
+    with connect() as conn:
+        conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+        conn.read_only = True
+        return read_internal_school_video_candidate(conn, str(candidate_id))
 
 
 class AuthorityLane(StrEnum):
@@ -75,7 +91,7 @@ _SOURCE_FACTS_SQL = """
           )
       )
       AND f.review_status = 'APPROVED_SOURCE'
-      AND (%s IS NULL OR f.stable_key = %s)
+      AND (%s::text IS NULL OR f.stable_key = %s)
     GROUP BY f.fact_id, src.source_id
     ORDER BY f.stable_key
     LIMIT %s OFFSET %s
@@ -108,6 +124,7 @@ _KNOWLEDGE_VERSIONS_SQL = """
                         'source_id', src.source_id,
                         'source_type', src.source_type,
                         'title', src.title,
+                        'status', src.status,
                         'canonical_locator', src.canonical_locator,
                         'relation_type', kvs.relation_type,
                         'source_locator', kvs.source_locator
@@ -126,7 +143,7 @@ _KNOWLEDGE_VERSIONS_SQL = """
     WHERE school.stable_name = %s
       AND kv.authority_class = %s
       AND COALESCE(kv.bidding_system_key, 'SYSTEM_NEUTRAL') = %s
-      AND (%s IS NULL OR ki.stable_key = %s)
+      AND (%s::text IS NULL OR ki.stable_key = %s)
       {lifecycle_filter}
     ORDER BY ki.stable_key, kv.version_no DESC
     LIMIT %s OFFSET %s
@@ -212,7 +229,7 @@ def _version_query(lane: AuthorityLane) -> str:
               AND (activation.valid_to IS NULL OR now() < activation.valid_to)
             """,
         )
-    return _KNOWLEDGE_VERSIONS_SQL.format(
+    sql = _KNOWLEDGE_VERSIONS_SQL.format(
         activation_fields=(
             "NULL::uuid AS canon_activation_id, NULL::text AS scope_key, "
             "NULL::timestamptz AS activation_valid_from, "
@@ -237,6 +254,17 @@ def _version_query(lane: AuthorityLane) -> str:
             """
         ),
     )
+    if lane is AuthorityLane.WORLD_EXTERNAL:
+        sql = sql.replace("'status', src.status,", """'status', src.status,
+                        'book_asset_verified', EXISTS (
+                            SELECT 1 FROM public.source_asset sa JOIN public.asset a
+                            ON a.asset_id=sa.asset_id WHERE sa.source_id=src.source_id AND sa.relation_type='embodies'
+                              AND src.school_id=ki.school_id AND a.school_id=ki.school_id AND a.checksum_algorithm='sha256'
+                              AND a.asset_id::text=kv.provenance->'source_identity_review'->>'asset_id'
+                              AND a.checksum_value=kv.content->'citation'->>'rendition_sha256'
+                              AND pg_catalog.to_jsonb(a.byte_size)=kv.provenance->'review_receipt'->'source_size_bytes'
+                              AND a.immutable_flag IS TRUE AND a.mime_type='application/pdf'),""")
+    return sql
 
 
 def _retrieval_status(lane: AuthorityLane, count: int) -> str:
@@ -247,6 +275,32 @@ def _retrieval_status(lane: AuthorityLane, count: int) -> str:
     if lane is AuthorityLane.WORLD_EXTERNAL:
         return "WORLD_MATCH" if count else "WORLD_GAP"
     return "SOURCE_MATCH" if count else "SOURCE_GAP"
+
+
+@router.get("/validation/runtime-identity")
+def book_runtime_identity() -> dict:
+    """Operator validation under the router's existing API-token boundary."""
+    try:
+        return observe_runtime_identity()
+    except RuntimeIdentityUnavailable:
+        raise HTTPException(status_code=503, detail="BOOK_RUNTIME_IDENTITY_UNAVAILABLE") from None
+
+
+@router.get("/teacher/book")
+def teacher_book_answer(stable_key: str = Query(min_length=1, max_length=200)) -> dict:
+    """Protected router: cite a persisted reviewed WORLD atom, without LLM calls."""
+    result = query_knowledge(
+        lane=AuthorityLane.WORLD_EXTERNAL, system_profile="SYSTEM_NEUTRAL",
+        stable_key=stable_key, scope_key="default", limit=2, offset=0,
+    )
+    if not result["items"]:
+        raise HTTPException(status_code=404, detail="BOOK_WORLD_GAP")
+    if len(result["items"]) != 1:
+        raise HTTPException(status_code=409, detail="BOOK_WORLD_VERSION_AMBIGUITY")
+    try:
+        return render_teacher_book(result["items"][0])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail="BOOK_WORLD_EVIDENCE_INVALID") from exc
 
 
 @router.get("/query")

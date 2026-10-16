@@ -1,0 +1,487 @@
+{
+  "L001": {
+    "kind": "predicate",
+    "original_line": 389,
+    "expression": "set(policy) == issuer.POLICY_KEYS"
+  },
+  "L002": {
+    "kind": "predicate",
+    "original_line": 389,
+    "expression": "policy['version'] == 1"
+  },
+  "L003": {
+    "kind": "predicate",
+    "original_line": 389,
+    "expression": "policy['action'] == 'issue'"
+  },
+  "L004": {
+    "kind": "predicate",
+    "original_line": 390,
+    "expression": "policy['source'] == value['historical_controller_source']"
+  },
+  "L005": {
+    "kind": "predicate",
+    "original_line": 391,
+    "expression": "policy['accepted_controller_sha256'] == value['historical_controller_sha256']"
+  },
+  "L006": {
+    "kind": "predicate",
+    "original_line": 392,
+    "expression": "policy['accepted_runtime_sha256'] == value['retained_runtime_sha256']"
+  },
+  "L007": {
+    "kind": "predicate",
+    "original_line": 393,
+    "expression": "index < len(policy['plans'])"
+  },
+  "L008": {
+    "kind": "predicate",
+    "original_line": 394,
+    "expression": "view.names(policy_root) == {'policy.json'} | {format(n, '04d') for n in range(index + 1)}"
+  },
+  "L009": {
+    "kind": "predicate",
+    "original_line": 398,
+    "expression": "not writing"
+  },
+  "L010": {
+    "kind": "predicate",
+    "original_line": 398,
+    "expression": "view.names(entry) in ({'intent.json'}, {'intent.json', r.NAME})"
+  },
+  "L011": {
+    "kind": "predicate",
+    "original_line": 401,
+    "expression": "view.names(entry, allow_output=writing) == ({'intent.json'} if writing else {'intent.json', r.NAME})"
+  },
+  "L012": {
+    "kind": "predicate",
+    "original_line": 404,
+    "expression": "set(intent) == {'start', 'cycle'}"
+  },
+  "L013": {
+    "kind": "predicate",
+    "original_line": 407,
+    "expression": "count == index"
+  },
+  "L014": {
+    "kind": "predicate",
+    "original_line": 407,
+    "expression": "previous == value['predecessor']"
+  },
+  "L015": {
+    "kind": "predicate",
+    "original_line": 409,
+    "expression": "intent['cycle'] == expected"
+  },
+  "L016": {
+    "kind": "predicate",
+    "original_line": 411,
+    "expression": "prepare['accepted_plan_sha256'] == plan_hash"
+  },
+  "L017": {
+    "kind": "predicate",
+    "original_line": 412,
+    "expression": "view.names(cycle) == {'intent.json', 'prepare-intent.json', 'contain-intent.json', 'contain-done.json', 'incident.json'}"
+  },
+  "L018": {
+    "kind": "predicate",
+    "original_line": 414,
+    "expression": "view.read(cycle + '/intent.json') == owner.encoded(expected)"
+  },
+  "L019": {
+    "kind": "predicate",
+    "original_line": 415,
+    "expression": "view.read(cycle + '/prepare-intent.json') == owner.encoded(prepare)"
+  },
+  "L020": {
+    "kind": "predicate",
+    "original_line": 416,
+    "expression": "view.read(cycle + '/contain-intent.json') == owner.encoded(dict(prepare, action='contain'))"
+  },
+  "L021": {
+    "kind": "predicate",
+    "original_line": 419,
+    "expression": "incident == {'phase': 'prepare', 'containment': 'INTAKE_ROLLED_BACK', 'state': 'RECONCILIATION_REQUIRED'}"
+  },
+  "L022": {
+    "kind": "predicate",
+    "original_line": 421,
+    "expression": "view.names(plan_hash) == {'plan.json', 'baseline.json', 'before.json', 'prepare.json', 'contain-intent.json', 'contained.json', 'runtime-package.json', 'wheels.tar'}"
+  },
+  "L023": {
+    "kind": "predicate",
+    "original_line": 424,
+    "expression": "base64.b64decode(policy['plans'][index]['plan_base64'], validate=True) == raw_plan"
+  },
+  "L024": {
+    "kind": "predicate",
+    "original_line": 425,
+    "expression": "view.read(plan_hash + '/prepare.json') == owner.encoded(prepare)"
+  },
+  "L025": {
+    "kind": "predicate",
+    "original_line": 427,
+    "expression": "plan['source'] == value['retained_runtime_source'] == owner.install.RETAINED_SOURCE"
+  },
+  "L026": {
+    "kind": "predicate",
+    "original_line": 428,
+    "expression": "plan['repository'] == value['repository']"
+  },
+  "L027": {
+    "kind": "predicate",
+    "original_line": 428,
+    "expression": "plan['work_key'] == value['failed_work_key']"
+  },
+  "L028": {
+    "kind": "predicate",
+    "original_line": 429,
+    "expression": "plan['target_pr'] == value['failed_target_pr']"
+  },
+  "L029": {
+    "kind": "predicate",
+    "original_line": 431,
+    "expression": "r.parse(contained) == dict(audit='LIGHT_LANE_OWNER', phase='contain', state='INTAKE_ROLLED_BACK', plan_sha256=plan_hash, controls_restored=False, task_success=False, queue_retry_authorized=False)"
+  },
+  "L030": {
+    "kind": "predicate",
+    "original_line": 433,
+    "expression": "view.read(cycle + '/contain-done.json') == contained"
+  },
+  "L031": {
+    "kind": "predicate",
+    "original_line": 434,
+    "expression": "view.read(plan_hash + '/contain-intent.json') == owner.encoded(dict(plan_sha256=plan_hash, action='CONTAIN_PREEXECUTION'))"
+  },
+  "L032": {
+    "kind": "predicate",
+    "original_line": 445,
+    "expression": "view.read(package_path + '/' + name, limit=3 * 1024 * 1024) == text.encode()"
+  },
+  "L033": {
+    "kind": "predicate",
+    "original_line": 456,
+    "expression": "owner.sequence(prepared) == prior['sequence']"
+  },
+  "L034": {
+    "kind": "predicate",
+    "original_line": 456,
+    "expression": "prepared['accepted_runtime_sha256'] == value['retained_runtime_sha256']"
+  },
+  "L035": {
+    "kind": "predicate",
+    "original_line": 457,
+    "expression": "receipt['plan_sha256'] == prior_root"
+  },
+  "L036": {
+    "kind": "predicate",
+    "original_line": 457,
+    "expression": "complete.get('controls_restored') is True"
+  },
+  "L037": {
+    "kind": "predicate",
+    "original_line": 458,
+    "expression": "{k: v for k, v in complete.items() if k != 'native'} == restored"
+  },
+  "L038": {
+    "kind": "predicate",
+    "original_line": 459,
+    "expression": "view.read(prior_root + '/restore-intent.json') == binding"
+  },
+  "L039": {
+    "kind": "predicate",
+    "original_line": 460,
+    "expression": "view.read(prior_root + '/restart-intent.json') == binding"
+  },
+  "L040": {
+    "kind": "statement",
+    "original_line": 376,
+    "expression": "from ops import light_native_lane_controller as owner"
+  },
+  "L041": {
+    "kind": "statement",
+    "original_line": 377,
+    "expression": "from ops import light_native_lane_issuer as issuer"
+  },
+  "L042": {
+    "kind": "statement",
+    "original_line": 378,
+    "expression": "policy_root = 'issuers/' + value['policy_sha256']"
+  },
+  "L043": {
+    "kind": "statement",
+    "original_line": 378,
+    "expression": "entry = r.entry(value)"
+  },
+  "L044": {
+    "kind": "statement",
+    "original_line": 379,
+    "expression": "r.journal_pins(pins)"
+  },
+  "L045": {
+    "kind": "statement",
+    "original_line": 380,
+    "expression": "plan_hash = value['plan_sha256']"
+  },
+  "L046": {
+    "kind": "statement",
+    "original_line": 380,
+    "expression": "cycle = 'cycles/' + plan_hash"
+  },
+  "L047": {
+    "kind": "statement",
+    "original_line": 381,
+    "expression": "paths = {name: plan_hash + '/' + name for name in ('baseline.json', 'before.json', 'contained.json', 'prepare.json', 'runtime-package.json', 'wheels.tar')}"
+  },
+  "L048": {
+    "kind": "statement",
+    "original_line": 383,
+    "expression": "paths.update({'cycle-contain-intent': cycle + '/contain-intent.json', 'cycle-intent': cycle + '/intent.json', 'driver-contain-intent': plan_hash + '/contain-intent.json', 'incident.json': cycle + '/incident.json', 'issuer-intent': entry + '/intent.json'})"
+  },
+  "L049": {
+    "kind": "statement",
+    "original_line": 386,
+    "expression": "for name, path in paths.items():\n    view.read(path, pins[name], limit=16 * 1024 * 1024)"
+  },
+  "L050": {
+    "kind": "statement",
+    "original_line": 388,
+    "expression": "policy = _parse(view.read(policy_root + '/policy.json', value['policy_sha256']))"
+  },
+  "L051": {
+    "kind": "statement",
+    "original_line": 389,
+    "expression": "r.need(_local_condition(diagnostic, 'L001', lambda: set(policy) == issuer.POLICY_KEYS) and _local_condition(diagnostic, 'L002', lambda: policy['version'] == 1) and _local_condition(diagnostic, 'L003', lambda: policy['action'] == 'issue') and _local_condition(diagnostic, 'L004', lambda: policy['source'] == value['historical_controller_source']) and _local_condition(diagnostic, 'L005', lambda: policy['accepted_controller_sha256'] == value['historical_controller_sha256']) and _local_condition(diagnostic, 'L006', lambda: policy['accepted_runtime_sha256'] == value['retained_runtime_sha256']), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L052": {
+    "kind": "statement",
+    "original_line": 393,
+    "expression": "index = value['index']"
+  },
+  "L053": {
+    "kind": "statement",
+    "original_line": 393,
+    "expression": "r.need(_local_condition(diagnostic, 'L007', lambda: index < len(policy['plans'])), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L054": {
+    "kind": "statement",
+    "original_line": 394,
+    "expression": "r.need(_local_condition(diagnostic, 'L008', lambda: view.names(policy_root) == {'policy.json'} | {format(n, '04d') for n in range(index + 1)}), 'LANE_RETIREMENT_LATER_ISSUE')"
+  },
+  "L055": {
+    "kind": "statement",
+    "original_line": 396,
+    "expression": "writing = view.output_parent == entry"
+  },
+  "L056": {
+    "kind": "statement",
+    "original_line": 397,
+    "expression": "if observation:\n    r.need(_local_condition(diagnostic, 'L009', lambda: not writing) and _local_condition(diagnostic, 'L010', lambda: view.names(entry) in ({'intent.json'}, {'intent.json', r.NAME})), 'LANE_RETIREMENT_BINDING')\nelse:\n    r.need(_local_condition(diagnostic, 'L011', lambda: view.names(entry, allow_output=writing) == ({'intent.json'} if writing else {'intent.json', r.NAME})), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L057": {
+    "kind": "statement",
+    "original_line": 403,
+    "expression": "intent = _parse(view.read(entry + '/intent.json'))"
+  },
+  "L058": {
+    "kind": "statement",
+    "original_line": 404,
+    "expression": "r.need(_local_condition(diagnostic, 'L012', lambda: set(intent) == {'start', 'cycle'}), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L059": {
+    "kind": "statement",
+    "original_line": 405,
+    "expression": "count, previous = issuer.progress(owner.ROOT / policy_root, policy, value['policy_sha256'], stop_before=index, **tracked(view))"
+  },
+  "L060": {
+    "kind": "statement",
+    "original_line": 407,
+    "expression": "r.need(_local_condition(diagnostic, 'L013', lambda: count == index) and _local_condition(diagnostic, 'L014', lambda: previous == value['predecessor']), 'LANE_RETIREMENT_PREDECESSOR')"
+  },
+  "L061": {
+    "kind": "statement",
+    "original_line": 408,
+    "expression": "expected = issuer.derive(policy, value['policy_sha256'], index, previous, intent['start'])"
+  },
+  "L062": {
+    "kind": "statement",
+    "original_line": 409,
+    "expression": "r.need(_local_condition(diagnostic, 'L015', lambda: intent['cycle'] == expected), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L063": {
+    "kind": "statement",
+    "original_line": 410,
+    "expression": "prepare = expected['prepare']"
+  },
+  "L064": {
+    "kind": "statement",
+    "original_line": 410,
+    "expression": "plan_hash = value['plan_sha256']"
+  },
+  "L065": {
+    "kind": "statement",
+    "original_line": 410,
+    "expression": "cycle = 'cycles/' + plan_hash"
+  },
+  "L066": {
+    "kind": "statement",
+    "original_line": 411,
+    "expression": "r.need(_local_condition(diagnostic, 'L016', lambda: prepare['accepted_plan_sha256'] == plan_hash), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L067": {
+    "kind": "statement",
+    "original_line": 412,
+    "expression": "r.need(_local_condition(diagnostic, 'L017', lambda: view.names(cycle) == {'intent.json', 'prepare-intent.json', 'contain-intent.json', 'contain-done.json', 'incident.json'}), 'LANE_RETIREMENT_PHASE')"
+  },
+  "L068": {
+    "kind": "statement",
+    "original_line": 414,
+    "expression": "r.need(_local_condition(diagnostic, 'L018', lambda: view.read(cycle + '/intent.json') == owner.encoded(expected)) and _local_condition(diagnostic, 'L019', lambda: view.read(cycle + '/prepare-intent.json') == owner.encoded(prepare)) and _local_condition(diagnostic, 'L020', lambda: view.read(cycle + '/contain-intent.json') == owner.encoded(dict(prepare, action='contain'))), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L069": {
+    "kind": "statement",
+    "original_line": 418,
+    "expression": "incident = _parse(view.read(cycle + '/incident.json', value['incident_sha256']))"
+  },
+  "L070": {
+    "kind": "statement",
+    "original_line": 419,
+    "expression": "r.need(_local_condition(diagnostic, 'L021', lambda: incident == {'phase': 'prepare', 'containment': 'INTAKE_ROLLED_BACK', 'state': 'RECONCILIATION_REQUIRED'}), 'LANE_RETIREMENT_PHASE')"
+  },
+  "L071": {
+    "kind": "statement",
+    "original_line": 421,
+    "expression": "r.need(_local_condition(diagnostic, 'L022', lambda: view.names(plan_hash) == {'plan.json', 'baseline.json', 'before.json', 'prepare.json', 'contain-intent.json', 'contained.json', 'runtime-package.json', 'wheels.tar'}), 'LANE_RETIREMENT_INTAKE')"
+  },
+  "L072": {
+    "kind": "statement",
+    "original_line": 423,
+    "expression": "raw_plan = view.read(plan_hash + '/plan.json', plan_hash)"
+  },
+  "L073": {
+    "kind": "statement",
+    "original_line": 424,
+    "expression": "r.need(_local_condition(diagnostic, 'L023', lambda: base64.b64decode(policy['plans'][index]['plan_base64'], validate=True) == raw_plan) and _local_condition(diagnostic, 'L024', lambda: view.read(plan_hash + '/prepare.json') == owner.encoded(prepare)), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L074": {
+    "kind": "statement",
+    "original_line": 426,
+    "expression": "plan = _parse(raw_plan)"
+  },
+  "L075": {
+    "kind": "statement",
+    "original_line": 427,
+    "expression": "r.need(_local_condition(diagnostic, 'L025', lambda: plan['source'] == value['retained_runtime_source'] == owner.install.RETAINED_SOURCE) and _local_condition(diagnostic, 'L026', lambda: plan['repository'] == value['repository']) and _local_condition(diagnostic, 'L027', lambda: plan['work_key'] == value['failed_work_key']) and _local_condition(diagnostic, 'L028', lambda: plan['target_pr'] == value['failed_target_pr']), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L076": {
+    "kind": "statement",
+    "original_line": 430,
+    "expression": "contained = view.read(plan_hash + '/contained.json')"
+  },
+  "L077": {
+    "kind": "statement",
+    "original_line": 431,
+    "expression": "r.need(_local_condition(diagnostic, 'L029', lambda: r.parse(contained) == dict(audit='LIGHT_LANE_OWNER', phase='contain', state='INTAKE_ROLLED_BACK', plan_sha256=plan_hash, controls_restored=False, task_success=False, queue_retry_authorized=False)) and _local_condition(diagnostic, 'L030', lambda: view.read(cycle + '/contain-done.json') == contained) and _local_condition(diagnostic, 'L031', lambda: view.read(plan_hash + '/contain-intent.json') == owner.encoded(dict(plan_sha256=plan_hash, action='CONTAIN_PREEXECUTION'))), 'LANE_RETIREMENT_BINDING')"
+  },
+  "L078": {
+    "kind": "statement",
+    "original_line": 436,
+    "expression": "baseline = _parse(view.read(plan_hash + '/baseline.json'))"
+  },
+  "L079": {
+    "kind": "statement",
+    "original_line": 437,
+    "expression": "before = _parse(view.read(plan_hash + '/before.json'))"
+  },
+  "L080": {
+    "kind": "statement",
+    "original_line": 438,
+    "expression": "view.read(plan_hash + '/runtime-package.json', value['retained_runtime_sha256'], limit=3 * 1024 * 1024)"
+  },
+  "L081": {
+    "kind": "statement",
+    "original_line": 439,
+    "expression": "view.read(plan_hash + '/wheels.tar', limit=16 * 1024 * 1024)"
+  },
+  "L082": {
+    "kind": "statement",
+    "original_line": 440,
+    "expression": "package_path = 'controllers/' + value['historical_controller_source']"
+  },
+  "L083": {
+    "kind": "statement",
+    "original_line": 441,
+    "expression": "package = _parse(view.read(package_path + '/package.json', value['historical_controller_sha256'], limit=3 * 1024 * 1024), limit=3 * 1024 * 1024)"
+  },
+  "L084": {
+    "kind": "statement",
+    "original_line": 442,
+    "expression": "owner.validate_package(owner.encoded(package), value['historical_controller_source'], value['historical_controller_sha256'], allow_legacy=True)"
+  },
+  "L085": {
+    "kind": "statement",
+    "original_line": 444,
+    "expression": "for name, text in package['helpers'].items():\n    r.need(_local_condition(diagnostic, 'L032', lambda: view.read(package_path + '/' + name, limit=3 * 1024 * 1024) == text.encode()), 'LANE_RETIREMENT_SOURCE')"
+  },
+  "L086": {
+    "kind": "statement",
+    "original_line": 446,
+    "expression": "prior = value['predecessor']"
+  },
+  "L087": {
+    "kind": "statement",
+    "original_line": 446,
+    "expression": "prior_root = prior['plan_sha256']"
+  },
+  "L088": {
+    "kind": "statement",
+    "original_line": 447,
+    "expression": "prior_plan = view.read(prior_root + '/plan.json', prior_root)"
+  },
+  "L089": {
+    "kind": "statement",
+    "original_line": 448,
+    "expression": "terminal = view.read(prior_root + '/terminal.json', prior['terminal_sha256'])"
+  },
+  "L090": {
+    "kind": "statement",
+    "original_line": 449,
+    "expression": "receipt = _parse(view.read(prior_root + '/intake.json'))"
+  },
+  "L091": {
+    "kind": "statement",
+    "original_line": 450,
+    "expression": "complete = _parse(view.read(prior_root + '/complete.json'))"
+  },
+  "L092": {
+    "kind": "statement",
+    "original_line": 451,
+    "expression": "restored = _parse(view.read(prior_root + '/controls-restored.json'))"
+  },
+  "L093": {
+    "kind": "statement",
+    "original_line": 452,
+    "expression": "execution = _parse(view.read(prior_root + '/execution.json'))"
+  },
+  "L094": {
+    "kind": "statement",
+    "original_line": 453,
+    "expression": "prepared = _parse(view.read(prior_root + '/prepare.json'))"
+  },
+  "L095": {
+    "kind": "statement",
+    "original_line": 454,
+    "expression": "binding = owner.encoded(dict(plan_sha256=prior_root, request_sha256=execution['request_sha256'], receipt_sha256=owner.sha(owner.encoded(receipt)), terminal_sha256=prior['terminal_sha256']))"
+  },
+  "L096": {
+    "kind": "statement",
+    "original_line": 456,
+    "expression": "r.need(_local_condition(diagnostic, 'L033', lambda: owner.sequence(prepared) == prior['sequence']) and _local_condition(diagnostic, 'L034', lambda: prepared['accepted_runtime_sha256'] == value['retained_runtime_sha256']) and _local_condition(diagnostic, 'L035', lambda: receipt['plan_sha256'] == prior_root) and _local_condition(diagnostic, 'L036', lambda: complete.get('controls_restored') is True) and _local_condition(diagnostic, 'L037', lambda: {k: v for k, v in complete.items() if k != 'native'} == restored) and _local_condition(diagnostic, 'L038', lambda: view.read(prior_root + '/restore-intent.json') == binding) and _local_condition(diagnostic, 'L039', lambda: view.read(prior_root + '/restart-intent.json') == binding), 'LANE_RETIREMENT_PREDECESSOR')"
+  },
+  "L097": {
+    "kind": "statement",
+    "original_line": 461,
+    "expression": "return dict(policy=policy, prepare=prepare, raw_plan=raw_plan, baseline=baseline, before=before, prior_plan=prior_plan, terminal=terminal, receipt=receipt, complete=complete)"
+  }
+}

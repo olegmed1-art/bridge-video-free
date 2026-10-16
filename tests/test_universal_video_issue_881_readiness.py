@@ -674,7 +674,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
 
     source_worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
     neon_worker_source = (ROOT / "universal_video/neon_worker.py").read_text(encoding="utf-8")
-    assert "with shared_workload_lock(spool_root):" in source_worker
+    assert "with shared_workload_lock(spool_root, exclusive=True):" in source_worker
     assert "with shared_workload_lock(spool_root, exclusive=True):" in source_worker
     assert "with shared_workload_lock():" in neon_worker_source
 

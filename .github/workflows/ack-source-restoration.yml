@@ -1,0 +1,120 @@
+name: ACK source restoration isolated checks
+on:
+  push:
+    branches: [test/restore-0401-checksum-20261005]
+    paths:
+      - '.github/workflows/ack-source-restoration.yml'
+      - '.github/workflows/migration-namespace-guard.yml'
+      - 'database/MIGRATION_NAMESPACES.md'
+      - 'database/migrations/0401_autopilot_codex_ack_fingerprint_not_null.sql'
+      - 'database/scripts/reconcile_0401_checksum.sql'
+      - 'database/tests/ack-fingerprint/**'
+permissions:
+  contents: read
+concurrency:
+  group: ack-source-restoration-isolated
+  cancel-in-progress: false
+jobs:
+  ack-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify immutable restored artifact and compile regression
+        run: |
+          set -euo pipefail
+          echo 'bea4b407a63256f83f5eecbd8b220406070046edb34d87f849d645b39134dcc7  database/migrations/0401_autopilot_codex_ack_fingerprint_not_null.sql' | sha256sum -c -
+          python3 -m py_compile database/tests/ack-fingerprint/run.py
+      - name: Exercise exact namespace guard and negative controls
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          path=pathlib.Path('.github/workflows/migration-namespace-guard.yml')
+          text=path.read_text()
+          body=text.split('        run: |\n',1)[1]
+          code='\n'.join(line[10:] for line in body.splitlines())+'\n'
+          def guard(ok):
+              result=subprocess.run(['bash','-c',code],capture_output=True,text=True,timeout=20)
+              assert (result.returncode==0)==ok, result.stdout+result.stderr
+          guard(True)
+          target=pathlib.Path('database/migrations/0401_autopilot_codex_ack_fingerprint_not_null.sql')
+          original=target.read_bytes()
+          try:
+              target.write_bytes(original+b'-- negative artifact tamper\n')
+              guard(False)
+          finally:
+              target.write_bytes(original)
+          extra=pathlib.Path('database/migrations/0499_autopilot_namespace_negative_fixture.sql')
+          try:
+              extra.write_text('-- temporary negative fixture\n')
+              guard(False)
+          finally:
+              extra.unlink(missing_ok=True)
+          wrong=pathlib.Path('database/migrations/0402_autopilot_codex_ack_fingerprint_not_null.sql')
+          try:
+              wrong.write_bytes(original)
+              guard(False)
+          finally:
+              wrong.unlink(missing_ok=True)
+          guard(True)
+          print('namespace exact-source, tamper, wrong-number and forbidden-range controls PASS')
+          PY
+      - name: Fetch pinned official PostgreSQL image
+        run: timeout 120s docker pull --platform linux/amd64 postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
+      - name: Verify ACK and checksum guards twice in network-none fixtures
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 150s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/ack-fingerprint/run.py
+          timeout --signal=TERM --kill-after=20s 150s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/ack-fingerprint/run.py
+      - name: Cleanup owned disposable containers
+        if: always()
+        run: |
+          set -euo pipefail
+          mapfile -t names < <(docker ps -a --format '{{.Names}}' | grep -E '^ack-fingerprint-[0-9]+$' || true)
+          if (("${#names[@]}")); then timeout 30s docker rm -f -v "${names[@]}"; fi
+  fresh-schema:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
+        env:
+          POSTGRES_DB: bridge_school_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixture_only
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bridge_school_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:fixture_only@localhost:5432/bridge_school_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:fixture_only@localhost:5432/bridge_school_ci
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+      - name: Bootstrap isolated managed-owner-compatible role
+        run: |
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'fixture_only' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+          ALTER DATABASE bridge_school_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+      - name: Apply all canonical migrations and run SQL invariants
+        run: |
+          set -euo pipefail
+          test "$DATABASE_URL" = 'postgresql://bridge_ci_owner:fixture_only@localhost:5432/bridge_school_ci'
+          timeout 360s bash database/scripts/migrate.sh
+          timeout 240s bash -c 'set -euo pipefail; for file in database/tests/*.sql; do psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$file" >/dev/null; done'
+          timeout 60s bash database/scripts/migrate.sh
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c "SELECT checksum FROM public.schema_migration WHERE migration_key='0401_autopilot_codex_ack_fingerprint_not_null'")" = 'bea4b407a63256f83f5eecbd8b220406070046edb34d87f849d645b39134dcc7'
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c 'SELECT count(*) FROM public.schema_migration WHERE checksum IS NULL')" = 0

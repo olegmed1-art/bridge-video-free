@@ -1,0 +1,31 @@
+name: PR1994 audit closure isolated checks
+on:
+  push:
+    branches:
+      - 'test/pr1994-audit-closure-*'
+    paths:
+      - 'database/scripts/reconcile_pr1994_audit.sql'
+      - 'database/scripts/pr1994_audit_closure_evidence.json'
+      - 'database/tests/pr1994-audit-closure/**'
+      - '.github/workflows/pr1994-audit-closure-isolated.yml'
+permissions:
+  contents: read
+concurrency:
+  group: pr1994-audit-closure-isolated
+  cancel-in-progress: false
+jobs:
+  isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify source identity and syntax
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m py_compile database/tests/pr1994-audit-closure/run.py
+      - name: Exercise exact SQL in owned network-none fixture
+        run: python3 database/tests/pr1994-audit-closure/run.py

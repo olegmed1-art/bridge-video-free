@@ -1,0 +1,69 @@
+name: Oracle Light active HOLD recovery attest
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: 'Exact reviewed current main SHA for a read-only HOLD check'
+        required: true
+        type: string
+  pull_request:
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py', 'ops/native_maintenance_lifetime.py', 'tests/test_native_maintenance_lifetime.py', 'ops/native_maintenance_run_guard.py', 'tests/test_native_maintenance_run_guard.py', '.github/workflows/native-maintenance-window.yml']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py', 'ops/native_maintenance_lifetime.py', 'tests/test_native_maintenance_lifetime.py', 'ops/native_maintenance_run_guard.py', 'tests/test_native_maintenance_run_guard.py', '.github/workflows/native-maintenance-window.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned driver required by owner attestation contracts
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - run: python -m unittest -q tests.test_oracle_light_active_hold_attest tests.test_native_permission_hold_guard
+      - name: Verify read-only transport with real subprocesses
+        run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance*.py' -v
+
+      - name: Prove PID1 cleanup after main crash and runtime expiry
+        run: |
+          sudo -n env GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            "$(command -v python)" ops/native_maintenance_lifetime.py --self-test
+
+  attest:
+    needs: contract
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == github.repository_owner &&
+        inputs.expected_main_sha == github.sha))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify transport cancellation and live HOLD from exact-source package
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          PYTHONPATH=. python ops/native_maintenance_readonly_transport.py --key "$work/key" --known-hosts "$work/known_hosts"

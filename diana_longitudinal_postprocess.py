@@ -73,7 +73,7 @@ def _latest_done(token: str, job_id: str) -> tuple[dict[str, Any], dict[str, Any
     raise RuntimeError("LONGITUDINAL_AI_DONE_NOT_FOUND")
 
 
-def _load_master(token: str, done: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_master_with_raw(token: str, done: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any], bytes]:
     meta = done.get("masterPdf") or {}
     pdf_id = str(meta.get("driveId") or "")
     expected_pdf_sha = str(meta.get("sha256") or "").lower()
@@ -106,7 +106,14 @@ def _load_master(token: str, done: Mapping[str, Any]) -> tuple[dict[str, Any], d
         "size_bytes": int(meta.get("sizeBytes") or 0),
         "pdf_sha256": actual_pdf_sha,
         "master_json_sha256": actual_master_sha,
-    }
+    }, raw
+
+
+def _load_master(token: str, done: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    # Keep legacy callers' two-value contract. The opt-in draft builder uses
+    # original attachment bytes, never a reserialization of this parsed object.
+    master, metadata, _raw = _load_master_with_raw(token, done)
+    return master, metadata
 
 
 def _drive_metadata(token: str, file_id: str) -> dict[str, Any]:
@@ -475,7 +482,7 @@ def _summary_markdown(payload: Mapping[str, Any]) -> str:
     ]) + "\n"
 
 
-def _persist_staging_if_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _persist_staging_if_configured(payload: Mapping[str, Any], *, persisted_result=None) -> dict[str, Any]:
     raw_dsn = os.getenv("BRIDGE_WORKER_DATABASE_URL", "").strip()
     requested = os.getenv("BRIDGE_PERSIST_DATABASE", "false").strip().casefold() == "true"
     if not requested:
@@ -484,7 +491,7 @@ def _persist_staging_if_configured(payload: Mapping[str, Any]) -> dict[str, Any]
         return {"status": "SKIPPED_DATABASE_URL_MISSING"}
     try:
         from database.video_candidate_persistence import persist_quality_candidates
-        return persist_quality_candidates(raw_dsn, payload)
+        return persist_quality_candidates(raw_dsn, payload, persisted_result=persisted_result)
     except Exception as exc:
         # Candidate persistence must not invalidate already completed immutable
         # media evidence.  The receipt records the real blocker for retry.

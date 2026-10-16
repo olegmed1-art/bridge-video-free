@@ -2,10 +2,10 @@ name: Oracle Light database routing audit
 
 on:
   pull_request:
-    paths: ['.github/workflows/oracle-light-db-routing-audit.yml', 'ops/oracle_light_db_runtime_audit.py']
+    paths: ['.github/workflows/oracle-light-db-routing-audit.yml', 'ops/oracle_light_db_runtime_audit.py', 'tests/test_light_db_login_audit.py']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-db-routing-audit.yml', 'ops/oracle_light_db_runtime_audit.py']
+    paths: ['.github/workflows/oracle-light-db-routing-audit.yml', 'ops/oracle_light_db_runtime_audit.py', 'tests/test_light_db_login_audit.py']
   workflow_dispatch:
 
 permissions:
@@ -22,6 +22,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Validate read-only login probe
+        run: python -m unittest discover -s tests -p test_light_db_login_audit.py -v
       - name: Validate shell syntax
         run: |
           ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-db-routing-audit.yml

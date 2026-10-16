@@ -904,7 +904,7 @@ def _prepare_job_dir(
         ):
             return job_dir, job_hash, existing
     if job_dir.exists():
-        shutil.rmtree(job_dir)
+        raise RuntimeError("existing result cannot be reused safely; retain evidence and use a new job id")
     job_dir.mkdir(parents=True, exist_ok=False)
     return job_dir, job_hash, None
 

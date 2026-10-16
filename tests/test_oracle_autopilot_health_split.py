@@ -17,7 +17,7 @@ def connection(rows):
     conn.__enter__.return_value=conn
     cur=conn.cursor.return_value.__enter__.return_value
     cur.fetchone.side_effect=rows
-    cur.fetchall.return_value=[('mailbox','ok'),('leases','ok'),('dispatch','warning')]
+    cur.fetchall.return_value=[('mailbox','ok',None),('leases','ok',None),('dispatch','warning',None)]
     return conn,cur
 
 
@@ -56,7 +56,7 @@ class SharedHealthSplit(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
             target.check_autopilot_health(cur,required=True)
         cur.fetchone.return_value=('view',)
-        cur.fetchall.return_value=[('broken','critical')]
+        cur.fetchall.return_value=[('broken','critical',None)]
         with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
             target.check_autopilot_health(cur,required=True)
 

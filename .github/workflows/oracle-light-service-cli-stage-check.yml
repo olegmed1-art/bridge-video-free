@@ -1,0 +1,23 @@
+name: Oracle Light service CLI stage checks
+on:
+  pull_request:
+    paths:
+      - 'ops/oracle_light_service_cli_stage.py'
+      - 'tests/test_oracle_light_service_cli_stage.py'
+      - 'docs/ops/ORACLE_LIGHT_SERVICE_CLI_STAGE.md'
+      - '.github/workflows/oracle-light-service-cli-stage-check.yml'
+permissions:
+  contents: read
+jobs:
+  offline-fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Root ownership and atomic rollback fixtures in disposable runner
+        run: sudo -H "$(command -v python)" -m unittest discover -s tests -p 'test_oracle_light_service_cli_stage.py' -v

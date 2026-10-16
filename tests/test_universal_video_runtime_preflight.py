@@ -259,7 +259,7 @@ def test_review_receipt_is_not_marked_technical_ready(tmp_path, monkeypatch: pyt
     verifier.assert_not_called()
 
 
-def test_drive_job_is_staged_on_oracle_before_processing_and_then_removed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_drive_job_review_retains_staged_source_until_durable_publication(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     media = tmp_path / "media"
     media.mkdir()
     inbox = tmp_path / "inbox"
@@ -309,7 +309,7 @@ def test_drive_job_is_staged_on_oracle_before_processing_and_then_removed(tmp_pa
     monkeypatch.setattr(spool_worker, "validate_staged_video", lambda _path: {})
     monkeypatch.setattr(spool_worker, "run_job", fake_run)
     assert spool_worker.process_one(tmp_path) is True
-    assert not (media / "drive-ready" / "drive-chain-job").exists()
+    assert (media / "drive-ready" / "drive-chain-job").exists()
     progress = json.loads((tmp_path / "progress" / "drive-chain-job.json").read_text(encoding="utf-8"))
     assert progress["state"] == "REVIEW"
 
@@ -356,4 +356,4 @@ def test_drive_source_without_audio_fails_before_heavy_runner(tmp_path, monkeypa
     runner.assert_not_called()
     failure = json.loads((tmp_path / "failed" / "drive-no-audio.json").read_text(encoding="utf-8"))
     assert failure["error_code"] == "UV_MEDIA_AUDIO_TRACK_MISSING"
-    assert not (media / "drive-ready" / "drive-no-audio").exists()
+    assert (media / "drive-ready" / "drive-no-audio").exists()

@@ -166,8 +166,19 @@ def test_only_reviewed_native_cli_adapter_launches_a_child():
         assert len(calls) == 1 and calls[0].func.attr == 'run'
         call = calls[0]
         assert isinstance(call.args[0], ast.List)
-        assert ast.unparse(call.args[0].elts[0]) == 'str(CLI)'
+        assert ast.unparse(call.args[0].elts[0]) == (
+            "str(CLI if profile is None else LIGHT_ROOT / 'runtime-bin/codex')")
         keywords = {k.arg: k.value for k in call.keywords}
         assert 'shell' not in keywords
-        assert ast.unparse(keywords['env']) == 'child_environment()'
+        assert ast.unparse(keywords['env']) == 'child_environment(profile)'
         assert 'timeout' in keywords
+        runner = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'run_cli')
+        assert [arg.arg for arg in runner.args.args] == ['arguments', 'input_text', 'timeout']
+        assert [arg.arg for arg in runner.args.kwonlyargs] == ['profile']
+    provider = ast.parse((root / 'light_native_provider.py').read_text())
+    assert not any(isinstance(n, ast.Import) and any(a.name == 'subprocess' for a in n.names)
+                   for n in ast.walk(provider))
+    delegated = [n for n in ast.walk(provider) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Attribute) and n.func.attr == 'run_cli']
+    assert len(delegated) == 1
+    assert {k.arg: ast.literal_eval(k.value) for k in delegated[0].keywords} == {'profile': 'light'}

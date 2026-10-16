@@ -1,4 +1,44 @@
 \set ON_ERROR_STOP on
+\ir fixed_subset_recovery_state.sql.inc
+-- Shared ACL assertions apply before either behavior fixture.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0056_universal_video_queue') THEN
+        RAISE EXCEPTION 'video queue migration is not registered';
+    END IF;
+    IF has_table_privilege('bridge_school_worker','video_queue.job','INSERT')
+       OR has_table_privilege('bridge_school_worker','video_queue.job','UPDATE')
+       OR has_table_privilege('bridge_school_worker','video_queue.job','DELETE') THEN
+        RAISE EXCEPTION 'worker has forbidden direct job mutation';
+    END IF;
+    IF has_function_privilege('bridge_school_app','video_queue.claim_job(text,integer,text,text)','EXECUTE') THEN
+        RAISE EXCEPTION 'application can claim worker jobs';
+    END IF;
+    -- 0060 deliberately removes these legacy runtime capabilities. Check the
+    -- new entrypoints without restoring grants or skipping behavior assertions.
+    IF EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0060_fixed_subset_admission') AND NOT EXISTS (SELECT FROM schema_migration WHERE migration_key IN ('repair-0060-legacy-recovery-v1','repair-0060-legacy-installed-v2')) THEN
+        IF has_function_privilege('bridge_school_app','video_queue.enqueue_drive_batch(text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
+           OR has_function_privilege('bridge_school_worker','video_queue.finish_job(uuid,uuid,text,text,jsonb,text)','EXECUTE')
+           OR NOT has_function_privilege('video_subset_admitter','video_queue.admit_approved_subset(uuid,text,text,text,uuid)','EXECUTE')
+           OR NOT has_function_privilege('video_subset_worker_v2','video_queue.finish_subset_job(uuid,uuid,text,text,jsonb,uuid,text)','EXECUTE') THEN
+            RAISE EXCEPTION 'fixed-subset queue capabilities mismatch';
+        END IF;
+    ELSE
+        IF NOT has_function_privilege('bridge_school_app','video_queue.enqueue_drive_batch(text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
+           OR NOT has_function_privilege('bridge_school_worker','video_queue.finish_job(uuid,uuid,text,text,jsonb,text)','EXECUTE') THEN
+            RAISE EXCEPTION 'required queue capabilities are missing';
+        END IF;
+    END IF;
+
+END $$;
+SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0060_fixed_subset_admission') AND NOT :'legacy_recovered'::boolean AS fixed_subset_installed \gset
+\if :fixed_subset_installed
+\! python database/tests/fixed_subset_admission/runtime_fixture.py --scenario 043 --execute
+\if :SHELL_ERROR
+SELECT 1/0; -- Fail closed: a failed shell fixture must fail this SQL test.
+\endif
+\else
+\set ON_ERROR_STOP on
 BEGIN;
 
 DO $$
@@ -32,22 +72,6 @@ DECLARE
     v_before_events jsonb;
     v_constraint text;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0056_universal_video_queue') THEN
-        RAISE EXCEPTION 'video queue migration is not registered';
-    END IF;
-    IF has_table_privilege('bridge_school_worker','video_queue.job','INSERT')
-       OR has_table_privilege('bridge_school_worker','video_queue.job','UPDATE')
-       OR has_table_privilege('bridge_school_worker','video_queue.job','DELETE') THEN
-        RAISE EXCEPTION 'worker has forbidden direct job mutation';
-    END IF;
-    IF has_function_privilege('bridge_school_app','video_queue.claim_job(text,integer,text,text)','EXECUTE') THEN
-        RAISE EXCEPTION 'application can claim worker jobs';
-    END IF;
-    IF NOT has_function_privilege('bridge_school_app','video_queue.enqueue_drive_batch(text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
-       OR NOT has_function_privilege('bridge_school_worker','video_queue.finish_job(uuid,uuid,text,text,jsonb,text)','EXECUTE') THEN
-        RAISE EXCEPTION 'required queue capabilities are missing';
-    END IF;
-
     SELECT e.batch_id INTO v_batch
       FROM video_queue.enqueue_drive_batch(
         'generic-batch-001','sourceFolder000001','outputFolder00001','workFolder0000001',
@@ -229,6 +253,12 @@ BEGIN
 END $$;
 ROLLBACK;
 
+\endif
+
+\if :legacy_recovered
+-- Recovery retains0059; do not exercise an unrelated destructive rollback.
+\ir fixed_subset_recovery_state.sql.inc
+\else
 -- Exercise rollback/reapply on the ephemeral CI database, never production.
 CREATE TEMP TABLE size_guard_before AS
 SELECT (SELECT count(*) FROM video_queue.job) AS jobs,
@@ -256,3 +286,5 @@ BEGIN
  END IF;
 END $$;
 DROP TABLE size_guard_before;
+
+\endif

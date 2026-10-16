@@ -7,3 +7,6 @@ dependencies = [
   "fastapi==0.141.1",
   "psycopg[binary]==3.3.4",
 ]
+
+[tool.vercel.scripts]
+build = "python -m tools.canon_auth.build_once"

@@ -1,6 +1,8 @@
 """Submission ambiguity and immutable provider evidence; no network calls."""
 from copy import deepcopy
+from pathlib import Path
 import subprocess
+import shlex
 
 import pytest
 
@@ -41,6 +43,66 @@ def report_patch(request_data, **updates):
     return (f'diff --git a/{path} b/{path}\nnew file mode 100644\n'
             f'index 0000000..1234567\n--- /dev/null\n+++ b/{path}\n'
             '@@ -0,0 +1 @@\n+'+bridge.canonical(report)+'\n')
+
+
+@pytest.mark.parametrize('mode', ['READ_ONLY', 'VERIFY'])
+def test_committed_report_round_trip_preserves_assignment_head(request_data, tmp_path, mode):
+    """Execute the prompt's commit command in real Git, then use the stock validator.
+
+    This verifies local Git/collector compatibility, not model obedience or Cloud capture.
+    """
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
+    git('init', '-q')
+    git('config', 'user.name', 'Test')
+    git('config', 'user.email', 'test@example.invalid')
+    (repo / 'source.txt').write_text('original\n')
+    git('add', '--', 'source.txt')
+    git('commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
+    request_data['mode'] = mode
+    request_data['expected_head_sha'] = base
+    request_data['assignment']['task_spec_json'].update(
+        expected_head_sha=base, execution_mode=mode)
+    report, _ = bridge.extract_report(report_patch(request_data), bridge.report_path(request_data))
+    path = bridge.report_path(request_data)
+    (repo / path).write_text(bridge.canonical(report) + '\n')
+    # The transport command must neither run repo hooks nor require signing credentials.
+    hook = repo / '.git/hooks/pre-commit'
+    hook.write_text('#!/bin/sh\nprintf bad > hook-ran\nexit 1\n')
+    hook.chmod(0o755)
+    git('config', 'commit.gpgsign', 'true')
+    git('add', '--', path)
+    command = bridge.prompt_for(request_data).split('```sh\n', 1)[1].split('\n```', 1)[0]
+    subprocess.run(shlex.split(command), cwd=repo, check=True, capture_output=True)
+    assert git('rev-parse', 'HEAD^') == base
+    assert git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD') == path
+    assert git('status', '--porcelain') == ''
+    assert (repo / 'source.txt').read_text() == 'original\n'
+    assert not (repo / 'hook-ran').exists()
+    patch = subprocess.check_output(
+        ['git', '-C', str(repo), 'diff', '--full-index', base, 'HEAD'], text=True)
+    result = bridge.validate_result(request_data, patch, 'task_e_test123')
+    assert result['state'] == 'RESULT_RETRIEVED'
+    assert result['changes'] == ''
+    assert result['report']['expected_head_sha'] == base
+    # A committed source edit remains forbidden by the independent collector.
+    (repo / 'source.txt').write_text('changed\n')
+    git('-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+        'commit', '-qam', 'untrusted source edit')
+    changed_patch = subprocess.check_output(
+        ['git', '-C', str(repo), 'diff', '--full-index', base, 'HEAD'], text=True)
+    with pytest.raises(ValueError, match='READ_ONLY_SOURCE_CHANGED'):
+        bridge.validate_result(request_data, changed_patch, 'task_e_test123')
+
+
+def test_repair_transport_does_not_gain_local_commit_permission(request_data):
+    request_data['mode'] = 'REPAIR'
+    instructions = bridge.report_transport_instructions(request_data)
+    assert instructions == 'Use git add -N for this report so the cloud diff contains it. '
+    assert '```sh' not in bridge.prompt_for(request_data)
 
 
 def test_submit_saves_intent_before_call_and_never_duplicates(request_data, monkeypatch):
@@ -175,3 +237,92 @@ def test_service_profile_stays_inside_existing_service_paths():
 def test_health_reports_only_auth_state(monkeypatch, text, code, state):
     monkeypatch.setattr(bridge, 'run_cli', lambda *args, **kwargs: response(text, code))
     assert bridge.health() == {'state': state, 'profile': 'ubuntu'}
+
+
+def test_light_profile_matches_production_write_boundary(monkeypatch):
+    monkeypatch.setenv('AUTOPILOT_DATABASE_URL', 'must-not-inherit')
+    monkeypatch.setenv('OPENAI_API_KEY', 'must-not-inherit')
+    monkeypatch.setenv('CODEX_HOME', '/home/ubuntu/.codex')
+    try:
+        bridge.configure_profile('light')
+        root = Path('/opt/bridge-school/school-autopilot-production-light')
+        assert bridge.CLI == root / 'runtime-bin/codex'
+        assert bridge.STATE == root / 'runtime/codex-dispatch'
+        assert bridge.child_environment() == {
+            'HOME': str(root / 'runtime'),
+            'CODEX_HOME': str(root / 'runtime/codex-home'),
+            'PATH': '/usr/local/bin:/usr/bin:/bin',
+            'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
+    finally:
+        bridge.configure_profile('ubuntu')
+
+
+def test_unknown_profile_does_not_change_current_profile():
+    bridge.configure_profile('ubuntu')
+    old = (bridge.CLI, bridge.STATE, bridge.PROFILE)
+    with pytest.raises(ValueError, match='CLI_PROFILE_INVALID'):
+        bridge.configure_profile('../../home/ubuntu')
+    assert (bridge.CLI, bridge.STATE, bridge.PROFILE) == old
+
+
+
+# Tagged v0.157.0 format_task_status_lines; exit 1 unless READY.
+def status_frame(label):
+    return f'[{label}] Bounded audit\nbridge-video-free  •  just now\nno diff\n'
+
+
+def test_pinned_error_is_retained_once_without_diff_or_resubmit(request_data, monkeypatch):
+    submitted(request_data, monkeypatch)
+    calls = []
+    def read(args):
+        calls.append(args)
+        assert args == ['cloud', 'status', 'task_e_test123']
+        return response(status_frame('ERROR'), 1)
+    monkeypatch.setattr(bridge, 'run_cli', read)
+    result = bridge.collect(request_data['dispatch_id'])
+    assert result['state'] == 'PROVIDER_TERMINAL_FAILURE'
+    assert result['result_code'] == 'PROVIDER_ERROR'
+    assert result['status_sha256'] == bridge.digest(status_frame('ERROR'))
+    assert bridge.collect(request_data['dispatch_id']) == result
+    assert len(calls) == 1
+
+
+def test_pinned_pending_can_later_become_ready(request_data, monkeypatch):
+    submitted(request_data, monkeypatch)
+    replies = iter([response(status_frame('PENDING'), 1),
+                    response(status_frame('READY')), response(report_patch(request_data))])
+    monkeypatch.setattr(bridge, 'run_cli', lambda args: next(replies))
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'WAITING_PROVIDER'
+    assert not (bridge.STATE/(request_data['dispatch_id']+'.result.json')).exists()
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'RESULT_RETRIEVED'
+
+
+@pytest.mark.parametrize('stdout,code,stderr', [
+    ('', 1, 'network unavailable'),
+    ('[ERROR] connection failed\n', 1, ''),
+    (status_frame('ERROR'), 2, ''),
+    (status_frame('ERROR'), -15, ''),
+    (status_frame('ERROR'), 0, ''),
+    (status_frame('ERROR'), 1, 'authentication failed'),
+    (status_frame('READY'), 1, ''),
+    (status_frame('APPLIED'), 1, ''),
+    (status_frame('ERROR') + 'unexpected trailer\n', 1, ''),
+    (status_frame('ERROR').replace('no diff', 'incomplete'), 1, ''),
+    (status_frame('ERROR').replace('[ERROR]', '[ERROR]injected'), 1, ''),
+    ('\x1b[31m' + status_frame('ERROR'), 1, ''),
+])
+def test_nonterminal_or_malformed_failure_never_releases_slot(
+        request_data, monkeypatch, stdout, code, stderr):
+    submitted(request_data, monkeypatch)
+    monkeypatch.setattr(bridge, 'run_cli', lambda args:
+                        subprocess.CompletedProcess([], code, stdout, stderr))
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'PROVIDER_STATUS_UNKNOWN'
+    assert not (bridge.STATE/(request_data['dispatch_id']+'.result.json')).exists()
+
+
+@pytest.mark.parametrize('summary', ['+2/-0 • 1 file', '+3/-1 • 2 files'])
+def test_pinned_error_with_diff_summary(request_data, monkeypatch, summary):
+    submitted(request_data, monkeypatch)
+    monkeypatch.setattr(bridge, 'run_cli', lambda args:
+                        response(status_frame('ERROR').replace('no diff', summary), 1))
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'PROVIDER_TERMINAL_FAILURE'

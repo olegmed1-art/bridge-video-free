@@ -9,7 +9,8 @@
     "deploymentEnabled": {
       "main": true,
       "preview": false,
-      "*": false
+      "*": false,
+      "codex/shape-generator-v2-20261011": false
     }
   },
   "ignoreCommand": "bash scripts/vercel_ignore_build.sh"

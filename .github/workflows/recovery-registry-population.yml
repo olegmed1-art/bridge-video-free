@@ -16,7 +16,6 @@ on:
     branches:
       - main
     paths:
-      - '.github/workflows/recovery-registry-population.yml'
       - 'database/record_recovery_evidence.py'
       - 'ops/reliability/recovery-registry-records/**'
 
@@ -33,7 +32,7 @@ jobs:
     timeout-minutes: 10
     environment: database-production
     env:
-      NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      NEON_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
       RECOVERY_RECORD_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.record_path || 'ops/reliability/recovery-registry-records/neon-independent-backup-restore-20260826.json' }}
       CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || 'RECORD' }}
     steps:
@@ -60,6 +59,13 @@ jobs:
       - name: Install database client dependency
         shell: bash
         run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Verify exact registry credential and read-only catalog before recording
+        env:
+          NATIVE_REGISTRY_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: ${{ github.sha }}
+        run: python -m ops.recovery_registry_preflight
 
       - name: Record recovery evidence metadata
         shell: bash

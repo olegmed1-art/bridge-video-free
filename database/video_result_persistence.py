@@ -209,10 +209,22 @@ def persist_video_result(
     *,
     rollback: bool = False,
 ) -> dict[str, str | int | bool]:
-    """Persist a completed worker result. The operation is transactional and idempotent."""
+    """Persist using the existing production worker DSN policy."""
     dsn = normalize_dsn(raw_dsn)
     if not dsn:
         raise ValueError("BRIDGE_WORKER_DATABASE_URL is not configured")
+    with psycopg.connect(dsn, connect_timeout=10, application_name="bridge-video-result-persistence") as conn:
+        return persist_video_result_on_connection(conn, master, done, rollback=rollback)
+
+
+def persist_video_result_on_connection(conn, master, done, *, rollback=False):
+    """Same SQL on a caller-owned authorized connection.
+
+    This seam supports isolated PostgreSQL rehearsals without weakening the
+    production DSN policy or mocking writes. No environment DSN is consumed.
+    Begin an outer transaction to combine helpers atomically; an idle connection
+    commits this helper's transaction on successful exit.
+    """
 
     job_id = str(_require(master, "job_id"))
     source = dict(_require(master, "source"))
@@ -366,14 +378,10 @@ def persist_video_result(
         "3.1-free-r25.13-checkpoint",
     }
 
-    with psycopg.connect(
-        dsn,
-        connect_timeout=10,
-        application_name="bridge-video-result-persistence",
-    ) as conn:
+    with conn.transaction(force_rollback=rollback):
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT school_id FROM public.school WHERE stable_name = %s",
+                "SELECT school_id FROM public.school WHERE stable_name = %s AND status='active'",
                 (SCHOOL_STABLE_NAME,),
             )
             rows = cur.fetchall()
@@ -836,16 +844,12 @@ def persist_video_result(
                 (changeset_id,),
             )
 
-        if rollback:
-            conn.rollback()
-        else:
-            conn.commit()
-
     return {
         "persisted": not rollback,
         "rolled_back": rollback,
         "segments": len(transcript),
         "source_id": str(source_id),
+        "school_id": str(school_id),
         "source_asset_id": str(source_asset_id),
         "transcript_id": str(transcript_id),
         "analysis_run_id": str(analysis_run_id),

@@ -1,0 +1,33 @@
+{
+  "run_id": 38888790367,
+  "restore_job_id": 116933728105,
+  "job_url": "https://github.com/olegmed1-art/bridge-video-free/actions/runs/38888790367/job/116933728105",
+  "head_sha": "39d225e04588c352c01fe64331abbe78ff594bb7",
+  "original_result": "failure",
+  "original_schema_scope": "exclude pg_catalog and information_schema only",
+  "source": {
+    "tables": 333,
+    "schemas": 11,
+    "jobs": 28,
+    "research_jobs": 10,
+    "schema_names": [
+      "ai", "assistant_lab", "autopilot", "autopilot_reconcile", "bidding",
+      "identity_staging", "pg_temp_23", "pg_toast", "pg_toast_temp_23", "public", "video_queue"
+    ]
+  },
+  "restored": {
+    "tables": 333,
+    "schemas": 9,
+    "jobs": 28,
+    "research_jobs": 10,
+    "schema_names": [
+      "ai", "assistant_lab", "autopilot", "autopilot_reconcile", "bidding",
+      "identity_staging", "pg_toast", "public", "video_queue"
+    ],
+    "recovery_checkpoint_exists": true,
+    "recovery_verification_exists": true
+  },
+  "only_source": ["pg_temp_23", "pg_toast_temp_23"],
+  "only_restored": [],
+  "original_log_sha256": "55AD5D189B12CB4BA79F9287786E2E41D82FE121B1C243840A66A0087BDDF82D"
+}

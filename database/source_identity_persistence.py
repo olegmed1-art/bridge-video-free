@@ -35,6 +35,15 @@ def ensure_drive_source_identity(
     dsn = normalize_dsn(raw_dsn)
     if not dsn:
         raise ValueError("BRIDGE_WORKER_DATABASE_URL is not configured")
+    with psycopg.connect(dsn, connect_timeout=10, application_name="bridge-source-identity-persistence") as conn:
+        return ensure_drive_source_identity_on_connection(conn, source_drive_id=source_drive_id,
+                                                         display_name=display_name, job_id=job_id)
+
+
+def ensure_drive_source_identity_on_connection(conn, *, source_drive_id, display_name, job_id=None):
+    """Existing writer on an authorized connection; use an outer transaction
+    to combine helpers atomically (an idle connection commits this transaction).
+    """
     source_drive_id = str(source_drive_id or "").strip()
     if not source_drive_id:
         raise ValueError("source_drive_id is required")
@@ -50,11 +59,7 @@ def ensure_drive_source_identity(
         "job_id": job_id,
     }
 
-    with psycopg.connect(
-        dsn,
-        connect_timeout=10,
-        application_name="bridge-source-identity-persistence",
-    ) as conn:
+    with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT 1 FROM public.source WHERE source_id=%s",

@@ -95,6 +95,11 @@ def normalize_dsn(raw: str) -> str:
         raise DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL must not include a URI fragment")
 
     query = parse_qs(parsed.query, keep_blank_values=True)
+    # libpq accepts connection-target and principal overrides in URI query
+    # parameters. Validate an explicit allowlist before handing the URI to it;
+    # authority/path validation alone does not pin the effective connection.
+    if set(query) - {"sslmode", "channel_binding"}:
+        raise DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL contains unsupported connection parameters")
     sslmodes = query.get("sslmode", [])
     if len(sslmodes) != 1 or sslmodes[0] not in {"require", "verify-full"}:
         raise DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL must require TLS")

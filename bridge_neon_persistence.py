@@ -11,9 +11,11 @@ from pathlib import Path
 import run_drive_3_1_free as io
 
 from database.outbox_publisher import publish_changeset_outbox
+from database.outbox_publication_decision import publish_if_authorized
 from database.run_checkpoint_persistence import record_checkpoint
 from database.source_identity_persistence import ensure_drive_source_identity
 from database.video_result_persistence import persist_video_result
+from video_completed_staging_handoff import stage_completed_result
 
 
 def _validated_drive_id(value: str) -> str:
@@ -111,7 +113,7 @@ def persist_completed_drive_job(token: str):
     )
     result["source_identity"] = source_identity
 
-    outbox = publish_changeset_outbox(raw_dsn, str(result["changeset_id"]))
+    outbox = publish_if_authorized(raw_dsn, result, publish_changeset_outbox)
     result["outbox"] = outbox
     checkpoint = record_checkpoint(
         raw_dsn,
@@ -122,6 +124,7 @@ def persist_completed_drive_job(token: str):
             "source_identity_id": source_identity["source_identity_id"],
             "changeset_id": str(result["changeset_id"]),
             "outbox_published": outbox["published_count"],
+            "outbox_publication_state": outbox["publication_state"],
         },
     )
     result["checkpoint"] = checkpoint
@@ -131,5 +134,6 @@ def persist_completed_drive_job(token: str):
         exit_code=0,
         episode_count=len(master.get("episodes") or []),
         outbox_published=outbox["published_count"],
+        outbox_publication_state=outbox["publication_state"],
     )
-    return result
+    return stage_completed_result(result)

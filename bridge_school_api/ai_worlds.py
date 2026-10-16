@@ -69,6 +69,8 @@ class WorldConstraints:
             seat = str(raw_seat).upper()
             if seat not in SEATS or not isinstance(value, dict):
                 raise WorldGenerationError("constraint seat is invalid")
+            if seat in seats:
+                raise WorldGenerationError(f"duplicate constraint seat: {seat}")
             if set(value) - {"hcp", "suits"}:
                 raise WorldGenerationError(f"unsupported constraint for seat {seat}")
             hcp = Range.parse(value.get("hcp", [0, 37]), lower=0, upper=37, label=f"{seat}.hcp")
@@ -80,6 +82,8 @@ class WorldConstraints:
                 suit = str(raw_suit).upper()
                 if suit not in SUITS:
                     raise WorldGenerationError(f"{seat} suit is invalid")
+                if suit in suits:
+                    raise WorldGenerationError(f"duplicate constraint suit: {seat}.{suit}")
                 suits[suit] = Range.parse(
                     suit_range, lower=0, upper=13, label=f"{seat}.{suit}"
                 )

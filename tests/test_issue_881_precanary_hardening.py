@@ -1746,7 +1746,30 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 66
+    assert len(shared_workflows) == 78
+    assert '.github/workflows/light-native-retirement-observe.yml' in shared_workflows
+    for dependency in ('ops/light_native_retirement_observe_runner.py',
+                       'ops/light_native_retirement_live.py', 'ops/light_native_retirement.py',
+                       'ops/light_native_bounded.py'):
+        assert f"'{dependency}'" in runner
+    assert '.github/workflows/light-native-lane-install.yml' in shared_workflows
+    for dependency in ('ops/light_native_lane_install.py', 'ops/light_native_lane_owner.py',
+                       'oracle_autopilot/light_native_lane.py'):
+        assert f"'{dependency}'" in runner
+    assert '.github/workflows/native-maintenance-window.yml' in shared_workflows
+    assert "'ops/native_maintenance_run_guard.py'" in runner
+    assert '.github/workflows/native-maintenance-driver-prepare.yml' in shared_workflows
+    assert '.github/workflows/native-maintenance-owner-host.yml' in shared_workflows
+    assert '.github/workflows/native-maintenance-recovery-assets.yml' in shared_workflows
+    assert '.github/workflows/native-maintenance-checkpoint-duplex.yml' in shared_workflows
+    assert '.github/workflows/native-maintenance-stages.yml' in shared_workflows
+    assert '.github/workflows/native-maintenance-stage-rehearsal.yml' in shared_workflows
+    assert "'ops/native_maintenance_stage_launcher.py'" in runner
+    from ops.native_maintenance_bundle import FILES
+    for dependency in (*FILES, 'ops/native_maintenance_owner_host_runner.py', 'ops/native_maintenance_driver_runner.py',
+                       'ops/native_driver_requirements.txt', 'ops/native_maintenance_bundle.py',
+                       'ops/native_maintenance_lifetime.py', 'ops/native_maintenance_store_runner.py'):
+        assert f"'{dependency}'" in runner
     assert len(referenced_payloads) == 56
     assert "ops/universal_video_spool_repair.sh" in referenced_payloads
     assert "ops/universal_video_evidence_export_entrypoint.sh" in referenced_payloads
