@@ -19,3 +19,13 @@ checks both ledger variants and malformed rows. The separate connector fixture
 checks the new candidate's full install, verify, recovery, transaction rollback,
 data preservation, ACL restoration, and cleanup. It does not establish that
 the current recovery SQL is compatible with the historical installed catalog.
+
+The separate local proposal `legacy_installed_packet.py` provides an explicit
+verifier and v2 recovery transition for `legacy-744d068a`. Its marker is
+`repair-0060-legacy-installed-v2`, with SQL SHA-256
+`30ba592da8f2924092df699d7501f704fd020690b135d5a422944b0b76adaa03`.
+The transition retains the original checksum and adds safe future-function
+defaults to the retained NOLOGIN owner. Its synthetic fixture installs the exact
+old Git blob and tests current 041-043 against the resulting recovery state.
+This is separate from the already published new-candidate recovery and requires
+independent review and fresh action-time evidence before production use.

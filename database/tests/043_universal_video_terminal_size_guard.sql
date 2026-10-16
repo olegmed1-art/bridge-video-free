@@ -16,7 +16,7 @@ BEGIN
     END IF;
     -- 0060 deliberately removes these legacy runtime capabilities. Check the
     -- new entrypoints without restoring grants or skipping behavior assertions.
-    IF EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0060_fixed_subset_admission') AND NOT EXISTS (SELECT FROM schema_migration WHERE migration_key='repair-0060-legacy-recovery-v1') THEN
+    IF EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0060_fixed_subset_admission') AND NOT EXISTS (SELECT FROM schema_migration WHERE migration_key IN ('repair-0060-legacy-recovery-v1','repair-0060-legacy-installed-v2')) THEN
         IF has_function_privilege('bridge_school_app','video_queue.enqueue_drive_batch(text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
            OR has_function_privilege('bridge_school_worker','video_queue.finish_job(uuid,uuid,text,text,jsonb,text)','EXECUTE')
            OR NOT has_function_privilege('video_subset_admitter','video_queue.admit_approved_subset(uuid,text,text,text,uuid)','EXECUTE')
