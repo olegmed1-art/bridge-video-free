@@ -21,7 +21,7 @@ BEGIN
  IF position('PROJECT_DONE_WITH_PAUSED_BACKLOG' in planner_def)=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_PAUSED_WATCHDOG_MISSING';
  END IF;
- IF NOT EXISTS (SELECT FROM public.schema_migration WHERE migration_key='0403_autopilot_active_dispatch_capacity')
+ IF NOT EXISTS (SELECT FROM public.schema_migration WHERE migration_key='0373_autopilot_active_dispatch_capacity')
     AND position('mailbox_rotation_signal' in pg_get_functiondef('autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure))=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_PRE_ROTATION_SIGNAL_MISSING';
  END IF;

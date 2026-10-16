@@ -1,6 +1,6 @@
 # Autopilot active queue and retained history
 
-Change: 0403, 2026-10-16. Governance: ASSURED; production application requires
+Change: 0373, 2026-10-16. Governance: ASSURED; production application requires
 the coordinated database window. Source, CI and actual activation are separate
 evidence stages.
 
@@ -69,7 +69,7 @@ remain historical, not counts of active jobs or proof of current health.
 Before application: reconcile exact main, acquire the coordinator's database
 window, retain Light HOLD and video/IBM holds, capture the affected definitions
 and aggregate record/receipt identities, and verify the existing restore proof.
-Apply only 0403 to the confirmed current backend with bounded statement/lock
+Apply only 0373 to the confirmed current backend with bounded statement/lock
 timeouts. This change does not choose or migrate a backend, create credentials,
 change grants, activate the worker, replay an incident or clear owner holds.
 

@@ -24,10 +24,10 @@ BEGIN
  ) THEN RAISE EXCEPTION 'AUTOPILOT_ACTIVE_QUEUE_BASELINE_OVER_CAPACITY'; END IF;
 END $pre$;
 
-CREATE TABLE autopilot.migration_0403_definition_backup (
+CREATE TABLE autopilot.migration_0373_definition_backup (
  object_key text PRIMARY KEY, definition text NOT NULL
 );
-INSERT INTO autopilot.migration_0403_definition_backup
+INSERT INTO autopilot.migration_0373_definition_backup
 SELECT p.oid::regprocedure::text,pg_get_functiondef(p.oid)
 FROM pg_proc p WHERE p.oid IN (
  'autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure,
@@ -35,9 +35,9 @@ FROM pg_proc p WHERE p.oid IN (
  'autopilot.claim_next_task(text,integer)'::regprocedure,
  'autopilot.claim_project_work_probe(text,integer)'::regprocedure
 );
-INSERT INTO autopilot.migration_0403_definition_backup
+INSERT INTO autopilot.migration_0373_definition_backup
 VALUES ('health_view',pg_get_viewdef('public.autopilot_operational_health_signal',true));
-REVOKE ALL ON autopilot.migration_0403_definition_backup FROM PUBLIC;
+REVOKE ALL ON autopilot.migration_0373_definition_backup FROM PUBLIC;
 
 -- A logical archive needs no asynchronous move, duplicated record, cleanup
 -- transaction or resettable counter. A committed terminal transition removes
@@ -126,7 +126,7 @@ DO $patch$
 DECLARE source text; revised text;
  anchor text := E'    WITH candidate AS (\n';
  guard text := $guard$
-    -- ACTIVE_QUEUE_0403: preserve READY tasks and their attempt budget while
+    -- ACTIVE_QUEUE_0373: preserve READY tasks and their attempt budget while
     -- capacity is full. Serialize role claims before taking task row locks.
     IF current_setting('transaction_isolation')<>'read committed' THEN
       RAISE EXCEPTION 'AUTOPILOT_MAILBOX_ISOLATION_UNSUPPORTED';
@@ -135,7 +135,7 @@ DECLARE source text; revised text;
     PERFORM 1 FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE' FOR UPDATE;
 $guard$;
 BEGIN
- SELECT definition INTO STRICT source FROM autopilot.migration_0403_definition_backup
+ SELECT definition INTO STRICT source FROM autopilot.migration_0373_definition_backup
  WHERE object_key='autopilot.claim_next_task(text,integer)';
  IF position(anchor in source)=0 OR position('AND t.attempts < t.max_attempts' in source)=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_ACTIVE_QUEUE_TASK_SOURCE_DRIFT';
@@ -147,7 +147,7 @@ BEGIN
                 OR autopilot.role_dispatch_queue_available((t.goal_json->>'mailbox_pr')::integer))$filter$);
  EXECUTE revised;
 
- SELECT definition INTO STRICT source FROM autopilot.migration_0403_definition_backup
+ SELECT definition INTO STRICT source FROM autopilot.migration_0373_definition_backup
  WHERE object_key='autopilot.claim_project_work_probe(text,integer)';
  anchor:='SELECT * INTO capacity FROM autopilot.role_worker_capacity_snapshot();';
  IF position(anchor in source)=0 THEN
@@ -232,5 +232,5 @@ SELECT 'autopilot_transport_history',
        clock_timestamp() FROM queue;
 
 INSERT INTO public.schema_migration(migration_key)
-VALUES ('0403_autopilot_active_dispatch_capacity');
+VALUES ('0373_autopilot_active_dispatch_capacity');
 COMMIT;

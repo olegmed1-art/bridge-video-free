@@ -70,7 +70,7 @@ class ActiveQueuePostgresTests(unittest.TestCase):
                     'task_fingerprint': 'c' * 64, 'target_pr': 999973, 'status': 'BLOCKED',
                     'result_code': 'SQL_FIXTURE_FAILED', 'target_head_sha': 'a' * 40,
                     'summary': 'Synthetic retained callback fixture.'}
-            delivery = 'sql-0403-' + self.prefix
+            delivery = 'sql-0373-' + self.prefix
             conn.execute('INSERT INTO autopilot.role_dispatch_callback_receipt(delivery_id,payload_fingerprint,dispatch_id,'
                          'actor_login,actor_id,author_association,app_slug,app_id,callback_body) '
                          "VALUES(%s,%s,%s,'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,%s)",
@@ -120,12 +120,12 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             mailbox = conn.execute('SELECT mailbox_pr FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle=\'ACTIVE\'').fetchone()[0]
             tid = conn.execute("INSERT INTO autopilot.task(task_key,goal_type,goal_json,status,current_step_key,created_by,source) "
                                "VALUES(%s,'CHATGPT_ROLE_DISPATCH_V1',%s,'READY','github.chatgpt.role.dispatch','sql-test','SQL_TEST') RETURNING task_id",
-                               ('sql-0403-' + self.prefix + 'waiting', Jsonb({'mailbox_pr': mailbox, 'role': 'AUTOPILOT'}))).fetchone()[0]
-            self.assertEqual(conn.execute("SELECT count(*) FROM autopilot.claim_next_task('sql-0403-worker',60)").fetchone()[0], 0)
+                               ('sql-0373-' + self.prefix + 'waiting', Jsonb({'mailbox_pr': mailbox, 'role': 'AUTOPILOT'}))).fetchone()[0]
+            self.assertEqual(conn.execute("SELECT count(*) FROM autopilot.claim_next_task('sql-0373-worker',60)").fetchone()[0], 0)
             self.assertEqual(conn.execute('SELECT status,attempts FROM autopilot.task WHERE task_id=%s', (tid,)).fetchone(), ('READY', 0))
             conn.execute("UPDATE autopilot.role_dispatch_outbox SET status='FAILED_CLOSED',completed_at=now() WHERE dispatch_id=%s", (first,))
             self.assertEqual(self.readiness(conn)[0], 39)
-            self.assertEqual(conn.execute("SELECT task_id FROM autopilot.claim_next_task('sql-0403-worker',60)").fetchone()[0], tid)
+            self.assertEqual(conn.execute("SELECT task_id FROM autopilot.claim_next_task('sql-0373-worker',60)").fetchone()[0], tid)
 
     def compete_last_slot(self, rollback_first):
         with self.connect() as conn:
@@ -177,13 +177,13 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             for i in range(2):
                 ids.append(conn.execute("INSERT INTO autopilot.task(task_key,goal_type,goal_json,status,current_step_key,created_by,source) "
                                         "VALUES(%s,'CHATGPT_ROLE_DISPATCH_V1',%s,'READY','github.chatgpt.role.dispatch','sql-test','SQL_TEST') RETURNING task_id",
-                                        ('sql-0403-' + self.prefix + str(i), Jsonb({'mailbox_pr': mailbox, 'role': 'AUTOPILOT'}))).fetchone()[0])
+                                        ('sql-0373-' + self.prefix + str(i), Jsonb({'mailbox_pr': mailbox, 'role': 'AUTOPILOT'}))).fetchone()[0])
         barrier = threading.Barrier(2)
         def claim(i):
             with self.connect() as conn:
                 barrier.wait(timeout=5)
                 return conn.execute('SELECT task_id FROM autopilot.claim_next_task(%s,60)',
-                                    ('sql-0403-worker-' + str(i),)).fetchone()
+                                    ('sql-0373-worker-' + str(i),)).fetchone()
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(claim, range(2)))
         self.assertEqual(sum(row is not None for row in results), 1)
@@ -232,14 +232,14 @@ class ActiveQueuePostgresTests(unittest.TestCase):
                     'dispatch_epoch': 1, 'successor_task_key': None, 'successor_role': None,
                     'successor_target_pr': None, 'successor_expected_head_sha': None}
             tid = conn.execute("SELECT task_id FROM autopilot.create_chatgpt_role_dispatch_task(%s,%s,0,'sql-test','SQL_TEST')",
-                               ('sql-0403-' + self.prefix, Jsonb(goal))).fetchone()[0]
-            epoch = conn.execute("SELECT lease_epoch FROM autopilot.claim_next_task('sql-0403-worker',60)").fetchone()[0]
-            did, fingerprint = conn.execute("SELECT dispatch_id,task_fingerprint FROM autopilot.prepare_role_dispatch(%s,'sql-0403-worker',%s)",
+                               ('sql-0373-' + self.prefix, Jsonb(goal))).fetchone()[0]
+            epoch = conn.execute("SELECT lease_epoch FROM autopilot.claim_next_task('sql-0373-worker',60)").fetchone()[0]
+            did, fingerprint = conn.execute("SELECT dispatch_id,task_fingerprint FROM autopilot.prepare_role_dispatch(%s,'sql-0373-worker',%s)",
                                             (tid, epoch)).fetchone()
             conn.execute('UPDATE autopilot.role_dispatch_outbox SET delivery_contract_version=1 WHERE dispatch_id=%s', (did,))
-            claim = conn.execute("SELECT dispatch_id,claim_epoch FROM autopilot.claim_role_dispatch_outbox('sql-0403-publisher',60)").fetchone()
+            claim = conn.execute("SELECT dispatch_id,claim_epoch FROM autopilot.claim_role_dispatch_outbox('sql-0373-publisher',60)").fetchone()
             self.assertEqual(claim[0], did)
-            self.assertTrue(conn.execute("SELECT autopilot.mark_role_dispatch_sent(%s,'sql-0403-publisher',%s,999974,%s)",
+            self.assertTrue(conn.execute("SELECT autopilot.mark_role_dispatch_sent(%s,'sql-0373-publisher',%s,999974,%s)",
                                          (did, claim[1], 'e' * 64)).fetchone()[0])
             conn.execute("UPDATE autopilot.role_dispatch_outbox SET callback_deadline_at=now()-interval '1 second' WHERE dispatch_id=%s", (did,))
         body = {'dispatch_id': str(did), 'dispatch_epoch': 1, 'role': 'AUTOPILOT',
@@ -252,7 +252,7 @@ class ActiveQueuePostgresTests(unittest.TestCase):
         return conn.execute('SELECT accepted,duplicate FROM autopilot.accept_role_dispatch_callback('
                             "%s,%s,true,'olegmed1-art/bridge-video-free',%s,'olegmed1-art',315099490,"
                             "'OWNER','chatgpt-codex-connector',1144995,%s)",
-                            ('sql-0403-' + self.prefix, 'd' * 64, mailbox, Jsonb(body))).fetchone()
+                            ('sql-0373-' + self.prefix, 'd' * 64, mailbox, Jsonb(body))).fetchone()
 
     def test_callback_commit_or_rollback_and_reconcile_preserve_slot_and_dedup(self):
         did, mailbox, body = self.sent_contract()

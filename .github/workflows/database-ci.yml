@@ -323,9 +323,9 @@ jobs:
           trap cleanup EXIT
           PYTHONPATH=. python -B -m unittest discover -s database/tests -p test_active_queue_postgres.py -v
           psql "$ADMIN_DATABASE_URL" -Xv ON_ERROR_STOP=1 -c 'CREATE DATABASE bridge_school_queue_ci WITH TEMPLATE bridge_school_ci OWNER bridge_ci_owner;'
-          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/rollbacks/0403_autopilot_active_dispatch_capacity.sql
-          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/migrations/0403_autopilot_active_dispatch_capacity.sql
-          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/tests/403_autopilot_active_dispatch_capacity.sql
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/rollbacks/0373_autopilot_active_dispatch_capacity.sql
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/migrations/0373_autopilot_active_dispatch_capacity.sql
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/tests/373_autopilot_active_dispatch_capacity.sql
 
       - name: Verify outbox publisher guard and concurrent rebinding on PostgreSQL
         timeout-minutes: 2
@@ -416,7 +416,7 @@ jobs:
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
-            -f database/rollbacks/0403_autopilot_active_dispatch_capacity.sql
+            -f database/rollbacks/0373_autopilot_active_dispatch_capacity.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0372_autopilot_audit_pass_alias.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
