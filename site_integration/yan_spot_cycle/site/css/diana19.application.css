@@ -1,0 +1,12 @@
+/* Scoped fragment styles. The CMS owns document, navigation, fonts and theme. */
+.bridge-diana19 {max-width:960px;margin:1.5em auto;line-height:1.6}
+.bridge-diana19 [hidden] {display:none!important}
+.bridge-diana19 label {display:block;font-weight:600;margin:1em 0 .4em}
+.bridge-diana19 select,.bridge-diana19 textarea {box-sizing:border-box;width:100%;max-width:100%;font:inherit;padding:.7em;border:1px solid #ccc;border-radius:4px}
+.bridge-diana19 textarea {resize:vertical}
+.bridge-diana19 button {font:inherit;padding:.7em 1em;margin-top:.8em;cursor:pointer}
+.bridge-diana19 button:disabled {opacity:.6;cursor:default}
+.bridge-diana19 .scope-note,.bridge-diana19 .stage {font-size:.9em;opacity:.8}
+.bridge-diana19 .holdings {white-space:pre-line;padding:.8em;border:1px solid #ccc}
+.bridge-diana19 #saved-answer,.bridge-diana19 #explanation-text p {white-space:pre-wrap;overflow-wrap:anywhere}
+.bridge-diana19 #lesson-explanation {border-top:1px solid #ccc;margin-top:1em;padding-top:.7em}

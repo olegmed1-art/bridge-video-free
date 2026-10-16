@@ -1,6 +1,6 @@
 <?php
 // Only the explicit local app registers this lesson. Never serves source files.
-function bridge_diana_route($route) {
+function bridge_diana_route($route, $installedDispatch = null) {
     $suffix = substr($route, strlen('practice/diana19'));
     $method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
     $get = $suffix === '' || $suffix === '/' || $suffix === '/catalog' ||
@@ -17,7 +17,8 @@ function bridge_diana_route($route) {
         if (isset($_SERVER[$key])) $headers[$name] = $_SERVER[$key];
     }
     try {
-        $dispatch = require __DIR__.'/spot-cycle.backend.inc.php';
+        $dispatch = $installedDispatch;
+        if ($dispatch === null) $dispatch = require __DIR__.'/spot-cycle.backend.inc.php';
         if (!is_callable($dispatch)) { http_response_code(503); return; }
         $reply = call_user_func($dispatch, array('method'=>$method,
             'path'=>'/school/lessons/diana19'.(($suffix === '') ? '/' : $suffix),
