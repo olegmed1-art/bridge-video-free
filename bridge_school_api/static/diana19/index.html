@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Диана19 — три учебных разбора</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <link rel="stylesheet" href="assets/diana19.css">
+  <script src="assets/diana19.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/index.php?route=practice%2Fspot-cycle"><span class="brand-mark">♠</span><span><strong>Школа бриджа</strong><br>Локальная учебная сессия</span></a>
+    <span class="prototype-badge"><span></span>Staging · один пользователь</span>
+  </header>
+  <main class="diana-main">
+    <section class="intro"><div><p class="eyebrow">Первое видео · Диана19</p><h1>Три учебных разбора</h1>
+      <p class="intro-copy">Выберите вопрос, запишите свой ответ и откройте объяснение. Автоматической оценки нет.</p></div></section>
+    <p class="scope-note">Разборы действуют при указанных условиях. Точность ASR по аудио не подтверждена; это не проверенные цитаты преподавателя.</p>
+    <label for="lesson-picker">Выберите урок</label>
+    <select id="lesson-picker" aria-label="Выберите урок"></select>
+    <p id="diana-status" role="status" aria-live="polite">Загрузка уроков…</p>
+    <section id="lesson-content" class="diana-card" hidden>
+      <h2 id="lesson-title" tabindex="-1"></h2>
+      <p id="lesson-question"></p>
+      <div id="visible-holdings" class="holdings"></div>
+      <ul id="lesson-conditions"></ul>
+      <div id="lesson-options"></div>
+      <form id="answer-form">
+        <label for="learner-answer">Ваш ответ и объяснение</label>
+        <textarea id="learner-answer" rows="5" maxlength="4000" required></textarea>
+        <button id="save-answer" type="submit">Сохранить ответ и открыть разбор</button>
+      </form>
+      <section id="saved-response" hidden><h3>Ваш сохранённый ответ</h3><p id="saved-answer"></p>
+        <p>Ответ сохранён без оценки. Освоение темы автоматически не установлено.</p></section>
+      <section id="lesson-explanation" hidden><h3>Разбор при заданных условиях</h3>
+        <div id="explanation-text"></div><p id="source-timecode"></p>
+        <a id="source-link" target="_blank" rel="noopener noreferrer">Открыть исходное видео</a>
+        <p id="explanation-scope" class="scope-note"></p>
+      </section>
+    </section>
+    <noscript>Для локального интерфейса нужен JavaScript.</noscript>
+  </main>
+</body>
+</html>

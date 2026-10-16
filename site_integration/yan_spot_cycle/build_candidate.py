@@ -30,6 +30,15 @@ if ($bridgeSpotRoute === 'practice/spot-cycle' ||
     exit;
 }
 
+$bridgeDianaRoute = isset($_GET['route']) && is_string($_GET['route'])
+    ? trim($_GET['route'], '/') : '';
+if ($bridgeDianaRoute === 'practice/diana19' ||
+    strpos($bridgeDianaRoute, 'practice/diana19/') === 0) {
+    require __DIR__.'/include/diana19.route.inc.php';
+    bridge_diana_route($bridgeDianaRoute);
+    exit;
+}
+
 """
 
 

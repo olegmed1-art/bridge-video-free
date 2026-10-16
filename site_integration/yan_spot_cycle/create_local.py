@@ -8,13 +8,18 @@ from .build_candidate import build
 
 
 def create(root: Path, frontend_origin='http://127.0.0.1:8090',
-           backend_origin='http://127.0.0.1:8091'):
+           backend_origin='http://127.0.0.1:8091', lesson_archive: Path | None = None):
     root = Path(root).resolve()
     if root.exists():
         raise FileExistsError('local lesson root must be new')
     root.mkdir(parents=True, mode=0o700)
     build(root / 'site')
     result = create_assignments(root / 'private', frontend_origin, backend_origin)
+    if lesson_archive is not None:
+        from bridge_school_api.diana19_staging import install_bundle
+        from bridge_school_api.local_single_user_lesson import read_context
+        owner = read_context(root/'private')['owner']['provider_subject']
+        result['diana19'] = install_bundle(root/'private', lesson_archive, owner)
     result['frontend_origin'] = frontend_origin
     result['backend_origin'] = backend_origin
     result['root'] = str(root)
@@ -26,5 +31,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--frontend-origin', default='http://127.0.0.1:8090')
     parser.add_argument('--backend-origin', default='http://127.0.0.1:8091')
+    parser.add_argument('--lesson-archive', type=Path)
     args = parser.parse_args()
-    print(json.dumps(create(args.output, args.frontend_origin, args.backend_origin)))
+    print(json.dumps(create(args.output, args.frontend_origin, args.backend_origin, args.lesson_archive)))

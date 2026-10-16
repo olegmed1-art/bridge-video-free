@@ -193,5 +193,7 @@ def school_spot_page(
             ids = ','.join(request.state.school_spot_assigned_ids)
             page = page.replace('<head>', '<head>\n  <meta name="bridge-local-assigned-activities" '
                                 f'content="{escape(ids, quote=True)}">', 1)
+            if getattr(request.app.state, 'diana19_service', None) is not None:
+                page = page.replace('<head>', '<head>\n<meta name="bridge-diana19-staging" content="enabled">', 1)
         return HTMLResponse(page, headers=headers)
     return FileResponse(SESSION_ASSETS / filename, media_type=SESSION_ALLOWED[filename], headers=headers)

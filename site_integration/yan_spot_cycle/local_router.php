@@ -24,12 +24,14 @@ if ($_SERVER['HTTP_HOST'] !== parse_url($frontend, PHP_URL_HOST).':'.parse_url($
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 if ($path !== '/index.php') $_GET['route'] = trim(preg_replace('~^/(ru|en|he)/~', '/', $path), '/');
 $route = isset($_GET['route']) && is_string($_GET['route']) ? trim($_GET['route'], '/') : '';
-if ($route !== 'practice/spot-cycle' && strpos($route, 'practice/spot-cycle/') !== 0) {
+if ($route !== 'practice/spot-cycle' && strpos($route, 'practice/spot-cycle/') !== 0 &&
+    $route !== 'practice/diana19' && strpos($route, 'practice/diana19/') !== 0) {
     http_response_code(404); exit;
 }
 $_SERVER['SCRIPT_NAME'] = '/index.php';
 $GLOBALS['bridgeSpotBackendDispatch'] = function ($request) use ($backend) {
-    if (strpos($request['path'], '/school/lessons/spot-cycle/') !== 0) {
+    if (strpos($request['path'], '/school/lessons/spot-cycle/') !== 0 &&
+        strpos($request['path'], '/school/lessons/diana19/') !== 0) {
         throw new RuntimeException('target rejected');
     }
     $headers = array();

@@ -9,6 +9,9 @@ on:
       - 'bridge_school_api/school_spot_lesson.py'
       - 'bridge_school_api/school_spot_repository.py'
       - 'bridge_school_api/local_single_user_lesson.py'
+      - 'bridge_school_api/diana19_staging.py'
+      - 'bridge_school_api/static/diana19/**'
+      - 'tests/test_diana19_staging.py'
       - 'tests/test_local_single_user_binding.py'
       - 'tests/test_school_spot_lesson.py'
       - '.github/workflows/yan-site-spot-ci.yml'
@@ -36,22 +39,22 @@ jobs:
         run: |
           php --version
           find site_integration/yan_spot_cycle -name '*.php' -print0 | xargs -0 -n1 php -l
-      - name: Check new site bootstrap and authored public projection
-        run: node --test site_integration/yan_spot_cycle/tests/test_site_host.cjs
-      - name: Check resolver admission and production fail-closed behavior
+      - name: Check Diana19 browser transport
+        run: node --test site_integration/yan_spot_cycle/tests/test_diana19_browser.cjs
+      - name: Check Diana19 reveal, persistence and local admission
         run: >-
           python -m pytest -q -p no:cacheprovider
-          tests/test_local_single_user_binding.py tests/test_school_spot_lesson.py
-      - name: Verify real HTTP, two persistent journals, backend restart and readback
+          tests/test_diana19_staging.py tests/test_local_single_user_binding.py
+      - name: Verify new HTTP adapters with neutral data and backend restart
         run: >-
           timeout --signal=TERM --kill-after=10s 180s
-          python -m site_integration.yan_spot_cycle.verify_persistent
-          --output deliverables/local-single-user-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Retain explicit journals and safe verification report
+          python -m site_integration.yan_spot_cycle.tests.verify_diana19_http
+          --output deliverables/diana19-protocol-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Retain neutral protocol journal and verification report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: local-single-user-journals-${{ github.run_id }}-${{ github.run_attempt }}
-          path: deliverables/local-single-user-${{ github.run_id }}-${{ github.run_attempt }}/artifact/
+          name: diana19-neutral-protocol-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deliverables/diana19-protocol-${{ github.run_id }}-${{ github.run_attempt }}/artifact/
           if-no-files-found: error
           retention-days: 1
           compression-level: 9

@@ -97,6 +97,9 @@ function bridge_spot_route($route) {
                         $links .= '<a href="'.htmlspecialchars(bridge_spot_url('', $id), ENT_QUOTES, 'UTF-8').'">'.$label.'</a> ';
                     }
                     $reply['body'] = str_replace('<body>', '<body>'.$links.'</nav>', $reply['body']);
+                    if (strpos($reply['body'], 'name="bridge-diana19-staging" content="enabled"') !== false) {
+                        $reply['body'] = str_replace('</nav>', '<a href="/index.php?route=practice%2Fdiana19">Диана19: три разбора</a></nav>', $reply['body']);
+                    }
                 }
             }
             if (!is_string($reply['body'])) { bridge_spot_error(503); return; }

@@ -98,7 +98,7 @@ class LocalSingleUserResolver:
         self.private_dir = Path(private_dir).resolve()
         self.context = read_context(self.private_dir)
 
-    def __call__(self, request: Request):
+    def check_context(self, request: Request):
         context = self.context
         if (os.environ.get('VERCEL_ENV') or request.client is None
                 or request.client.host != '127.0.0.1'
@@ -107,6 +107,10 @@ class LocalSingleUserResolver:
                        ('forwarded', 'x-forwarded-for', 'x-forwarded-host'))
                 or request.headers.get('origin', context['frontend_origin']) != context['frontend_origin']):
             raise HTTPException(status_code=403, detail='local context rejected')
+        return context
+
+    def __call__(self, request: Request):
+        context = self.check_context(request)
         choices = request.query_params.getlist('activity')
         if len(choices) > 1:
             raise HTTPException(status_code=403, detail='activity binding rejected')
@@ -134,5 +138,11 @@ def create_local_app(private_dir: Path) -> FastAPI:
     app = FastAPI(title='Local single-user bridge lesson')
     app.state.school_spot_mode = 'LOCAL_SINGLE_USER'
     app.state.school_spot_binding_resolver = LocalSingleUserResolver(private_dir)
+    app.state.local_context_resolver = app.state.school_spot_binding_resolver
     app.include_router(router)
+    if (Path(private_dir)/'diana19-binding.json').is_file():
+        from .diana19_staging import DianaStagingService, router as diana_router
+        owner_id = app.state.local_context_resolver.context['owner']['provider_subject']
+        app.state.diana19_service = DianaStagingService.from_private(Path(private_dir), owner_id)
+        app.include_router(diana_router)
     return app

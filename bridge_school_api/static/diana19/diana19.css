@@ -1,0 +1,15 @@
+.diana-main {max-width:1000px;padding:0 24px 48px}
+.diana-main .intro {padding-bottom:20px}
+.diana-main h1 {font-size:46px}
+.diana-main label {display:block;font-weight:600;margin:16px 0 8px}
+.diana-main select,.diana-main textarea {width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:#fffef8;color:var(--ink)}
+.diana-main textarea {resize:vertical}
+.diana-main button {padding:13px 18px;margin-top:14px;border:0;border-radius:8px;background:var(--green);color:white}
+.diana-main button:disabled {opacity:.6}
+.diana-card {border:1px solid var(--line);border-radius:16px;background:#fdfcf8;padding:24px;margin-top:20px;line-height:1.65}
+.diana-card h2 {font:normal 30px Georgia,serif;line-height:1.2}
+.holdings {border-radius:8px;padding:12px 16px;background:#193e35;color:#fffef8;white-space:pre-line}
+.scope-note {color:var(--muted);font-size:13px;line-height:1.6}
+#saved-answer,#explanation-text p {white-space:pre-wrap;overflow-wrap:anywhere}
+#lesson-explanation {border-top:1px solid var(--line);margin-top:22px;padding-top:14px}
+@media(max-width:600px) {.site-header {padding:16px;height:auto;gap:12px}.prototype-badge{max-width:110px}.diana-main h1 {font-size:35px}.diana-card{padding:18px}}
