@@ -1,0 +1,150 @@
+{
+  "schema": "local-teacher-routing-candidate-manifest-v2",
+  "target_contract": "LOCAL_TEACHER_ROUTING_V1",
+  "handoff_revision": 2,
+  "exercise_set_id": "spot-establishment-four-20261013",
+  "supersedes_manifest_sha256": "292941eb3e30c0b4ce3db1f22898a010c56521b2d5e167a8b5f446dac722cfe1",
+  "scope": "SAME_FOUR_EXERCISES_SEMANTIC_FIELD_REVISION_ONLY",
+  "next_set_status": "ON_HOLD_UNTIL_THIS_SET_INTEGRATED",
+  "status": "PREPARED_LOCAL_CANDIDATE",
+  "audience": "TEACHER_INTEGRATION_ONLY",
+  "source_candidate": {
+    "path": "../candidate.json",
+    "sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090"
+  },
+  "public_prompt_file": "student-prompts.json",
+  "private_version_file": "teacher-versions.json",
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "review_state": "REVIEW_REQUIRED",
+    "publication_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "canon_write_allowed": false,
+    "mastery_write_allowed": false
+  },
+  "runtime_registration": "NOT_REGISTERED_PINNED_FIXTURES_ONLY",
+  "consumer_code_changed": false,
+  "course_activated": false,
+  "canon_contract": {
+    "required_school_approval_field": null,
+    "school_specific_agreements_required": [],
+    "school_normative_methodology_claimed": false,
+    "legacy_candidate_canon_binding_is_runtime_gate": false,
+    "available_status_fields": {
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "exercise_version.status": "candidate",
+      "authority.review_state": "REVIEW_REQUIRED"
+    }
+  },
+  "candidate_routing_mapping": {
+    "scope": "PROPOSED_FOR_THESE_ITEMS_ONLY_NOT_APPLIED",
+    "new_graph_created": false,
+    "criterion_skill": {
+      "visible_count": "candidate.count-missing-suit",
+      "missing_count": "candidate.count-missing-suit",
+      "guaranteed_spot_tricks_from_position": "candidate.preserve-entry-to-low-cards"
+    },
+    "mapping_difference": "New explicit field; existing low_tricks is not reused or aliased. Register this new question ID for guaranteed target-card wins from the shown time origin; keep legacy low_tricks unchanged.",
+    "automatic_new_id_assessment": "NOT_ENABLED"
+  },
+  "release_protocol": {
+    "before_response": "public prompt only; no feedback, expected answers, solution order or result-dependent reason",
+    "record_response": "neutral ACK; preserve first and revised responses",
+    "hint": "only explicit request_hint and retained assistance history",
+    "feedback": "only explicit advance after a recorded response",
+    "free_text": "HUMAN_REVIEW_REQUIRED",
+    "mastery": "NOT_INFERRED"
+  },
+  "answer_metric": {
+    "metric_id": "guaranteed-spot-tricks-from-position-v1",
+    "answer_field": "guaranteed_spot_tricks_from_position",
+    "contract_file": "SPOT_TRICK_COUNT_V1.json",
+    "contract_sha256": "c5a512261c4a40d30b74c381f9a7b8302cfc46d4462eeb264ab0046252d02edd",
+    "legacy_low_tricks_alias_allowed": false
+  },
+  "entries": [
+    {
+      "exercise_id": "spot.a7c2",
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "prompt_pointer": "/prompts/0",
+      "prompt_sha256": "871d6bd12d348617bcce3507e4747548720d8667bc05da134e31d2410da51ac8",
+      "teacher_version_pointer": "/versions/0",
+      "candidate_pointer": "/exercises/2",
+      "candidate_skill_focus": "candidate.preserve-entry-to-low-cards",
+      "answer_field": "guaranteed_spot_tricks_from_position",
+      "answer_metric_id": "guaranteed-spot-tricks-from-position-v1",
+      "registration_status": "NOT_REGISTERED"
+    },
+    {
+      "exercise_id": "spot.f3b8",
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "prompt_pointer": "/prompts/1",
+      "prompt_sha256": "86ea1c43c6d1882107bea7c860f4f0dcbeb98d2c3f8dc74c9539389c1602cfa3",
+      "teacher_version_pointer": "/versions/1",
+      "candidate_pointer": "/exercises/1",
+      "candidate_skill_focus": "candidate.preserve-entry-to-low-cards",
+      "answer_field": "guaranteed_spot_tricks_from_position",
+      "answer_metric_id": "guaranteed-spot-tricks-from-position-v1",
+      "registration_status": "NOT_REGISTERED"
+    },
+    {
+      "exercise_id": "spot.d9e4",
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "prompt_pointer": "/prompts/2",
+      "prompt_sha256": "342896ac7f8012de30d4fc7f083a700b1f83045cf6c9c01322020a9f4f00f631",
+      "teacher_version_pointer": "/versions/2",
+      "candidate_pointer": "/exercises/0",
+      "candidate_skill_focus": "candidate.preserve-entry-to-low-cards",
+      "answer_field": "guaranteed_spot_tricks_from_position",
+      "answer_metric_id": "guaranteed-spot-tricks-from-position-v1",
+      "registration_status": "NOT_REGISTERED"
+    },
+    {
+      "exercise_id": "spot.b6a1",
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "prompt_pointer": "/prompts/3",
+      "prompt_sha256": "b9d62ebd6f1fd3d4e4285e6277cb41725d583bf013878438f0868e25e8f6f562",
+      "teacher_version_pointer": "/versions/3",
+      "candidate_pointer": "/exercises/3",
+      "candidate_skill_focus": "candidate.preserve-entry-to-low-cards",
+      "answer_field": "guaranteed_spot_tricks_from_position",
+      "answer_metric_id": "guaranteed-spot-tricks-from-position-v1",
+      "registration_status": "NOT_REGISTERED"
+    }
+  ],
+  "public_prompt_sha256": "c4f2feb91897077c41c204855e8904033b0636df490e2193497fa1f5d9db0d64",
+  "private_version_sha256": "b16a2dd1ef3d58f7ded62cec917a851c6028edb01a696df5e642757008bc7d96",
+  "target_contract_sources": [
+    {
+      "path": "evolutionary_course/teaching_step.py",
+      "source_path": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-12\\task-2\\bridge-video-free\\evolutionary_course\\teaching_step.py",
+      "sha256": "7c6892e36fc6fc0a370d6eed5281cc4f525b8e47622413ddae4a5cb0b821c762"
+    },
+    {
+      "path": "evolutionary_course/teacher_routing.py",
+      "source_path": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-12\\task-2\\bridge-video-free\\evolutionary_course\\teacher_routing.py",
+      "sha256": "d4e9271f5c51e1987fa74552a9f9914890d64caad39ca0304687ebce2bd6be0b"
+    },
+    {
+      "path": "data/research/low_card_teaching_step_candidate_v1.json",
+      "source_path": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-12\\task-2\\bridge-video-free\\data\\research\\low_card_teaching_step_candidate_v1.json",
+      "sha256": "b9984a9d4a8e2930a20f02a448c8507ef2ad8c7c1946e3f8e8a7a3eb269d649e"
+    },
+    {
+      "path": "data/research/low_card_counterexamples_candidate_v1.json",
+      "source_path": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-12\\task-2\\bridge-video-free\\data\\research\\low_card_counterexamples_candidate_v1.json",
+      "sha256": "6eb06b33991dcb5183428d29f0c500ceb03ca623eb70a1332fe6e064259e1e2d"
+    },
+    {
+      "path": "data/research/local_teacher_routing_policy_v1.json",
+      "source_path": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-12\\task-2\\bridge-video-free\\data\\research\\local_teacher_routing_policy_v1.json",
+      "sha256": "871526f3a68d00c02a65d6ecf957c55657b7abb77883fac3384172ec8e431249"
+    },
+    {
+      "path": "docs/research/evolutionary-course/LOCAL_TEACHER_ROUTING_V1_RU.md",
+      "source_path": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-12\\task-2\\bridge-video-free\\docs\\research\\evolutionary-course\\LOCAL_TEACHER_ROUTING_V1_RU.md",
+      "sha256": "335a3838af14699f8aff6d06754397688a5466ecef403ccf1badd87a652b6686"
+    }
+  ]
+}

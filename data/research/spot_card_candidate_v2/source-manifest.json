@@ -1,0 +1,36 @@
+{
+  "repository": "olegmed1-art/bridge-video-free",
+  "ref": "cc06429f22785aa4a836e37c96dd5f0f2502e31b",
+  "sources": [
+    {
+      "path": "bridge_school_api/ai_worlds.py",
+      "blob_sha": "a583487c9bbb68921fb320b6fce5c3eaae2052bf"
+    },
+    {
+      "path": "tests/test_ai_worlds.py",
+      "blob_sha": "fd5b3b6788b2b3a15df25e99e7e3a4129e785cae"
+    },
+    {
+      "path": "tests/test_ai_worlds_constraints.py",
+      "blob_sha": "084d4da3d204867d36deb6e8083982711ce39c87"
+    },
+    {
+      "path": "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+      "blob_sha": "93f12fa529e7beb97b8d94608014b590ebfeb06c"
+    },
+    {
+      "path": "bridge_school_api/l1_canonical_runtime.py",
+      "blob_sha": "a5bb7b7b214f98191a760feea1b0c0e9c33ae0e1"
+    },
+    {
+      "path": "meta_school/SCHOOL_CURRICULUM_BUILDER_V1.md",
+      "blob_sha": "59b1a9371b97e5dacef2b8cae09225b6f2216d30"
+    },
+    {
+      "path": "bridge_school_api/tournament_shape_exercises.py",
+      "blob_sha": "dafdd0da93af338e2b8b3cd35ae28a5256be8975"
+    }
+  ],
+  "applicable_agents_blob": "b7e3f3cfb3cf1cb9a845d4c1629970753b8e3c48",
+  "agents_skills_found": []
+}

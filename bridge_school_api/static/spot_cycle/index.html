@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Бридж · Вырабатываем взятки на фоски</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="compact.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#lesson"><span class="brand-mark" aria-hidden="true">♠</span><strong>Бридж</strong></a>
+    <span class="prototype-badge"><span aria-hidden="true"></span>Локальный прототип</span>
+  </header>
+  <main id="lesson">
+    <section class="intro">
+      <div>
+        <p class="eyebrow">Упражнение 1 · фоски и вход</p>
+        <h1>Вырабатываем взятки <em>на фоски</em></h1>
+        <p class="intro-copy">Сначала посчитай оставшиеся карты бубен у защиты. Затем проверь, сможешь ли попасть на стол, когда фоски будут готовы.</p>
+      </div>
+      <div class="lesson-meta"><span class="lesson-number">01</span><div>Бубны <span>Без козыря · 9-я взятка</span></div></div>
+    </section>
+    <div class="exercise-layout">
+      <section class="table-panel" aria-labelledby="table-heading">
+        <div class="table-top"><h2 id="table-heading">Открытые карты</h2><span class="contract">Без козыря</span></div>
+        <div class="table-surface compact-table">
+          <div class="visible-hands">
+            <section class="hand" aria-label="Стол, Север">
+              <div class="hand-heading"><span class="seat" aria-hidden="true">N</span><h3>Стол · Север</h3></div>
+              <div class="hand-cards" id="dummy-cards"></div>
+            </section>
+            <section class="hand" aria-label="Рука, Юг">
+              <div class="hand-heading"><span class="seat you" aria-hidden="true">S</span><h3>Рука · Юг</h3></div>
+              <div class="hand-cards" id="hand-cards"></div>
+            </section>
+          </div>
+          <p class="entry-board-note">До хода в девятой взятке. Ход в руке (Юг). Показаны все пять оставшихся карт руки и стола.</p>
+        </div>
+        <div class="table-bottom"><span class="small-dot" aria-hidden="true"></span>Карты защиты не показаны. Их распределение по рангам неизвестно.</div>
+      </section>
+      <section class="question-panel" aria-labelledby="question-heading">
+        <p class="question-progress">Твой ход · одно решение</p>
+        <h2 id="question-heading">Сколько взяток?</h2>
+        <div class="goal"><span aria-hidden="true">♦</span><p>Найди лучший план и оцени, сколько новых взяток можно <strong>гарантировать бубновой фоской стола</strong>.</p></div>
+        <ul class="conditions">
+          <li>В бубнах уже сыграны <strong>2, 3, 4, 8</strong>.</li>
+          <li><strong>По условию</strong> оставшиеся бубны защиты разделены <strong>2–2</strong>. Какие именно карты у каждого защитника, неизвестно.</li>
+          <li>Считай только 9–13-ю взятки, против любой допустимой защиты. Первые восемь взяток не считаем.</li>
+          <li>Нужна взятка именно фоской <strong>♦7, ♦6 или ♦5</strong> стола. Снос фоски на взятку руки не считается.</li>
+        </ul>
+        <form id="answer-form" novalidate>
+          <fieldset><legend>Сколько таких взяток можно гарантировать?</legend>
+            <div class="answer-grid compact-answer-grid">
+              <label><input type="radio" name="answer" value="0" required><span>0</span></label>
+              <label><input type="radio" name="answer" value="1"><span>1</span></label>
+            </div>
+          </fieldset>
+          <label class="explanation-label" for="reason">Коротко объясни план: как выработать фоску и попасть на стол?</label>
+          <textarea id="reason" name="reason" rows="3" maxlength="500" placeholder="Сначала… Затем…" required></textarea>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <button class="primary-button submit-button" type="submit">Проверить ответ <span aria-hidden="true">→</span></button>
+        </form>
+        <section id="feedback" class="feedback" aria-live="polite" hidden>
+          <strong id="feedback-title" tabindex="-1"></strong>
+          <p id="feedback-copy"></p>
+          <p class="feedback-meta" id="attempt-count"></p>
+          <button id="retry-button" class="secondary-button" type="button">Попробовать ещё раз</button>
+        </section>
+      </section>
+    </div>
+    <footer class="page-footer"><p>Учебный просмотр · ответы остаются только в этой вкладке.</p><span>Без оценки освоения темы</span></footer>
+  </main>
+</body>
+</html>

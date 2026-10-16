@@ -1,0 +1,1415 @@
+{
+  "candidate_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+  "primitive_checks": 7,
+  "historical_wrong_gold": {
+    "own": 8,
+    "missing": 5,
+    "valid_examples": [
+      [
+        3,
+        2
+      ],
+      [
+        4,
+        1
+      ]
+    ],
+    "invalid": [
+      [
+        3,
+        3
+      ],
+      [
+        4,
+        2
+      ]
+    ]
+  },
+  "exercises": [
+    {
+      "id": "spot-length-c-entry-v1",
+      "prefix": {
+        "cards": 52,
+        "cards_per_hand": 13,
+        "prefix_tricks": 8,
+        "prefix_plays": 32,
+        "remaining_cards": 20,
+        "leader": "S"
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "privacy": "PASS",
+      "detected_prefix_faults": 4,
+      "target": {
+        "objective": "target",
+        "value": 1,
+        "search": {
+          "states": 6330,
+          "edges": 8626,
+          "completed_tricks": 2994,
+          "terminal_states": 4,
+          "cache_hits": 2337
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              },
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              },
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 1
+          }
+        ]
+      },
+      "total_ns": {
+        "objective": "all_ns",
+        "value": 5,
+        "search": {
+          "states": 6330,
+          "edges": 8626,
+          "completed_tricks": 2994,
+          "terminal_states": 4,
+          "cache_hits": 2337
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              },
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              },
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 1
+          }
+        ]
+      },
+      "top_cards": [
+        "CA",
+        "CK",
+        "DA",
+        "HA"
+      ],
+      "authored_line": {
+        "remaining": {
+          "N": [],
+          "E": [],
+          "S": [],
+          "W": []
+        },
+        "leader": "S",
+        "spot_tricks": 1,
+        "ns_tricks": 5
+      },
+      "premature_entry_remainder": {
+        "objective": "target",
+        "value": 0,
+        "search": {
+          "states": 1220,
+          "edges": 1607,
+          "completed_tricks": 552,
+          "terminal_states": 2,
+          "cache_hits": 420
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              },
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E",
+            "objective_gain": 0
+          }
+        ]
+      },
+      "fixed_plan_robustness": {
+        "layouts": 120,
+        "all_legal_defense_terminal_lines": 5760,
+        "guaranteed_target": 1,
+        "guaranteed_ns": 5
+      }
+    },
+    {
+      "id": "spot-length-c-no-entry-v1",
+      "prefix": {
+        "cards": 52,
+        "cards_per_hand": 13,
+        "prefix_tricks": 8,
+        "prefix_plays": 32,
+        "remaining_cards": 20,
+        "leader": "S"
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "privacy": "PASS",
+      "detected_prefix_faults": 4,
+      "target": {
+        "objective": "target",
+        "value": 0,
+        "search": {
+          "states": 5337,
+          "edges": 7430,
+          "completed_tricks": 2648,
+          "terminal_states": 2,
+          "cache_hits": 2134
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              },
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "HA"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "H2"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E",
+            "objective_gain": 0
+          }
+        ]
+      },
+      "total_ns": {
+        "objective": "all_ns",
+        "value": 4,
+        "search": {
+          "states": 5337,
+          "edges": 7430,
+          "completed_tricks": 2648,
+          "terminal_states": 2,
+          "cache_hits": 2134
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              },
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "HA"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "H2"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E",
+            "objective_gain": 0
+          }
+        ]
+      },
+      "top_cards": [
+        "CA",
+        "CK",
+        "DA",
+        "HA"
+      ],
+      "authored_line": {
+        "remaining": {
+          "N": [],
+          "E": [],
+          "S": [],
+          "W": []
+        },
+        "leader": "E",
+        "spot_tricks": 0,
+        "ns_tricks": 4
+      },
+      "premature_entry_remainder": null,
+      "fixed_plan_robustness": null
+    },
+    {
+      "id": "spot-length-d-entry-v1",
+      "prefix": {
+        "cards": 52,
+        "cards_per_hand": 13,
+        "prefix_tricks": 8,
+        "prefix_plays": 32,
+        "remaining_cards": 20,
+        "leader": "S"
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "privacy": "PASS",
+      "detected_prefix_faults": 4,
+      "target": {
+        "objective": "target",
+        "value": 1,
+        "search": {
+          "states": 6330,
+          "edges": 8626,
+          "completed_tricks": 2994,
+          "terminal_states": 4,
+          "cache_hits": 2337
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              },
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              },
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 1
+          }
+        ]
+      },
+      "total_ns": {
+        "objective": "all_ns",
+        "value": 5,
+        "search": {
+          "states": 6330,
+          "edges": 8626,
+          "completed_tricks": 2994,
+          "terminal_states": 4,
+          "cache_hits": 2337
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              },
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              },
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              }
+            ],
+            "winner": "N",
+            "objective_gain": 1
+          }
+        ]
+      },
+      "top_cards": [
+        "CA",
+        "DA",
+        "DK",
+        "HA"
+      ],
+      "authored_line": {
+        "remaining": {
+          "N": [],
+          "E": [],
+          "S": [],
+          "W": []
+        },
+        "leader": "S",
+        "spot_tricks": 1,
+        "ns_tricks": 5
+      },
+      "premature_entry_remainder": {
+        "objective": "target",
+        "value": 0,
+        "search": {
+          "states": 1220,
+          "edges": 1607,
+          "completed_tricks": 552,
+          "terminal_states": 2,
+          "cache_hits": 420
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              },
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              },
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E",
+            "objective_gain": 0
+          }
+        ]
+      },
+      "fixed_plan_robustness": {
+        "layouts": 120,
+        "all_legal_defense_terminal_lines": 5760,
+        "guaranteed_target": 1,
+        "guaranteed_ns": 5
+      }
+    },
+    {
+      "id": "spot-length-d-no-entry-v1",
+      "prefix": {
+        "cards": 52,
+        "cards_per_hand": 13,
+        "prefix_tricks": 8,
+        "prefix_plays": 32,
+        "remaining_cards": 20,
+        "leader": "S"
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "privacy": "PASS",
+      "detected_prefix_faults": 4,
+      "target": {
+        "objective": "target",
+        "value": 0,
+        "search": {
+          "states": 5337,
+          "edges": 7430,
+          "completed_tricks": 2648,
+          "terminal_states": 2,
+          "cache_hits": 2134
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              },
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "HA"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "H2"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 0
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E",
+            "objective_gain": 0
+          }
+        ]
+      },
+      "total_ns": {
+        "objective": "all_ns",
+        "value": 4,
+        "search": {
+          "states": 5337,
+          "edges": 7430,
+          "completed_tricks": 2648,
+          "terminal_states": 2,
+          "cache_hits": 2134
+        },
+        "optimal_line": [
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              },
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "HA"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "H2"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "S",
+            "objective_gain": 1
+          },
+          {
+            "plays": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E",
+            "objective_gain": 0
+          }
+        ]
+      },
+      "top_cards": [
+        "CA",
+        "DA",
+        "DK",
+        "HA"
+      ],
+      "authored_line": {
+        "remaining": {
+          "N": [],
+          "E": [],
+          "S": [],
+          "W": []
+        },
+        "leader": "E",
+        "spot_tricks": 0,
+        "ns_tricks": 4
+      },
+      "premature_entry_remainder": null,
+      "fixed_plan_robustness": null
+    }
+  ],
+  "projection_sha256": "95700a25a353eeef63dbab0fae6305c0418e052843684cbbd7d36279218bb0d9",
+  "solver_sha256": "b9a9cf1315a5539f0ac978637a5bd86a46b88b2a0fe7ddf2928ba0690ada6c59",
+  "status": "PASS"
+}

@@ -1,0 +1,59 @@
+name: Two Spot Lesson CI
+
+on:
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'bridge_school_api/**'
+      - 'evolutionary_course/**'
+      - 'data/research/low_card_*'
+      - 'data/research/local_teacher_routing_policy_v1.json'
+      - 'data/research/spot_card_candidate_v2/**'
+      - 'tests/test_*spot*'
+      - 'tests/test_teacher_review_component.cjs'
+      - 'requirements-api.txt'
+      - '.github/workflows/two-spot-lesson-ci.yml'
+  push:
+    branches: ['codex/two-spot-learner-ui-20261015']
+    paths:
+      - 'app.py'
+      - 'bridge_school_api/**'
+      - 'evolutionary_course/**'
+      - 'data/research/low_card_*'
+      - 'data/research/local_teacher_routing_policy_v1.json'
+      - 'data/research/spot_card_candidate_v2/**'
+      - 'tests/test_*spot*'
+      - 'tests/test_teacher_review_component.cjs'
+      - 'requirements-api.txt'
+      - '.github/workflows/two-spot-lesson-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lesson-http:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      PYTHONPATH: .
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-api.txt 'pytest==9.1.1' 'httpx==0.28.1'
+      - name: Verify learner screen contracts
+        run: node --test tests/test_spot_learner_ui.cjs tests/test_teacher_review_component.cjs tests/test_two_spot_ui.cjs
+      - name: Verify HTTP routes and saved answers
+        run: >-
+          timeout --signal=TERM --kill-after=5s 120s
+          python -m pytest -q -p no:cacheprovider
+          tests/test_school_spot_lesson.py
+          tests/test_local_spot_preview.py
+          tests/test_local_spot_session.py
+          tests/test_two_spot_route_functions.py
+          tests/test_spot_review_answer.py

@@ -1,0 +1,688 @@
+{
+  "schema": "low-card-teaching-step-candidate-v1",
+  "version": "2026-10-13.1",
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "review_state": "REVIEW_REQUIRED",
+    "publication_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "canon_write_allowed": false,
+    "mastery_write_allowed": false
+  },
+  "source_bindings": [
+    {
+      "source": "course-deliverables/entry-module-compact-20261013-v2/content.json",
+      "sha256": "e9a8306639aa4a38c77688795dbd1adf5887be5422cac15ef66854ea687039f9",
+      "use": "E1 and E2 conditional entry task"
+    },
+    {
+      "source": "course-deliverables/five-card-split-v3-20261013/pdf-content.v3.json",
+      "sha256": "a42226dc47e9937761226cc81fce13d3547d2907ffc95d910eca6b07af864248",
+      "use": "Owner-requested purpose: establish low-card tricks; no teacher quotation"
+    }
+  ],
+  "provenance": {
+    "teacher_quotations": [],
+    "teacher_speech_used_as_normative_rule": false,
+    "historical_episode_acceptance_changed": false,
+    "learner_answers_observed": false,
+    "authored_additions": [
+      "counting/purpose questions attached to compact E1",
+      "retry R1 and its contrast",
+      "structured feedback/rubric"
+    ]
+  },
+  "candidate_dependencies": {
+    "catalog_registration": "NOT_REGISTERED",
+    "observed_readiness": "UNKNOWN",
+    "nodes": [
+      {
+        "id": "candidate.distinguish-hand-dummy",
+        "requires": []
+      },
+      {
+        "id": "candidate.trick-winner-controls-lead",
+        "requires": [
+          "candidate.distinguish-hand-dummy"
+        ]
+      },
+      {
+        "id": "candidate.count-missing-suit",
+        "requires": [
+          "candidate.distinguish-hand-dummy"
+        ]
+      },
+      {
+        "id": "candidate.low-card-purpose",
+        "requires": [
+          "candidate.count-missing-suit"
+        ]
+      },
+      {
+        "id": "candidate.locate-ready-winners",
+        "requires": [
+          "candidate.distinguish-hand-dummy"
+        ]
+      },
+      {
+        "id": "candidate.preserve-entry-to-low-cards",
+        "requires": [
+          "candidate.trick-winner-controls-lead",
+          "candidate.locate-ready-winners"
+        ]
+      }
+    ],
+    "composition": [
+      "candidate.low-card-purpose",
+      "candidate.preserve-entry-to-low-cards"
+    ],
+    "five_card_probability_required": false,
+    "note": "Связь целей внутри шага; это не новый нормативный skill_catalog. Подсчёт сам по себе не доказывает готовность фосок."
+  },
+  "mastery_criterion_proposal": {
+    "status": "CANDIDATE_NOT_EXECUTED",
+    "all_required": [
+      "Верный счёт и объяснение цели через выработку фосок.",
+      "Верные остатки карт, место хода и точный переход; отдельный случай без нового входа.",
+      "Самостоятельные решения как минимум двух ещё не показанных разных конфигураций без подсказки с проверкой объяснения преподавателем.",
+      "Позднейшая проверка сохранения навыка и переноса в новом контексте."
+    ],
+    "criterion_met": null,
+    "actual_mastery": null,
+    "practice_after_feedback_counts_as_independent": false,
+    "evidence_gaps": [
+      "Ответов ученика нет.",
+      "R1 после обратной связи — практика с предшествующей поддержкой.",
+      "Непоказанные задания для независимой и отсроченной проверки ещё не подготовлены."
+    ]
+  },
+  "delivery_contract": {
+    "student_projection": "presentation only plus step identity/hash; no private/source/mastery data",
+    "response_schema": "low-card-structured-response-v1",
+    "structured_choices_assess": "FORMATIVE_TYPED_FIELDS_ONLY",
+    "prose_assessment": "HUMAN_REVIEW_REQUIRED",
+    "persisted": false,
+    "mastery_event_created": false,
+    "retry": "Отправить сначала первый ответ; затем адресную обратную связь; R1 — новый пример. Автомат не повышает mastery. Хранение попыток и доказательства отсутствия внешней помощи здесь не реализованы."
+  },
+  "steps": [
+    {
+      "step_id": "entry.e1",
+      "origin": "AUTHORED_PARTIAL_POSITION",
+      "derived_from": "COMPACT_E1_PLUS_E2",
+      "presentation": {
+        "title": "Зачем считаем и как попадём к фоскам",
+        "author_label": "Авторский учебный пример; не восстановленные карты Дианы.",
+        "strain": "NT",
+        "partial_deal": true,
+        "hand": {
+          "S": [
+            "A",
+            "4"
+          ],
+          "C": [
+            "3",
+            "2"
+          ]
+        },
+        "dummy": {
+          "S": [
+            "K",
+            "5"
+          ],
+          "C": [
+            "K",
+            "Q",
+            "J",
+            "7",
+            "6",
+            "5"
+          ]
+        },
+        "card_encoding": "S/H/D/C + A,K,Q,J,T,9..2; HAND = рука, DUMMY = стол.",
+        "target_suit": "C",
+        "entry_suit": "S",
+        "opening_lead": "SQ",
+        "opening_choices": [
+          {
+            "winner": "HAND",
+            "hand": "SA",
+            "dummy": "S5"
+          },
+          {
+            "winner": "DUMMY",
+            "hand": "S4",
+            "dummy": "SK"
+          }
+        ],
+        "future_given": {
+          "development": "GIVEN_NOT_ASSESSED",
+          "lead": "HAND",
+          "winners_location": "DUMMY",
+          "ready_low_cards": [
+            "C7",
+            "C6",
+            "C5"
+          ],
+          "other_partnership_hand_target_cards": [],
+          "defenders_target_cards": [],
+          "entry_suit_untouched_after_opening": true,
+          "other_entries": false,
+          "text": "Для обеих ветвей дан итог: на столе готовы 7, 6, 5 треф; в руке и у защитников этой масти нет. Ход позже в руке; остатки масти входа целы, других входов к фоскам нет. Разработка масти и то, как ход позднее оказался здесь, даны условием, а не выводятся из схемы."
+        },
+        "contrast": {
+          "independent_snapshot": true,
+          "lead": "DUMMY",
+          "hand": {
+            "S": [
+              "A"
+            ],
+            "C": []
+          },
+          "dummy": {
+            "S": [
+              "5"
+            ],
+            "C": [
+              "7",
+              "6",
+              "5"
+            ]
+          },
+          "defenders_target_cards": [],
+          "text": "Это отдельная позиция: ход уже у готовых фосок. Оцени необходимость нового входа только сейчас."
+        },
+        "questions": [
+          {
+            "id": "visible_count",
+            "type": "integer",
+            "prompt": "Сколько треф видно в руке и на столе вместе?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "missing_count",
+            "type": "integer",
+            "prompt": "Сколько карт этой масти у защитников до розыгрыша?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "purpose",
+            "type": "choice",
+            "prompt": "Зачем здесь считать карты масти у защитников?",
+            "options": [
+              {
+                "id": "ESTABLISH_LOW_CARDS",
+                "label": "Понять, когда у защитников кончится масть и фоски смогут брать взятки; отдельно проверить доступ к ним."
+              },
+              {
+                "id": "COUNT_ONLY",
+                "label": "Только получить число недостающих карт."
+              },
+              {
+                "id": "GUARANTEE_CONTRACT",
+                "label": "Убедиться, что весь контракт уже гарантирован."
+              },
+              {
+                "id": "PROBABILITY_ONLY",
+                "label": "Только назвать наиболее вероятный расклад."
+              }
+            ]
+          },
+          {
+            "id": "after_hand_win",
+            "type": "card_pair",
+            "prompt": "Если первую взятку берёт рука: какие карты масти входа останутся? Порядок: рука, стол.",
+            "pair_order": [
+              "HAND",
+              "DUMMY"
+            ]
+          },
+          {
+            "id": "after_dummy_win",
+            "type": "card_pair",
+            "prompt": "Если первую взятку берёт стол: какие карты масти входа останутся? Порядок: рука, стол.",
+            "pair_order": [
+              "HAND",
+              "DUMMY"
+            ]
+          },
+          {
+            "id": "opening_winner",
+            "type": "choice",
+            "prompt": "Где возьмёшь первую взятку, чтобы сохранить доступ при данном позднейшем положении?",
+            "options": [
+              {
+                "id": "HAND",
+                "label": "В руке"
+              },
+              {
+                "id": "DUMMY",
+                "label": "На столе"
+              }
+            ]
+          },
+          {
+            "id": "entry_path",
+            "type": "card_pair",
+            "prompt": "Какими двумя картами позже получишь ход у готовых фосок? Порядок: ходим, принимаем.",
+            "pair_order": [
+              "FROM",
+              "TO"
+            ]
+          },
+          {
+            "id": "low_tricks",
+            "type": "integer",
+            "prompt": "Сколько отдельных взяток дадут готовые фоски после перехода?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "new_entry_in_contrast",
+            "type": "boolean",
+            "prompt": "Отдельная ситуация: ход уже там, где готовые фоски. Нужен ли новый переход, чтобы забрать их сейчас?"
+          },
+          {
+            "id": "always_spend_entry",
+            "type": "boolean",
+            "prompt": "Следует ли отсюда, что единственный вход можно всегда тратить заранее?"
+          },
+          {
+            "id": "contract_guaranteed",
+            "type": "boolean",
+            "prompt": "Доказано ли выполнение всего контракта этими частичными картами?"
+          }
+        ],
+        "explanation_prompt": "Своими словами объясни: зачем считал, где будет ход, какие две карты образуют переход и почему отдельная позиция с ходом у фосок отличается.",
+        "limitation": "Итог разработки дан; вероятность расклада, полный розыгрыш и весь контракт не оцениваются."
+      },
+      "private": {
+        "expected_answers": {
+          "visible_count": 8,
+          "missing_count": 5,
+          "purpose": "ESTABLISH_LOW_CARDS",
+          "after_hand_win": [
+            "S4",
+            "SK"
+          ],
+          "after_dummy_win": [
+            "SA",
+            "S5"
+          ],
+          "opening_winner": "HAND",
+          "entry_path": [
+            "S4",
+            "SK"
+          ],
+          "low_tricks": 3,
+          "new_entry_in_contrast": false,
+          "always_spend_entry": false,
+          "contract_guaranteed": false
+        },
+        "feedback": {
+          "visible_count": {
+            "code": "VISIBLE_COUNT_MISMATCH",
+            "text": "Посчитай карты нужной масти в обеих показанных руках; другие масти сюда не входят."
+          },
+          "missing_count": {
+            "code": "MISSING_COUNT_MISMATCH",
+            "text": "В масти 13 карт. Вычти сумму карт этой масти в руке и на столе."
+          },
+          "purpose": {
+            "code": "PURPOSE_INCOMPLETE",
+            "text": "Свяжи подсчёт с дополнительными взятками: когда защитники исчерпают масть, фоски смогут выигрывать. Затем проверь, как получить к ним ход."
+          },
+          "after_hand_win": {
+            "code": "RESIDUAL_AFTER_HAND_MISMATCH",
+            "text": "Убери по одной сыгранной карте из руки и со стола именно в этой ветви. Назови оставшиеся карты."
+          },
+          "after_dummy_win": {
+            "code": "RESIDUAL_AFTER_DUMMY_MISMATCH",
+            "text": "Снова убери две карты первой взятки, теперь для победы стола. Не переноси остаток из другой ветви."
+          },
+          "opening_winner": {
+            "code": "ENTRY_NOT_PRESERVED",
+            "text": "В данном позднейшем положении ход будет напротив готовых фосок. Сохрани принимающую карту рядом с фосками и малую карту напротив неё."
+          },
+          "entry_path": {
+            "code": "PATH_OR_DIRECTION_MISMATCH",
+            "text": "Начни путь из той руки, где по условию будет ход; закончи старшей картой там, где готовы фоски."
+          },
+          "low_tricks": {
+            "code": "LOW_TRICK_COUNT_MISMATCH",
+            "text": "Посчитай готовые фоски в длинной руке. Здесь в другой руке и у защитников этой масти уже нет."
+          },
+          "new_entry_in_contrast": {
+            "code": "LEAD_ALREADY_AT_WINNERS",
+            "text": "Отдельно посмотри, где сейчас ход: если он уже у готовых фосок, их можно играть без нового перехода."
+          },
+          "always_spend_entry": {
+            "code": "OVERGENERALIZED_ENTRY_RULE",
+            "text": "Вывод зависит от будущего места хода. Отдельный случай без перехода не разрешает всегда тратить единственный вход."
+          },
+          "contract_guaranteed": {
+            "code": "CONTRACT_OVERCLAIM",
+            "text": "Показана часть карт и отдельные взятки. Условия полного контракта и остальные масти не заданы."
+          }
+        },
+        "acceptable_explanations": [
+          "Считаю оставшуюся у защитников масть, чтобы понимать, когда фоски смогут брать дополнительные взятки; готовность ещё не даёт доступа.",
+          "Беру тузом в руке, сохраняя короля на столе: позже 4 пик к К на столе, затем три отдельные трефовые взятки.",
+          "Если ход уже у фосок, нового входа сейчас не требуется; в другой ситуации он может понадобиться."
+        ],
+        "human_review": {
+          "not_exact_phrases": true,
+          "required_concepts": [
+            "purpose_links_defender_exhaustion_to_low_tricks",
+            "explains_residuals_and_exact_entry_direction",
+            "distinguishes_ready_cards_from_access",
+            "conditions_no_entry_on_current_lead"
+          ],
+          "acceptable_nuance": "Вход может пригодиться позднее, но для немедленного отбора уже готовых фосок новый вход не требуется.",
+          "ambiguous_or_blank": "NEEDS_CLARIFICATION",
+          "contradictory_explanation": "NOT_CONFIRMED",
+          "automatic_prose_assessment": false
+        }
+      },
+      "next": {
+        "after_feedback": "retry.r1",
+        "status_after_last": "AWAIT_HUMAN_REVIEW_OR_NEW_UNSEEN_TASK",
+        "retry_support_level": "GUIDED",
+        "same_answer_repetition_is_mastery_evidence": false
+      }
+    },
+    {
+      "step_id": "retry.r1",
+      "origin": "AUTHORED_PARTIAL_POSITION",
+      "derived_from": "NEW_AUTHORED_RETRY",
+      "presentation": {
+        "title": "Повторная попытка: фоски в руке",
+        "author_label": "Авторский учебный пример; не восстановленные карты Дианы.",
+        "strain": "NT",
+        "partial_deal": true,
+        "hand": {
+          "H": [
+            "K",
+            "9"
+          ],
+          "D": [
+            "K",
+            "Q",
+            "J",
+            "8",
+            "6",
+            "5",
+            "4"
+          ]
+        },
+        "dummy": {
+          "H": [
+            "A",
+            "4"
+          ],
+          "D": [
+            "3",
+            "2"
+          ]
+        },
+        "card_encoding": "S/H/D/C + A,K,Q,J,T,9..2; HAND = рука, DUMMY = стол.",
+        "target_suit": "D",
+        "entry_suit": "H",
+        "opening_lead": "HQ",
+        "opening_choices": [
+          {
+            "winner": "HAND",
+            "hand": "HK",
+            "dummy": "H4"
+          },
+          {
+            "winner": "DUMMY",
+            "hand": "H9",
+            "dummy": "HA"
+          }
+        ],
+        "future_given": {
+          "development": "GIVEN_NOT_ASSESSED",
+          "lead": "DUMMY",
+          "winners_location": "HAND",
+          "ready_low_cards": [
+            "D8",
+            "D6",
+            "D5",
+            "D4"
+          ],
+          "other_partnership_hand_target_cards": [],
+          "defenders_target_cards": [],
+          "entry_suit_untouched_after_opening": true,
+          "other_entries": false,
+          "text": "Для обеих ветвей дан итог: в руке готовы 8, 6, 5, 4 бубен; на столе и у защитников этой масти нет. Ход позже на столе; остатки масти входа целы, других входов к фоскам нет. Разработка масти и то, как ход позднее оказался здесь, даны условием, а не выводятся из схемы."
+        },
+        "contrast": {
+          "independent_snapshot": true,
+          "lead": "HAND",
+          "hand": {
+            "H": [
+              "9"
+            ],
+            "D": [
+              "8",
+              "6",
+              "5",
+              "4"
+            ]
+          },
+          "dummy": {
+            "H": [
+              "A"
+            ],
+            "D": []
+          },
+          "defenders_target_cards": [],
+          "text": "Это отдельная позиция: ход уже у готовых фосок. Оцени необходимость нового входа только сейчас."
+        },
+        "questions": [
+          {
+            "id": "visible_count",
+            "type": "integer",
+            "prompt": "Сколько бубен видно в руке и на столе вместе?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "missing_count",
+            "type": "integer",
+            "prompt": "Сколько карт этой масти у защитников до розыгрыша?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "purpose",
+            "type": "choice",
+            "prompt": "Зачем здесь считать карты масти у защитников?",
+            "options": [
+              {
+                "id": "ESTABLISH_LOW_CARDS",
+                "label": "Понять, когда у защитников кончится масть и фоски смогут брать взятки; отдельно проверить доступ к ним."
+              },
+              {
+                "id": "COUNT_ONLY",
+                "label": "Только получить число недостающих карт."
+              },
+              {
+                "id": "GUARANTEE_CONTRACT",
+                "label": "Убедиться, что весь контракт уже гарантирован."
+              },
+              {
+                "id": "PROBABILITY_ONLY",
+                "label": "Только назвать наиболее вероятный расклад."
+              }
+            ]
+          },
+          {
+            "id": "after_hand_win",
+            "type": "card_pair",
+            "prompt": "Если первую взятку берёт рука: какие карты масти входа останутся? Порядок: рука, стол.",
+            "pair_order": [
+              "HAND",
+              "DUMMY"
+            ]
+          },
+          {
+            "id": "after_dummy_win",
+            "type": "card_pair",
+            "prompt": "Если первую взятку берёт стол: какие карты масти входа останутся? Порядок: рука, стол.",
+            "pair_order": [
+              "HAND",
+              "DUMMY"
+            ]
+          },
+          {
+            "id": "opening_winner",
+            "type": "choice",
+            "prompt": "Где возьмёшь первую взятку, чтобы сохранить доступ при данном позднейшем положении?",
+            "options": [
+              {
+                "id": "HAND",
+                "label": "В руке"
+              },
+              {
+                "id": "DUMMY",
+                "label": "На столе"
+              }
+            ]
+          },
+          {
+            "id": "entry_path",
+            "type": "card_pair",
+            "prompt": "Какими двумя картами позже получишь ход у готовых фосок? Порядок: ходим, принимаем.",
+            "pair_order": [
+              "FROM",
+              "TO"
+            ]
+          },
+          {
+            "id": "low_tricks",
+            "type": "integer",
+            "prompt": "Сколько отдельных взяток дадут готовые фоски после перехода?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "new_entry_in_contrast",
+            "type": "boolean",
+            "prompt": "Отдельная ситуация: ход уже там, где готовые фоски. Нужен ли новый переход, чтобы забрать их сейчас?"
+          },
+          {
+            "id": "always_spend_entry",
+            "type": "boolean",
+            "prompt": "Следует ли отсюда, что единственный вход можно всегда тратить заранее?"
+          },
+          {
+            "id": "contract_guaranteed",
+            "type": "boolean",
+            "prompt": "Доказано ли выполнение всего контракта этими частичными картами?"
+          }
+        ],
+        "explanation_prompt": "Своими словами объясни: зачем считал, где будет ход, какие две карты образуют переход и почему отдельная позиция с ходом у фосок отличается.",
+        "limitation": "Итог разработки дан; вероятность расклада, полный розыгрыш и весь контракт не оцениваются."
+      },
+      "private": {
+        "expected_answers": {
+          "visible_count": 9,
+          "missing_count": 4,
+          "purpose": "ESTABLISH_LOW_CARDS",
+          "after_hand_win": [
+            "H9",
+            "HA"
+          ],
+          "after_dummy_win": [
+            "HK",
+            "H4"
+          ],
+          "opening_winner": "DUMMY",
+          "entry_path": [
+            "H4",
+            "HK"
+          ],
+          "low_tricks": 4,
+          "new_entry_in_contrast": false,
+          "always_spend_entry": false,
+          "contract_guaranteed": false
+        },
+        "feedback": {
+          "visible_count": {
+            "code": "VISIBLE_COUNT_MISMATCH",
+            "text": "Посчитай карты нужной масти в обеих показанных руках; другие масти сюда не входят."
+          },
+          "missing_count": {
+            "code": "MISSING_COUNT_MISMATCH",
+            "text": "В масти 13 карт. Вычти сумму карт этой масти в руке и на столе."
+          },
+          "purpose": {
+            "code": "PURPOSE_INCOMPLETE",
+            "text": "Свяжи подсчёт с дополнительными взятками: когда защитники исчерпают масть, фоски смогут выигрывать. Затем проверь, как получить к ним ход."
+          },
+          "after_hand_win": {
+            "code": "RESIDUAL_AFTER_HAND_MISMATCH",
+            "text": "Убери по одной сыгранной карте из руки и со стола именно в этой ветви. Назови оставшиеся карты."
+          },
+          "after_dummy_win": {
+            "code": "RESIDUAL_AFTER_DUMMY_MISMATCH",
+            "text": "Снова убери две карты первой взятки, теперь для победы стола. Не переноси остаток из другой ветви."
+          },
+          "opening_winner": {
+            "code": "ENTRY_NOT_PRESERVED",
+            "text": "В данном позднейшем положении ход будет напротив готовых фосок. Сохрани принимающую карту рядом с фосками и малую карту напротив неё."
+          },
+          "entry_path": {
+            "code": "PATH_OR_DIRECTION_MISMATCH",
+            "text": "Начни путь из той руки, где по условию будет ход; закончи старшей картой там, где готовы фоски."
+          },
+          "low_tricks": {
+            "code": "LOW_TRICK_COUNT_MISMATCH",
+            "text": "Посчитай готовые фоски в длинной руке. Здесь в другой руке и у защитников этой масти уже нет."
+          },
+          "new_entry_in_contrast": {
+            "code": "LEAD_ALREADY_AT_WINNERS",
+            "text": "Отдельно посмотри, где сейчас ход: если он уже у готовых фосок, их можно играть без нового перехода."
+          },
+          "always_spend_entry": {
+            "code": "OVERGENERALIZED_ENTRY_RULE",
+            "text": "Вывод зависит от будущего места хода. Отдельный случай без перехода не разрешает всегда тратить единственный вход."
+          },
+          "contract_guaranteed": {
+            "code": "CONTRACT_OVERCLAIM",
+            "text": "Показана часть карт и отдельные взятки. Условия полного контракта и остальные масти не заданы."
+          }
+        },
+        "acceptable_explanations": [
+          "Считаю оставшуюся у защитников масть, чтобы понимать, когда фоски смогут брать дополнительные взятки; готовность ещё не даёт доступа.",
+          "Беру тузом на столе, сохраняя короля в руке: позже 4 червей к К в руке, затем четыре отдельные бубновые взятки.",
+          "Если ход уже у фосок, нового входа сейчас не требуется; в другой ситуации он может понадобиться."
+        ],
+        "human_review": {
+          "not_exact_phrases": true,
+          "required_concepts": [
+            "purpose_links_defender_exhaustion_to_low_tricks",
+            "explains_residuals_and_exact_entry_direction",
+            "distinguishes_ready_cards_from_access",
+            "conditions_no_entry_on_current_lead"
+          ],
+          "acceptable_nuance": "Вход может пригодиться позднее, но для немедленного отбора уже готовых фосок новый вход не требуется.",
+          "ambiguous_or_blank": "NEEDS_CLARIFICATION",
+          "contradictory_explanation": "NOT_CONFIRMED",
+          "automatic_prose_assessment": false
+        }
+      },
+      "next": {
+        "after_feedback": null,
+        "status_after_last": "AWAIT_HUMAN_REVIEW_OR_NEW_UNSEEN_TASK",
+        "retry_support_level": "GUIDED",
+        "same_answer_repetition_is_mastery_evidence": false
+      }
+    }
+  ]
+}

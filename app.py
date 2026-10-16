@@ -12,6 +12,8 @@ from bridge_school_api.tournament_teacher import router as ai_teacher_router
 from bridge_school_api.ai_worker import router as ai_worker_router
 from bridge_school_api.assistant_lab_bootstrap import router as assistant_lab_bootstrap_router
 from bridge_school_api.main import app, require_api_token
+from bridge_school_api.local_spot_preview import register_local_spot_preview
+from bridge_school_api.school_spot_lesson import router as school_spot_lesson_router
 
 
 def _replace_vercel_oidc_header(headers: list[tuple[bytes, bytes]], token: str) -> list[tuple[bytes, bytes]]:
@@ -37,5 +39,8 @@ app.include_router(ai_policy_router, dependencies=[Depends(require_api_token)])
 app.include_router(ai_orchestrator_router, dependencies=[Depends(require_api_token)])
 app.include_router(ai_worker_router, dependencies=[Depends(require_api_token)])
 app.include_router(ai_decision_router, dependencies=[Depends(require_api_token)])
+
+register_local_spot_preview(app)
+app.include_router(school_spot_lesson_router)
 
 __all__ = ["app"]

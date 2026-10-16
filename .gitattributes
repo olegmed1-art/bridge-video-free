@@ -6,3 +6,24 @@ database/migrations/0057_universal_video_canary_review_gate.sql text eol=lf
 database/migrations/0058_universal_video_terminal_v2_gate.sql text eol=lf
 database/migrations/0058_universal_video_terminal_v2_gate/001_apply_terminal_v2.sql text eol=lf
 database/migrations/0058_universal_video_terminal_v2_gate/002_require_terminal_revisions.sql text eol=lf
+
+# These source and fixture bytes are SHA-256 pinned by the teacher session.
+# Preserve exact LF bytes even when core.autocrlf is enabled on Windows.
+/evolutionary_course/teacher_*.py -text
+/evolutionary_course/teaching_step.py -text
+/evolutionary_course/spot_candidate_fixture.py -text
+/data/research/local_teacher_routing_policy_v1.json -text
+/data/research/low_card_*_candidate_v1.json -text
+/data/research/spot_card_candidate_v2/** -text
+/bridge_school_api/static/spot_cycle_session/learner-presentation.json -text
+/docs/research/evolutionary-course/LOCAL_TEACHER_ROUTING_V1_RU.md -text
+
+# These reviewed upstream fixtures have CRLF bytes in their SHA-256 pins.
+# Keep LF in Git and restore CRLF in every checkout, on any host OS.
+/evolutionary_course/teacher_routing.py text eol=crlf
+/data/research/local_teacher_routing_policy_v1.json text eol=crlf
+/data/research/spot_card_candidate_v2/candidate.json text eol=crlf
+/data/research/spot_card_candidate_v2/independent_i2_results.json text eol=crlf
+/data/research/spot_card_candidate_v2/routing-handoff/manifest.json text eol=crlf
+/data/research/spot_card_candidate_v2/routing-handoff/student-prompts.json text eol=crlf
+/data/research/spot_card_candidate_v2/routing-handoff/teacher-versions.json text eol=crlf

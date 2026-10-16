@@ -1,0 +1,130 @@
+{
+  "schema": "local-teacher-routing-policy-v1",
+  "policy_id": "candidate.low-card-routing.2026-10-13.1",
+  "source_graph": {
+    "fixture_sha256": "b9984a9d4a8e2930a20f02a448c8507ef2ad8c7c1946e3f8e8a7a3eb269d649e",
+    "pointer": "/candidate_dependencies/nodes",
+    "catalog_registration": "NOT_REGISTERED"
+  },
+  "criterion_skill": {
+    "visible_count": "candidate.count-missing-suit",
+    "missing_count": "candidate.count-missing-suit",
+    "purpose": "candidate.low-card-purpose",
+    "after_hand_win": "candidate.distinguish-hand-dummy",
+    "after_dummy_win": "candidate.distinguish-hand-dummy",
+    "opening_winner": "candidate.preserve-entry-to-low-cards",
+    "entry_path": "candidate.preserve-entry-to-low-cards",
+    "low_tricks": "candidate.locate-ready-winners",
+    "new_entry_in_contrast": "candidate.trick-winner-controls-lead",
+    "always_spend_entry": "candidate.preserve-entry-to-low-cards",
+    "contract_guaranteed": "candidate.low-card-purpose",
+    "defenders_after_three": "candidate.count-missing-suit",
+    "lows_ready": "candidate.locate-ready-winners",
+    "ready_low_tricks": "candidate.locate-ready-winners",
+    "accessible_now": "candidate.preserve-entry-to-low-cards",
+    "winner_after_sa": "candidate.trick-winner-controls-lead",
+    "own_entry_exists": "candidate.preserve-entry-to-low-cards",
+    "tricks_if_dummy_leads": "candidate.trick-winner-controls-lead"
+  },
+  "activity_focus": {
+    "entry.e1": "candidate.preserve-entry-to-low-cards",
+    "retry.r1": "candidate.preserve-entry-to-low-cards",
+    "counter.four-one": "candidate.locate-ready-winners",
+    "counter.no-entry": "candidate.preserve-entry-to-low-cards"
+  },
+  "counterexample_by_skill": {
+    "candidate.distinguish-hand-dummy": "counter.no-entry",
+    "candidate.trick-winner-controls-lead": "counter.no-entry",
+    "candidate.count-missing-suit": "counter.four-one",
+    "candidate.low-card-purpose": "counter.four-one",
+    "candidate.locate-ready-winners": "counter.four-one",
+    "candidate.preserve-entry-to-low-cards": "counter.no-entry"
+  },
+  "hints_by_skill": {
+    "candidate.distinguish-hand-dummy": "Раздели руку и стол. В каждой ветви убери по одной действительно сыгранной карте из каждой руки.",
+    "candidate.trick-winner-controls-lead": "Ход получает тот, кто выиграл предыдущую взятку. Сначала назови место хода.",
+    "candidate.count-missing-suit": "Сосчитай карты нужной масти в обеих руках и вычти их сумму из 13. Данное деление учитывай отдельно.",
+    "candidate.low-card-purpose": "Свяжи подсчёт с дополнительными взятками на фоски; отдельно проверь, как получить ход к ним.",
+    "candidate.locate-ready-winners": "Проверь, остались ли у защитников карты масти старше твоих фосок. Готовность ещё не означает доступ.",
+    "candidate.preserve-entry-to-low-cards": "Начни путь от текущего места хода и проверь, кто выиграет взятку перехода."
+  },
+  "initial_step": "entry.e1",
+  "remaining_order": [
+    "retry.r1",
+    "counter.four-one",
+    "counter.no-entry"
+  ],
+  "max_issuances_per_step": 2,
+  "max_responses_per_issuance": 8,
+  "selection_scope": "FORMATIVE_ROUTING_NO_PREREQUISITE_OR_MASTERY_INFERENCE",
+  "graph_use": "Topological order of existing nodes prioritizes feedback focus; no new graph or profile is created.",
+  "protocol": [
+    "record_response preserves raw first/revised answer; neutral receipt, no result disclosure",
+    "request_hint records actual local assistance before returning content",
+    "advance releases feedback and chooses a task; it is the explicit feedback boundary",
+    "new task remains provisional while all prose awaits teacher review"
+  ],
+  "boundaries": {
+    "profile_write_allowed": false,
+    "course_activation_allowed": false,
+    "mastery_event_allowed": false,
+    "persisted": false,
+    "external_help_known": false
+  },
+  "pedagogical_basis": {
+    "instructional_route_candidate": [
+      "count_suit",
+      "establish_low_cards",
+      "entries",
+      "new_authored_transfer"
+    ],
+    "authored_exercises": [
+      "entry.e1",
+      "retry.r1",
+      "counter.four-one",
+      "counter.no-entry"
+    ],
+    "existing_video_context": {
+      "lesson_id": "diana-2",
+      "interaction_id": "interaction_f4442a16e69bedceb03f",
+      "evidence_level": "EXISTING_ARTIFACT_CONTEXT_NOT_FRESH_MEDIA_REVIEW",
+      "source_bindings": [
+        {
+          "path": "data/research/evolutionary_course_diana2_club_split_skill_candidate_v1.json",
+          "sha256": "b88f7466c135a3dd602d45e851df90ecf8a041046bf134adffe6229c1c700838"
+        },
+        {
+          "path": "data/research/evolutionary_course_diana2_approved_rerun_receipt_v1.json",
+          "sha256": "6e1fcfcac004c8cbaa2f722b6e136bd9ffd66f04637c3a42e04f7af30e16075f"
+        }
+      ],
+      "supported_claim": "Teacher explanation of 3-2 as the most likely split for five missing cards under the stated random-deal model.",
+      "independent_student_count_demonstrated": false,
+      "teacher_quote_used_in_exercise": false
+    },
+    "owner_method_change": {
+      "claim": "Explain counting as a means to establish tricks on low cards.",
+      "source_url": "https://chatgpt.com/c/6a9ee06f-8804-83eb-b1ed-fa9f94f406d3?messageId=c68d60e2-fd91-4c1c-ad59-22a91fc44c2a",
+      "evidence_level": "OWNER_INSTRUCTION_SUPPLIED_IN_DELEGATION",
+      "linked_conversation_independently_read": false
+    },
+    "catalog_alignment": {
+      "whole_route_registered": false,
+      "historical_SKILL_to_candidate_skill_mapping": {},
+      "automatic_legacy_mapping_allowed": false,
+      "graph_basis": "Existing /candidate_dependencies only; no catalog registration"
+    },
+    "longitudinal_status": {
+      "pilot_claimed": false,
+      "confirmed_lessons_with_accepted_episodes_in_available_receipt": 1,
+      "additional_distinct_confirmed_lessons_with_accepted_episodes_required_at_least": 2,
+      "student_mastery_inference_allowed": false
+    },
+    "excluded_assets": [
+      {
+        "id": "EX-0002",
+        "reason": "Owner reports arithmetic key invalid and generator exclusion; never imported by this adapter."
+      }
+    ]
+  }
+}

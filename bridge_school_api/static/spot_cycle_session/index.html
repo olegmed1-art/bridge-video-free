@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Бридж · Фоски и вход</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="figma.css">
+  <link rel="stylesheet" href="transport.css">
+  <script src="teacher-client.js" defer></script>
+  <script src="store-transport.js" defer></script>
+  <script src="spot-learner.js" defer></script>
+  <script src="teacher-review.js" defer></script>
+  <script src="lesson-ui.js" defer></script>
+  <script src="session-host.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#lesson"><span class="brand-mark" aria-hidden="true">♠</span><strong>Бридж</strong></a>
+    <span class="prototype-badge">Учебный прототип</span>
+  </header>
+  <main id="lesson">
+    <section class="intro">
+      <p class="eyebrow">Фоски и вход</p>
+      <h1 id="exercise-title">От счёта карт — к взяткам</h1>
+      <p class="intro-copy" id="author-label">Задание появится после подключения преподавателя.</p>
+      <p id="connection-status" role="status" aria-live="polite">Задание пока не подключено.</p>
+      <p id="preview-label" class="preview-label" hidden>Локальный предпросмотр. Ответы на новую позицию требуют ручной проверки.</p>
+    </section>
+    <div class="exercise-layout">
+      <section class="table-panel" aria-labelledby="table-heading">
+        <div class="table-top"><h2 id="table-heading">Рука и стол</h2><span class="contract" id="contract-label">Учебная позиция</span></div>
+        <div class="table-surface entry-table">
+          <div class="hand"><div class="hand-heading"><span class="seat" aria-hidden="true">N</span><h3>Стол</h3></div><div id="dummy-cards"></div></div>
+          <div class="table-middle"><p id="target-suit">Карты задания ещё не получены</p></div>
+          <div class="hand"><div class="hand-heading"><span class="seat you" aria-hidden="true">S</span><h3>Твоя рука</h3></div><div id="hand-cards"></div></div>
+          <p class="entry-board-note" id="opening-lead"></p>
+        </div>
+        <div class="table-bottom"><p id="task-limitation">Здесь будут показаны только открытые карты руки и стола.</p></div>
+      </section>
+      <section class="question-panel" aria-labelledby="question-heading">
+        <section id="recovered-delivery" class="response-receipt" aria-labelledby="recovered-heading" hidden><h3 id="recovered-heading" tabindex="-1">Восстановлено из журнала</h3><div id="recovered-content"></div><button id="continue-recovery" class="primary-button" type="button">Продолжить занятие</button></section>
+        <p id="recovery-notice" class="session-note" hidden></p>
+        <p id="transport-error" class="transport-error" role="alert" hidden></p>
+        <button class="secondary-button" id="retry-delivery" type="button" hidden>Повторить доставку</button>
+        <button class="secondary-button" id="resume-session" type="button" hidden>Восстановить подключение</button>
+        <div id="lesson-work">
+          <p id="saved-spot-answer" class="session-note" role="status" aria-live="polite" hidden></p>
+          <button id="retry-saved-answer" class="secondary-button" type="button" hidden>Повторить загрузку ответа</button>
+          <p class="question-progress" id="question-progress"></p>
+          <h2 id="question-heading" tabindex="-1">Твой ответ</h2>
+          <details class="given-conditions" open><summary>Условия задания</summary><ul class="conditions" id="conditions"></ul></details>
+          <form id="answer-form" hidden novalidate>
+            <pre id="authored-spot-presentation" class="authored-spot-presentation" hidden></pre>
+            <div id="question-fields"></div>
+            <div class="part-navigation"><button class="text-button" id="back-button" type="button" hidden>← Назад</button><button class="primary-button" id="check-button" type="submit">Далее →</button></div>
+          </form>
+          <div class="partial-response-actions" id="partial-response-actions" hidden><button class="text-button" id="save-partial" type="button">Сохранить как есть</button><button class="text-button" id="dont-know" type="button">Не знаю</button></div>
+          <section class="response-receipt" id="response-receipt" aria-labelledby="receipt-heading" hidden>
+            <h3 id="receipt-heading" tabindex="-1">Ответ принят</h3>
+            <p id="receipt-copy" role="status" aria-live="polite"></p><p id="receipt-version"></p>
+            <div class="receipt-actions"><button class="secondary-button" id="revise-response" type="button">Перепроверить и исправить</button><button class="primary-button" id="reveal-feedback" type="button">Показать обратную связь</button></div>
+          </section>
+          <button class="text-button hint-button" id="hint-button" type="button" aria-expanded="false" aria-controls="hint" hidden>Нужна подсказка</button>
+          <p class="hint" id="hint" hidden></p>
+          <section class="feedback" id="feedback" aria-live="polite" hidden><h3 id="feedback-title" tabindex="-1"></h3><p id="feedback-copy"></p><ul id="feedback-fields"></ul><p>Объяснение и освоение темы проверяет преподаватель.</p></section>
+          <button class="primary-button" id="next-exercise" type="button" hidden>Открыть следующее задание</button>
+          <button class="secondary-button finish-session" id="finish-session" type="button" aria-controls="lesson-completion" hidden>Посмотреть итог</button>
+          <p class="session-note" id="storage-note">Сохранение ответов пока не подключено.</p>
+        </div>
+        <section class="lesson-completion" id="lesson-completion" aria-labelledby="completion-heading" hidden>
+          <p class="eyebrow">Этот сеанс</p><h2 id="completion-heading" tabindex="-1">Итог занятия</h2>
+          <p id="completion-count"></p><div id="completion-items"></div>
+          <p class="completion-limits">Здесь видны только события, полученные этой страницей. Итог не подтверждает освоение темы. Историю и объяснения проверяет преподаватель.</p>
+          <button class="primary-button" id="completion-return" type="button">Вернуться к заданию</button>
+        </section>
+      </section>
+    </div>
+    <footer class="page-footer"><p>Проверяем не только число карт, но и возможность получить ход.</p><span>Учебный прототип · без записи освоения</span></footer>
+    <noscript><p>Для ответов нужен JavaScript и подключение преподавателя.</p></noscript>
+  </main>
+</body>
+</html>

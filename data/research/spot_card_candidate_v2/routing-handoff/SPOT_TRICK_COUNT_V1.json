@@ -1,0 +1,56 @@
+{
+  "schema": "spot-trick-count-contract-v1",
+  "metric_id": "guaranteed-spot-tricks-from-position-v1",
+  "answer_field": "guaranteed_spot_tricks_from_position",
+  "value_type": "integer",
+  "minimum": 0,
+  "maximum": 3,
+  "time_origin": {
+    "trick_number": 9,
+    "phase": "BEFORE_LEAD",
+    "leader": "S",
+    "current_trick_cards": [],
+    "cards_remaining_per_seat": 5,
+    "position_ref": "candidate exercise /evidence/position",
+    "no_prior_assumed_actions": true
+  },
+  "horizon": {
+    "first_trick_included": 9,
+    "last_trick_included": 13,
+    "already_won_tricks_included": false,
+    "historical_tricks_1_to_8": "EXCLUDED"
+  },
+  "target": {
+    "seat": "N",
+    "suit_ref": "prompt.target_suit",
+    "ranks_at_time_origin": ["7", "6", "5"],
+    "count_event": "completed legal future trick whose winning card is one of the target cards played by N",
+    "target_discarded_on_partner_winner_counts": false,
+    "honour_or_other_suit_winner_counts": false,
+    "established_but_unreachable_card_counts": false
+  },
+  "optimization": {
+    "objective": "maximum number of target-card tricks NS can guarantee from the time origin",
+    "strategy": "legal NS plan using the public position and explicit given information",
+    "defense": "all legal EW replies and hidden layouts consistent with public information",
+    "entries": "only entries obtainable from the actual remaining cards; no hypothetical or cooperative entry",
+    "establishment_play": "included within future play, never silently treated as already completed",
+    "not_metric": ["number of target cards held", "currently established cards", "cards established after an assumed line", "all partnership tricks", "tricks already won"]
+  },
+  "legacy_compatibility": {
+    "existing_field": "low_tricks",
+    "existing_meaning": "number of ready low-card tricks after the transition already given in the legacy exercise",
+    "existing_fixture_answers": {"entry.e1": 3, "retry.r1": 4},
+    "alias_allowed": false,
+    "silent_reinterpretation_allowed": false,
+    "transport_envelope": "low-card-structured-response-v1 is unchanged; only a new question ID is proposed",
+    "old_answer_key_or_old_prompt_hash_valid_for_new_revision": false
+  },
+  "authority": {
+    "status": "PREPARED_LOCAL_CANDIDATE",
+    "review_state": "REVIEW_REQUIRED",
+    "approval_claimed": false,
+    "runtime_registered": false,
+    "course_activated": false
+  }
+}

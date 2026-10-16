@@ -1,0 +1,403 @@
+{
+  "schema": "low-card-counterexamples-candidate-v1",
+  "version": "2026-10-13.1",
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "review_state": "REVIEW_REQUIRED",
+    "publication_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "canon_write_allowed": false
+  },
+  "source_bindings": [
+    {
+      "source": "data/research/low_card_teaching_step_candidate_v1.json",
+      "sha256": "b9984a9d4a8e2930a20f02a448c8507ef2ad8c7c1946e3f8e8a7a3eb269d649e",
+      "use": "Authored counterexamples to the distinction between low-card readiness and access; no historical hand or teacher quotation is claimed."
+    }
+  ],
+  "provenance": {
+    "origin": "AUTHORED_PARTIAL_POSITIONS",
+    "teacher_quotations": [],
+    "teacher_speech_used_as_normative_rule": false,
+    "historical_episode_acceptance_changed": false,
+    "learner_answers_observed": false,
+    "authored_additions": [
+      "counter.four-one",
+      "counter.no-entry"
+    ],
+    "pedagogical_scope": "Формирующая проверка готовности фосок и собственного доступа к ним. Объяснения проверяет преподаватель; ответы и освоение реального ученика не утверждаются."
+  },
+  "steps": [
+    {
+      "step_id": "counter.four-one",
+      "origin": "AUTHORED_PARTIAL_POSITION",
+      "derived_from": "NEW_AUTHORED_COUNTEREXAMPLE",
+      "presentation": {
+        "title": "Контрпример: после трёх кругов при 4–1",
+        "author_label": "Авторский учебный пример; это не восстановленная сдача Дианы.",
+        "strain": "NT",
+        "partial_deal": true,
+        "hand": {
+          "C": [
+            "A",
+            "K",
+            "Q",
+            "3",
+            "2"
+          ]
+        },
+        "dummy": {
+          "C": [
+            "7",
+            "6",
+            "5"
+          ]
+        },
+        "card_encoding": "S/H/D/C + A,K,Q,J,T,9..2; HAND = рука, DUMMY = стол. Непоказанные масти не заданы.",
+        "target_suit": "C",
+        "given_split": {
+          "distribution": [
+            4,
+            1
+          ],
+          "authority": "GIVEN_TASK_CONDITION",
+          "text": "Для этой задачи известно: пять треф у защитников лежат 4–1. Вероятность расклада не оцениваем."
+        },
+        "supplied_play": {
+          "rounds": [
+            {
+              "round": 1,
+              "hand_card": "CA",
+              "dummy_card": "C5",
+              "winner": "HAND"
+            },
+            {
+              "round": 2,
+              "hand_card": "CK",
+              "dummy_card": "C6",
+              "winner": "HAND"
+            },
+            {
+              "round": 3,
+              "hand_card": "CQ",
+              "dummy_card": "C7",
+              "winner": "HAND"
+            }
+          ],
+          "defender_actions": "Защитник с четырьмя трефами дал по трефе в каждом из трёх кругов. Защитник с одной трефой дал её в первом круге; затем сносил другие масти.",
+          "learner_plan_selection_assessed": false,
+          "text": "Первые три круга уже заданы: туз, король, дама из руки; со стола последовательно 5, 6, 7 треф. Не требуется выбирать этот порядок розыгрыша."
+        },
+        "after_supplied_play": {
+          "lead": "HAND",
+          "hand": {
+            "C": [
+              "3",
+              "2"
+            ]
+          },
+          "dummy": {
+            "C": []
+          },
+          "text": "После этих трёх кругов оцени только текущий остаток. В руке 3 и 2 треф; на столе треф нет. Проследи остаток треф у защитников. Не нужно угадывать, какие именно трефы они выбрали для игры."
+        },
+        "questions": [
+          {
+            "id": "visible_count",
+            "type": "integer",
+            "prompt": "Сколько треф первоначально показано в руке и на столе вместе?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "missing_count",
+            "type": "integer",
+            "prompt": "Сколько треф первоначально было у защитников?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "defenders_after_three",
+            "type": "integer",
+            "prompt": "Сколько треф осталось у защитников после заданных трёх кругов при раскладе 4–1?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "lows_ready",
+            "type": "boolean",
+            "prompt": "Стали ли 3 и 2 треф уже готовыми взятками в текущем остатке, до дальнейшей выработки?"
+          },
+          {
+            "id": "ready_low_tricks",
+            "type": "integer",
+            "prompt": "Сколько готовых взяток на фоски есть сейчас в этой масти, до дальнейшей выработки?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "contract_guaranteed",
+            "type": "boolean",
+            "prompt": "Гарантируют ли приведённые данные выполнение всего контракта?"
+          }
+        ],
+        "explanation_prompt": "Проследи остатки после трёх кругов при 4–1. Готовы ли сейчас 3 и 2 треф? Обоснуй ответ по оставшимся картам. Не предсказывай дальнейший розыгрыш или весь контракт.",
+        "limitation": "Это частичная схема без козыря. Оцениваем текущую готовность фосок после заданной последовательности; возможные будущие взятки, переходы после отдачи хода и выполнение контракта не устанавливаются."
+      },
+      "private": {
+        "reasoning_notes": {
+          "defenders_target_card_count_after_three": 1,
+          "defender_exact_remaining_rank": "UNKNOWN",
+          "defender_possible_remaining_ranks": [
+            "J",
+            "T",
+            "9",
+            "8",
+            "4"
+          ],
+          "every_possible_rank_higher_than_hand_low_cards": true,
+          "future_outcome_assessed": false
+        },
+        "expected_answers": {
+          "visible_count": 8,
+          "missing_count": 5,
+          "defenders_after_three": 1,
+          "lows_ready": false,
+          "ready_low_tricks": 0,
+          "contract_guaranteed": false
+        },
+        "feedback": {
+          "visible_count": {
+            "code": "VISIBLE_COUNT_MISMATCH",
+            "text": "Сложи пять треф в руке и три на столе. Считай исходную схему, а не остаток после розыгрыша."
+          },
+          "missing_count": {
+            "code": "MISSING_COUNT_MISMATCH",
+            "text": "В масти 13 карт. Вычти из 13 число треф, первоначально показанных в обеих руках."
+          },
+          "defenders_after_three": {
+            "code": "DEFENDER_REMAINDER_MISMATCH",
+            "text": "Проследи отдельно длинную трефу защитника: из четырёх карт он сыграл три. Однокарточная трефа другого защитника исчезла ещё в первом круге."
+          },
+          "lows_ready": {
+            "code": "LOW_CARDS_NOT_YET_READY",
+            "text": "У защитника ещё есть одна трефа. Какая бы из непоказанных треф ни осталась, она старше и тройки, и двойки; трёх старших кругов здесь недостаточно."
+          },
+          "ready_low_tricks": {
+            "code": "READY_LOW_TRICK_COUNT_MISMATCH",
+            "text": "Считаем уже готовые взятки сейчас. Пока у защитника остаётся трефа старше обеих фосок, ни одна из них не является готовой взяткой."
+          },
+          "contract_guaranteed": {
+            "code": "CONTRACT_OVERCLAIM",
+            "text": "Заданы только одна масть и три сыгранных круга. Условия выполнения всего контракта и остальные карты не заданы."
+          }
+        },
+        "acceptable_explanations": [
+          "Восемь треф видны, поэтому у защитников было пять. При 4–1 после трёх кругов у длинной трефы остаётся одна карта.",
+          "Непоказанные трефы — валет, десятка, девятка, восьмёрка и четвёрка. Любая из них выше тройки и двойки, поэтому сейчас готовых взяток на эти фоски нет.",
+          "Это вывод о текущем остатке. Без дальнейших условий я не утверждаю, сколько взяток будет получено позже или выполнится ли контракт."
+        ],
+        "human_review": {
+          "not_exact_phrases": true,
+          "required_concepts": [
+            "counts_initial_visible_eight_and_missing_five",
+            "tracks_long_defender_four_minus_three_leaves_one",
+            "remaining_defender_club_outranks_both_lows",
+            "distinguishes_current_readiness_from_future_establishment"
+          ],
+          "acceptable_nuance": "Можно отметить, что дальнейшая выработка потребовала бы дополнительных действий, но конкретный будущий результат из условия не следует.",
+          "ambiguous_or_blank": "NEEDS_CLARIFICATION",
+          "contradictory_explanation": "NOT_CONFIRMED",
+          "automatic_prose_assessment": false
+        }
+      },
+      "next": {
+        "after_feedback": null,
+        "status_after_last": "AWAIT_HUMAN_REVIEW_OR_NEW_UNSEEN_TASK",
+        "same_answer_repetition_is_mastery_evidence": false
+      }
+    },
+    {
+      "step_id": "counter.no-entry",
+      "origin": "AUTHORED_PARTIAL_POSITION",
+      "derived_from": "NEW_AUTHORED_COUNTEREXAMPLE",
+      "presentation": {
+        "title": "Контрпример: готовые трефы и следующий ход",
+        "author_label": "Авторский учебный пример; это не восстановленная сдача Дианы.",
+        "strain": "NT",
+        "partial_deal": true,
+        "hand": {
+          "S": [
+            "A"
+          ],
+          "C": []
+        },
+        "dummy": {
+          "S": [
+            "5"
+          ],
+          "C": [
+            "7",
+            "6",
+            "5"
+          ]
+        },
+        "card_encoding": "S/H/D/C + A,K,Q,J,T,9..2; HAND = рука, DUMMY = стол. Непоказанные масти не заданы.",
+        "target_suit": "C",
+        "entry_suit": "S",
+        "lead": "HAND",
+        "given_conditions": {
+          "defenders_target_cards": [],
+          "other_own_entries_to_dummy": false,
+          "opponents_return_to_dummy": "NOT_GIVEN",
+          "text": "Ход в руке. У защитников треф нет, а 7, 6, 5 треф на столе готовы. Других собственных переходов на стол нет. Помощь защитников с передачей хода на стол не предполагается."
+        },
+        "supplied_probe": {
+          "hand_card": "SA",
+          "dummy_card": "S5",
+          "text": "Для отдельного вопроса проверь предложенный ход: туз пик из руки, со стола 5 пик. Назови, у кого останется ход после этой взятки."
+        },
+        "contrast": {
+          "independent_snapshot": true,
+          "hand": {
+            "S": [
+              "A"
+            ],
+            "C": []
+          },
+          "dummy": {
+            "S": [
+              "5"
+            ],
+            "C": [
+              "7",
+              "6",
+              "5"
+            ]
+          },
+          "lead": "DUMMY",
+          "defenders_target_cards": [],
+          "text": "Отдельный вариант с теми же показанными картами: ход уже на столе. Это другое исходное условие, а не доказанный результат розыгрыша предыдущего положения."
+        },
+        "questions": [
+          {
+            "id": "lows_ready",
+            "type": "boolean",
+            "prompt": "Готовы ли 7, 6, 5 треф на столе как взятки в этой масти, если у защитников треф нет?"
+          },
+          {
+            "id": "ready_low_tricks",
+            "type": "integer",
+            "prompt": "Сколько готовых взяток на трефовые фоски расположено на столе?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "accessible_now",
+            "type": "boolean",
+            "prompt": "Можем ли мы при ходе в руке сами передать ход на стол и сейчас начать отбор этих треф?"
+          },
+          {
+            "id": "winner_after_sa",
+            "type": "choice",
+            "prompt": "Кто получит следующий ход после туза пик из руки и 5 пик со стола?",
+            "options": [
+              {
+                "id": "HAND",
+                "label": "Рука"
+              },
+              {
+                "id": "DUMMY",
+                "label": "Стол"
+              }
+            ]
+          },
+          {
+            "id": "own_entry_exists",
+            "type": "boolean",
+            "prompt": "Есть ли в заданном положении собственный переход из руки на стол?"
+          },
+          {
+            "id": "tricks_if_dummy_leads",
+            "type": "integer",
+            "prompt": "В отдельном варианте ход уже на столе. Сколько трефовых взяток можно сразу отобрать?",
+            "minimum": 0,
+            "maximum": 13
+          },
+          {
+            "id": "contract_guaranteed",
+            "type": "boolean",
+            "prompt": "Гарантируют ли приведённые данные выполнение всего контракта?"
+          }
+        ],
+        "explanation_prompt": "Объясни отдельно готовность трёх треф и доступ к ним. Переводит ли туз пик из руки ход на стол? Обоснуй ответ. Что меняется в отдельном варианте, где ход уже на столе?",
+        "limitation": "Готовые взятки не равны доступным сейчас взяткам. Проверяется только собственный доступ в заданном положении; мы не утверждаем, что защитники никогда не дадут ход на стол, и не устанавливаем результат всего контракта."
+      },
+      "private": {
+        "expected_answers": {
+          "lows_ready": true,
+          "ready_low_tricks": 3,
+          "accessible_now": false,
+          "winner_after_sa": "HAND",
+          "own_entry_exists": false,
+          "tricks_if_dummy_leads": 3,
+          "contract_guaranteed": false
+        },
+        "feedback": {
+          "lows_ready": {
+            "code": "READINESS_ACCESS_CONFUSION",
+            "text": "В этой масти защитникам уже нечем побить трефы стола. Готовность фосок оценивается отдельно от того, можем ли мы сейчас получить к ним ход."
+          },
+          "ready_low_tricks": {
+            "code": "READY_LOW_TRICK_COUNT_MISMATCH",
+            "text": "На столе три трефы, а в руке и у защитников треф нет. Это три готовые взятки в масти, даже если собственного доступа к ним сейчас нет."
+          },
+          "accessible_now": {
+            "code": "NO_OWN_ACCESS_FROM_HAND",
+            "text": "Начни от руки, где находится ход. В ней нет треф; туз пик берёт взятку в руке, а не на столе. Другие собственные переходы исключены условием."
+          },
+          "winner_after_sa": {
+            "code": "TRICK_WINNER_LEAD_MISMATCH",
+            "text": "Туз пик старше пятёрки. Взятку выигрывает рука с тузом; именно из неё будет следующий ход."
+          },
+          "own_entry_exists": {
+            "code": "OWN_ENTRY_NOT_ESTABLISHED",
+            "text": "Для перехода карта на столе должна получить ход. Пятёрка не может принять ход от собственного туза, а другого собственного перехода по условию нет."
+          },
+          "tricks_if_dummy_leads": {
+            "code": "LEAD_ALREADY_AT_WINNERS",
+            "text": "В отдельном варианте ход уже у готовых фосок. Новый переход для немедленного отбора не нужен: можно сыграть все три трефы."
+          },
+          "contract_guaranteed": {
+            "code": "CONTRACT_OVERCLAIM",
+            "text": "Наличие готовых треф и условие о доступе не описывают всю сдачу. Остальные масти и требуемое число взяток не заданы."
+          }
+        },
+        "acceptable_explanations": [
+          "На столе три готовые трефовые взятки: у защитников треф нет. Однако ход в руке, а собственного пути на стол по условию нет.",
+          "После туза пик из руки и пятёрки со стола взятка и следующий ход остаются в руке. Это не переход на стол.",
+          "Если в отдельном исходном положении ход уже на столе, можно сразу взять три трефовые взятки. Это не доказывает доступ к ним из предыдущего положения и не гарантирует весь контракт."
+        ],
+        "human_review": {
+          "not_exact_phrases": true,
+          "required_concepts": [
+            "separates_three_ready_club_tricks_from_current_access",
+            "ace_wins_in_hand_and_retains_lead",
+            "no_other_own_entry_is_given",
+            "dummy_lead_contrast_allows_three_immediate_club_tricks"
+          ],
+          "acceptable_nuance": "Ответ может допускать, что защитники когда-нибудь сами дадут ход на стол, но это не собственный переход и не данное условие.",
+          "ambiguous_or_blank": "NEEDS_CLARIFICATION",
+          "contradictory_explanation": "NOT_CONFIRMED",
+          "automatic_prose_assessment": false
+        }
+      },
+      "next": {
+        "after_feedback": null,
+        "status_after_last": "AWAIT_HUMAN_REVIEW_OR_NEW_UNSEEN_TASK",
+        "same_answer_repetition_is_mastery_evidence": false
+      }
+    }
+  ]
+}

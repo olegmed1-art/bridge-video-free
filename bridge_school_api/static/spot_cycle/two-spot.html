@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Бридж — две задачи о фоске и входе</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="compact.css">
+  <link rel="stylesheet" href="two-spot.css">
+  <script src="two-spot.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#lesson"><span class="brand-mark" aria-hidden="true">♠</span><strong>Бридж</strong></a>
+    <span class="prototype-badge">Локальная учебная практика</span>
+  </header>
+  <main id="lesson">
+    <section class="intro">
+      <div>
+        <p class="eyebrow" id="exercise-progress">Задача 1 из 2</p>
+        <h1 id="exercise-title">Выработать фоску и попасть к ней</h1>
+        <p class="intro-copy">Две независимые позиции. Сначала выберите ход и объясните его своими словами. После обратной связи получите новую задачу.</p>
+      </div>
+      <div class="lesson-meta"><span class="lesson-number" id="lesson-number">01</span><div>Без козыря <span>Перед девятой взяткой</span></div></div>
+    </section>
+    <div class="exercise-layout">
+      <section class="table-panel" aria-labelledby="table-heading">
+        <div class="table-top"><h2 id="table-heading">Открытые карты</h2><span class="contract">Без козыря</span></div>
+        <div class="table-surface compact-table">
+          <div class="visible-hands">
+            <section class="hand" aria-label="Стол, Север"><div class="hand-heading"><span class="seat" aria-hidden="true">N</span><h3>Стол · Север</h3></div><div class="hand-cards" id="dummy-cards"></div></section>
+            <section class="hand" aria-label="Рука, Юг"><div class="hand-heading"><span class="seat you" aria-hidden="true">S</span><h3>Рука · Юг</h3></div><div class="hand-cards" id="hand-cards"></div></section>
+          </div>
+          <p class="entry-board-note">Ход у Юга. Показаны только пять оставшихся карт каждой открытой руки.</p>
+        </div>
+        <div class="table-bottom">Защитники скрыты. Их оставшиеся карты целевой масти по условию разделены 2–2.</div>
+      </section>
+      <section class="question-panel" aria-labelledby="question-heading">
+        <p class="question-progress">Выбор · счёт фосок · своё объяснение</p>
+        <h2 id="question-heading">Как получить взятку фоской?</h2>
+        <div class="goal"><p id="task-text"></p></div>
+        <ul class="conditions" id="conditions"></ul>
+        <form id="answer-form" novalidate>
+          <fieldset><legend>Первый ход для плана</legend><div class="answer-grid compact-answer-grid" id="first-play-options"></div></fieldset>
+          <fieldset><legend id="count-question">Сколько взяток фоской можно гарантировать?</legend>
+            <div class="answer-grid compact-answer-grid"><label><input type="radio" name="guaranteed" value="0"><span>0</span></label><label><input type="radio" name="guaranteed" value="1"><span>1</span></label></div>
+          </fieldset>
+          <label class="explanation-label" for="reason">Объясни: сколько фосок останется, где будет ход и чем перейти к столу?</label>
+          <textarea id="reason" name="reason" rows="4" maxlength="2000" required></textarea>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <button class="primary-button submit-button" type="submit">Показать обратную связь</button>
+        </form>
+        <section id="feedback" class="feedback" aria-live="polite" hidden>
+          <strong id="feedback-title" tabindex="-1"></strong>
+          <p id="your-explanation"></p>
+          <p id="feedback-copy"></p>
+          <p id="feedback-review"></p>
+          <button id="retry-button" class="secondary-button" type="button">Попробовать на другой позиции</button>
+        </section>
+        <p class="practice-note">Учебная практика без записи результата или оценки освоения темы. Объяснение требует проверки преподавателем.</p>
+      </section>
+    </div>
+    <footer class="page-footer"><p>Числа 1/0 относятся только к этим пяти-карточным позициям и данному условию 2–2.</p><span>Синтетический локальный режим</span></footer>
+  </main>
+</body>
+</html>

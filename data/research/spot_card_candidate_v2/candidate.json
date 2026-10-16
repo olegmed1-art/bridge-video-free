@@ -1,0 +1,1912 @@
+{
+  "schema": "spot-establishment-candidate-v1",
+  "generated_by": "local-authored-spot-template-v1",
+  "base_commit": "cc06429f22785aa4a836e37c96dd5f0f2502e31b",
+  "seed": 2026101301,
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "school_canon_activation_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "publication_allowed": false,
+    "automatic_student_scoring_allowed": false
+  },
+  "canon_binding": {
+    "status": "SPECIFIC_ACTIVE_SPOT_RULE_NOT_FOUND_IN_READ_ONLY_REPOSITORY_SCOPE",
+    "active_rule_id": null,
+    "related_rule_ids": [
+      "RULE-L1-PLAY-NT-COUNT-TOP-TRICKS",
+      "RULE-L1-PLAY-NT-FIND-EXTRA-TRICKS"
+    ],
+    "related_rule_source": "bridge_school_api/l1_canonical_runtime.py",
+    "limitation": "Related rules guide task structure only; no assertion of activated spot/entry teaching canon."
+  },
+  "excluded_answer_keys": [
+    {
+      "id": "Tester ШБ-001 / EX-0002",
+      "use_as_gold": false,
+      "reason": "A863+QJ52 gives 8 own and 5 missing cards; old 3-3/4-2 answer is arithmetically inconsistent",
+      "source_class": "simulated_tester_not_student_skill_evidence"
+    }
+  ],
+  "exercises": [
+    {
+      "exercise_id": "spot-length-c-entry-v1",
+      "status": "candidate",
+      "prompt": {
+        "task": "SPOT_ESTABLISHMENT_AND_ENTRY",
+        "question": "Игра без козыря. Перед девятой взяткой ход Юга. Можно ли гарантированно взять хотя бы одну трефовую фоску стола? Посчитайте готовые взятки и оставшиеся карты масти у защиты; укажите порядок ходов и переход либо объясните его отсутствие.",
+        "strain": "NT",
+        "declarer": "S",
+        "dummy": "N",
+        "leader": "S",
+        "trick_index": 9,
+        "cards_per_hand": 5,
+        "hand_pbn": "3.2.A.AK",
+        "dummy_pbn": ".A.2.765",
+        "target_suit": "C",
+        "given_information": {
+          "defenders_remaining_lengths": [
+            2,
+            2
+          ],
+          "played_in_target_suit": [
+            "C2",
+            "C3",
+            "C4",
+            "C8"
+          ]
+        },
+        "response_type": "plan_with_entry_or_impossibility",
+        "context": "Авторская учебная позиция после восьми взяток; оценивается только оставшаяся позиция."
+      },
+      "expected_solution": {
+        "can_guarantee_spot_trick": true,
+        "target_spot_tricks": 1,
+        "top_tricks": 4,
+        "maximum_partnership_tricks": 5,
+        "explanation": "Сначала сыграть туза и короля длинной масти из руки, снося со стола две младшие карты. Затем перейти малой червой к тузу стола и взять оставшуюся фоску. Если потратить туза червей до отбора туза и короля масти, фоска останется без перехода."
+      },
+      "rubric": {
+        "assessment_scope": "remaining_position_only",
+        "target_owner": "N",
+        "target_cards": [
+          "C7",
+          "C6",
+          "C5"
+        ],
+        "target_definition": "trick won by one of these cards",
+        "checks": [
+          "count_ready_tricks",
+          "count_remaining_defender_cards",
+          "establish_length",
+          "preserve_or_identify_missing_entry"
+        ],
+        "automatic_student_scoring_allowed": false
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "evidence": {
+        "full_deal": {
+          "N": "2.AJ73.J732.7652",
+          "S": "J853.T62.AT6.AK8",
+          "E": "AK96.K85.K95.QJ4",
+          "W": "QT74.Q94.Q84.T93"
+        },
+        "full_deal_pbn": "N:2.AJ73.J732.7652 AK96.K85.K95.QJ4 J853.T62.AT6.AK8 QT74.Q94.Q84.T93",
+        "setup_start_leader": "W",
+        "setup_tricks": [
+          {
+            "leader": "W",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "W",
+                "card": "ST"
+              },
+              {
+                "seat": "N",
+                "card": "S2"
+              },
+              {
+                "seat": "E",
+                "card": "S9"
+              },
+              {
+                "seat": "S",
+                "card": "SJ"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S8"
+              },
+              {
+                "seat": "W",
+                "card": "S7"
+              },
+              {
+                "seat": "N",
+                "card": "HJ"
+              },
+              {
+                "seat": "E",
+                "card": "S6"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "E",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S5"
+              },
+              {
+                "seat": "W",
+                "card": "S4"
+              },
+              {
+                "seat": "N",
+                "card": "DJ"
+              },
+              {
+                "seat": "E",
+                "card": "SA"
+              }
+            ]
+          },
+          {
+            "leader": "E",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "E",
+                "card": "C4"
+              },
+              {
+                "seat": "S",
+                "card": "C8"
+              },
+              {
+                "seat": "W",
+                "card": "C3"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "HT"
+              },
+              {
+                "seat": "W",
+                "card": "H9"
+              },
+              {
+                "seat": "N",
+                "card": "H7"
+              },
+              {
+                "seat": "E",
+                "card": "H8"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H6"
+              },
+              {
+                "seat": "W",
+                "card": "H4"
+              },
+              {
+                "seat": "N",
+                "card": "H3"
+              },
+              {
+                "seat": "E",
+                "card": "H5"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DT"
+              },
+              {
+                "seat": "W",
+                "card": "D8"
+              },
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "D9"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "D6"
+              },
+              {
+                "seat": "W",
+                "card": "D4"
+              },
+              {
+                "seat": "N",
+                "card": "D3"
+              },
+              {
+                "seat": "E",
+                "card": "D5"
+              }
+            ]
+          }
+        ],
+        "position": {
+          "hands": {
+            "N": [
+              "C7",
+              "C6",
+              "C5",
+              "HA",
+              "D2"
+            ],
+            "S": [
+              "CA",
+              "CK",
+              "H2",
+              "DA",
+              "S3"
+            ],
+            "E": [
+              "CQ",
+              "CJ",
+              "HK",
+              "DK",
+              "SK"
+            ],
+            "W": [
+              "CT",
+              "C9",
+              "HQ",
+              "DQ",
+              "SQ"
+            ]
+          },
+          "leader": "S",
+          "strain": "NT"
+        },
+        "example_continuation": [
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              },
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N"
+          },
+          {
+            "leader": "N",
+            "cards": [
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              },
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              }
+            ],
+            "winner": "N"
+          },
+          {
+            "leader": "N",
+            "cards": [
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              },
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S"
+          }
+        ],
+        "premature_entry_counterline": [
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N"
+          },
+          {
+            "leader": "N",
+            "cards": [
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              },
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E"
+          }
+        ]
+      },
+      "provenance": {
+        "authorship": "new_local_authored_template",
+        "external_deal_copied": false,
+        "generator_source_commit": "cc06429f22785aa4a836e37c96dd5f0f2502e31b",
+        "generator_seed": 2026101301,
+        "sampled_world_fingerprint": "2f597c3b1045d1fa6488edb396782a52a8129742ae6abf9e908ac208b07d849f",
+        "construction": "authored five-card template; sampler orders free E/W setup cards; explicit C/D symmetry and HA/H2 counterexample",
+        "deal_sha256": "f170a79ec85f4dcfb263e3142c8054135d345bdedc871b5ac74e1acb173b414b"
+      }
+    },
+    {
+      "exercise_id": "spot-length-c-no-entry-v1",
+      "status": "candidate",
+      "prompt": {
+        "task": "SPOT_ESTABLISHMENT_AND_ENTRY",
+        "question": "Игра без козыря. Перед девятой взяткой ход Юга. Можно ли гарантированно взять хотя бы одну трефовую фоску стола? Посчитайте готовые взятки и оставшиеся карты масти у защиты; укажите порядок ходов и переход либо объясните его отсутствие.",
+        "strain": "NT",
+        "declarer": "S",
+        "dummy": "N",
+        "leader": "S",
+        "trick_index": 9,
+        "cards_per_hand": 5,
+        "hand_pbn": "3.A.A.AK",
+        "dummy_pbn": ".2.2.765",
+        "target_suit": "C",
+        "given_information": {
+          "defenders_remaining_lengths": [
+            2,
+            2
+          ],
+          "played_in_target_suit": [
+            "C2",
+            "C3",
+            "C4",
+            "C8"
+          ]
+        },
+        "response_type": "plan_with_entry_or_impossibility",
+        "context": "Авторская учебная позиция после восьми взяток; оценивается только оставшаяся позиция."
+      },
+      "expected_solution": {
+        "can_guarantee_spot_trick": false,
+        "target_spot_tricks": 0,
+        "top_tricks": 4,
+        "maximum_partnership_tricks": 4,
+        "explanation": "После отбора туза и короля масти фоска стола станет старшей, но на стол нет перехода. Туз червей в руке не является переходом на стол. Защита может не помогать; наличие старшей фоски само по себе не гарантирует взятку."
+      },
+      "rubric": {
+        "assessment_scope": "remaining_position_only",
+        "target_owner": "N",
+        "target_cards": [
+          "C7",
+          "C6",
+          "C5"
+        ],
+        "target_definition": "trick won by one of these cards",
+        "checks": [
+          "count_ready_tricks",
+          "count_remaining_defender_cards",
+          "establish_length",
+          "preserve_or_identify_missing_entry"
+        ],
+        "automatic_student_scoring_allowed": false
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "evidence": {
+        "full_deal": {
+          "N": "2.J732.J732.7652",
+          "S": "J853.AT6.AT6.AK8",
+          "E": "AK96.K85.K95.QJ4",
+          "W": "QT74.Q94.Q84.T93"
+        },
+        "full_deal_pbn": "N:2.J732.J732.7652 AK96.K85.K95.QJ4 J853.AT6.AT6.AK8 QT74.Q94.Q84.T93",
+        "setup_start_leader": "W",
+        "setup_tricks": [
+          {
+            "leader": "W",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "W",
+                "card": "ST"
+              },
+              {
+                "seat": "N",
+                "card": "S2"
+              },
+              {
+                "seat": "E",
+                "card": "S9"
+              },
+              {
+                "seat": "S",
+                "card": "SJ"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S8"
+              },
+              {
+                "seat": "W",
+                "card": "S7"
+              },
+              {
+                "seat": "N",
+                "card": "HJ"
+              },
+              {
+                "seat": "E",
+                "card": "S6"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "E",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S5"
+              },
+              {
+                "seat": "W",
+                "card": "S4"
+              },
+              {
+                "seat": "N",
+                "card": "DJ"
+              },
+              {
+                "seat": "E",
+                "card": "SA"
+              }
+            ]
+          },
+          {
+            "leader": "E",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "E",
+                "card": "C4"
+              },
+              {
+                "seat": "S",
+                "card": "C8"
+              },
+              {
+                "seat": "W",
+                "card": "C3"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "HT"
+              },
+              {
+                "seat": "W",
+                "card": "H9"
+              },
+              {
+                "seat": "N",
+                "card": "H7"
+              },
+              {
+                "seat": "E",
+                "card": "H8"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H6"
+              },
+              {
+                "seat": "W",
+                "card": "H4"
+              },
+              {
+                "seat": "N",
+                "card": "H3"
+              },
+              {
+                "seat": "E",
+                "card": "H5"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DT"
+              },
+              {
+                "seat": "W",
+                "card": "D8"
+              },
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "D9"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "D6"
+              },
+              {
+                "seat": "W",
+                "card": "D4"
+              },
+              {
+                "seat": "N",
+                "card": "D3"
+              },
+              {
+                "seat": "E",
+                "card": "D5"
+              }
+            ]
+          }
+        ],
+        "position": {
+          "hands": {
+            "N": [
+              "C7",
+              "C6",
+              "C5",
+              "H2",
+              "D2"
+            ],
+            "S": [
+              "CA",
+              "CK",
+              "HA",
+              "DA",
+              "S3"
+            ],
+            "E": [
+              "CQ",
+              "CJ",
+              "HK",
+              "DK",
+              "SK"
+            ],
+            "W": [
+              "CT",
+              "C9",
+              "HQ",
+              "DQ",
+              "SQ"
+            ]
+          },
+          "leader": "S",
+          "strain": "NT"
+        },
+        "example_continuation": [
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "C9"
+              },
+              {
+                "seat": "N",
+                "card": "C5"
+              },
+              {
+                "seat": "E",
+                "card": "CJ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CK"
+              },
+              {
+                "seat": "W",
+                "card": "CT"
+              },
+              {
+                "seat": "N",
+                "card": "C6"
+              },
+              {
+                "seat": "E",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "HA"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "H2"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "DQ"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              },
+              {
+                "seat": "E",
+                "card": "DK"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E"
+          }
+        ],
+        "premature_entry_counterline": []
+      },
+      "provenance": {
+        "authorship": "new_local_authored_template",
+        "external_deal_copied": false,
+        "generator_source_commit": "cc06429f22785aa4a836e37c96dd5f0f2502e31b",
+        "generator_seed": 2026101301,
+        "sampled_world_fingerprint": "2f597c3b1045d1fa6488edb396782a52a8129742ae6abf9e908ac208b07d849f",
+        "construction": "authored five-card template; sampler orders free E/W setup cards; explicit C/D symmetry and HA/H2 counterexample",
+        "deal_sha256": "d282be5d3eb2c996b0ece4bc55c9f8e07525a764a5f58624108420ad374e5e32"
+      }
+    },
+    {
+      "exercise_id": "spot-length-d-entry-v1",
+      "status": "candidate",
+      "prompt": {
+        "task": "SPOT_ESTABLISHMENT_AND_ENTRY",
+        "question": "Игра без козыря. Перед девятой взяткой ход Юга. Можно ли гарантированно взять хотя бы одну бубновую фоску стола? Посчитайте готовые взятки и оставшиеся карты масти у защиты; укажите порядок ходов и переход либо объясните его отсутствие.",
+        "strain": "NT",
+        "declarer": "S",
+        "dummy": "N",
+        "leader": "S",
+        "trick_index": 9,
+        "cards_per_hand": 5,
+        "hand_pbn": "3.2.AK.A",
+        "dummy_pbn": ".A.765.2",
+        "target_suit": "D",
+        "given_information": {
+          "defenders_remaining_lengths": [
+            2,
+            2
+          ],
+          "played_in_target_suit": [
+            "D2",
+            "D3",
+            "D4",
+            "D8"
+          ]
+        },
+        "response_type": "plan_with_entry_or_impossibility",
+        "context": "Авторская учебная позиция после восьми взяток; оценивается только оставшаяся позиция."
+      },
+      "expected_solution": {
+        "can_guarantee_spot_trick": true,
+        "target_spot_tricks": 1,
+        "top_tricks": 4,
+        "maximum_partnership_tricks": 5,
+        "explanation": "Сначала сыграть туза и короля длинной масти из руки, снося со стола две младшие карты. Затем перейти малой червой к тузу стола и взять оставшуюся фоску. Если потратить туза червей до отбора туза и короля масти, фоска останется без перехода."
+      },
+      "rubric": {
+        "assessment_scope": "remaining_position_only",
+        "target_owner": "N",
+        "target_cards": [
+          "D7",
+          "D6",
+          "D5"
+        ],
+        "target_definition": "trick won by one of these cards",
+        "checks": [
+          "count_ready_tricks",
+          "count_remaining_defender_cards",
+          "establish_length",
+          "preserve_or_identify_missing_entry"
+        ],
+        "automatic_student_scoring_allowed": false
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "evidence": {
+        "full_deal": {
+          "N": "2.AJ73.7652.J732",
+          "S": "J853.T62.AK8.AT6",
+          "E": "AK96.K85.QJ4.K95",
+          "W": "QT74.Q94.T93.Q84"
+        },
+        "full_deal_pbn": "N:2.AJ73.7652.J732 AK96.K85.QJ4.K95 J853.T62.AK8.AT6 QT74.Q94.T93.Q84",
+        "setup_start_leader": "W",
+        "setup_tricks": [
+          {
+            "leader": "W",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "W",
+                "card": "ST"
+              },
+              {
+                "seat": "N",
+                "card": "S2"
+              },
+              {
+                "seat": "E",
+                "card": "S9"
+              },
+              {
+                "seat": "S",
+                "card": "SJ"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S8"
+              },
+              {
+                "seat": "W",
+                "card": "S7"
+              },
+              {
+                "seat": "N",
+                "card": "HJ"
+              },
+              {
+                "seat": "E",
+                "card": "S6"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "E",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S5"
+              },
+              {
+                "seat": "W",
+                "card": "S4"
+              },
+              {
+                "seat": "N",
+                "card": "CJ"
+              },
+              {
+                "seat": "E",
+                "card": "SA"
+              }
+            ]
+          },
+          {
+            "leader": "E",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "E",
+                "card": "D4"
+              },
+              {
+                "seat": "S",
+                "card": "D8"
+              },
+              {
+                "seat": "W",
+                "card": "D3"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "HT"
+              },
+              {
+                "seat": "W",
+                "card": "H9"
+              },
+              {
+                "seat": "N",
+                "card": "H7"
+              },
+              {
+                "seat": "E",
+                "card": "H8"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H6"
+              },
+              {
+                "seat": "W",
+                "card": "H4"
+              },
+              {
+                "seat": "N",
+                "card": "H3"
+              },
+              {
+                "seat": "E",
+                "card": "H5"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CT"
+              },
+              {
+                "seat": "W",
+                "card": "C8"
+              },
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "C9"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "C6"
+              },
+              {
+                "seat": "W",
+                "card": "C4"
+              },
+              {
+                "seat": "N",
+                "card": "C3"
+              },
+              {
+                "seat": "E",
+                "card": "C5"
+              }
+            ]
+          }
+        ],
+        "position": {
+          "hands": {
+            "N": [
+              "D7",
+              "D6",
+              "D5",
+              "HA",
+              "C2"
+            ],
+            "S": [
+              "DA",
+              "DK",
+              "H2",
+              "CA",
+              "S3"
+            ],
+            "E": [
+              "DQ",
+              "DJ",
+              "HK",
+              "CK",
+              "SK"
+            ],
+            "W": [
+              "DT",
+              "D9",
+              "HQ",
+              "CQ",
+              "SQ"
+            ]
+          },
+          "leader": "S",
+          "strain": "NT"
+        },
+        "example_continuation": [
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              },
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N"
+          },
+          {
+            "leader": "N",
+            "cards": [
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              },
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              }
+            ],
+            "winner": "N"
+          },
+          {
+            "leader": "N",
+            "cards": [
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              },
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              }
+            ],
+            "winner": "S"
+          }
+        ],
+        "premature_entry_counterline": [
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H2"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "HA"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "N"
+          },
+          {
+            "leader": "N",
+            "cards": [
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              },
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E"
+          }
+        ]
+      },
+      "provenance": {
+        "authorship": "new_local_authored_template",
+        "external_deal_copied": false,
+        "generator_source_commit": "cc06429f22785aa4a836e37c96dd5f0f2502e31b",
+        "generator_seed": 2026101301,
+        "sampled_world_fingerprint": "2f597c3b1045d1fa6488edb396782a52a8129742ae6abf9e908ac208b07d849f",
+        "construction": "authored five-card template; sampler orders free E/W setup cards; explicit C/D symmetry and HA/H2 counterexample",
+        "deal_sha256": "edbffcef5987ebb55dbbd5ec19ae44347190d3d946f604dd768e3532dfa0d38d"
+      }
+    },
+    {
+      "exercise_id": "spot-length-d-no-entry-v1",
+      "status": "candidate",
+      "prompt": {
+        "task": "SPOT_ESTABLISHMENT_AND_ENTRY",
+        "question": "Игра без козыря. Перед девятой взяткой ход Юга. Можно ли гарантированно взять хотя бы одну бубновую фоску стола? Посчитайте готовые взятки и оставшиеся карты масти у защиты; укажите порядок ходов и переход либо объясните его отсутствие.",
+        "strain": "NT",
+        "declarer": "S",
+        "dummy": "N",
+        "leader": "S",
+        "trick_index": 9,
+        "cards_per_hand": 5,
+        "hand_pbn": "3.A.AK.A",
+        "dummy_pbn": ".2.765.2",
+        "target_suit": "D",
+        "given_information": {
+          "defenders_remaining_lengths": [
+            2,
+            2
+          ],
+          "played_in_target_suit": [
+            "D2",
+            "D3",
+            "D4",
+            "D8"
+          ]
+        },
+        "response_type": "plan_with_entry_or_impossibility",
+        "context": "Авторская учебная позиция после восьми взяток; оценивается только оставшаяся позиция."
+      },
+      "expected_solution": {
+        "can_guarantee_spot_trick": false,
+        "target_spot_tricks": 0,
+        "top_tricks": 4,
+        "maximum_partnership_tricks": 4,
+        "explanation": "После отбора туза и короля масти фоска стола станет старшей, но на стол нет перехода. Туз червей в руке не является переходом на стол. Защита может не помогать; наличие старшей фоски само по себе не гарантирует взятку."
+      },
+      "rubric": {
+        "assessment_scope": "remaining_position_only",
+        "target_owner": "N",
+        "target_cards": [
+          "D7",
+          "D6",
+          "D5"
+        ],
+        "target_definition": "trick won by one of these cards",
+        "checks": [
+          "count_ready_tricks",
+          "count_remaining_defender_cards",
+          "establish_length",
+          "preserve_or_identify_missing_entry"
+        ],
+        "automatic_student_scoring_allowed": false
+      },
+      "arithmetic": {
+        "full_deal_own_target_cards": 7,
+        "full_deal_missing_target_cards": 6,
+        "full_deal_defender_split": [
+          3,
+          3
+        ],
+        "played_target_cards": 4,
+        "remaining_own_target_cards": 5,
+        "remaining_missing_target_cards": 4,
+        "remaining_defender_split": [
+          2,
+          2
+        ]
+      },
+      "evidence": {
+        "full_deal": {
+          "N": "2.J732.7652.J732",
+          "S": "J853.AT6.AK8.AT6",
+          "E": "AK96.K85.QJ4.K95",
+          "W": "QT74.Q94.T93.Q84"
+        },
+        "full_deal_pbn": "N:2.J732.7652.J732 AK96.K85.QJ4.K95 J853.AT6.AK8.AT6 QT74.Q94.T93.Q84",
+        "setup_start_leader": "W",
+        "setup_tricks": [
+          {
+            "leader": "W",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "W",
+                "card": "ST"
+              },
+              {
+                "seat": "N",
+                "card": "S2"
+              },
+              {
+                "seat": "E",
+                "card": "S9"
+              },
+              {
+                "seat": "S",
+                "card": "SJ"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S8"
+              },
+              {
+                "seat": "W",
+                "card": "S7"
+              },
+              {
+                "seat": "N",
+                "card": "HJ"
+              },
+              {
+                "seat": "E",
+                "card": "S6"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "E",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S5"
+              },
+              {
+                "seat": "W",
+                "card": "S4"
+              },
+              {
+                "seat": "N",
+                "card": "CJ"
+              },
+              {
+                "seat": "E",
+                "card": "SA"
+              }
+            ]
+          },
+          {
+            "leader": "E",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "E",
+                "card": "D4"
+              },
+              {
+                "seat": "S",
+                "card": "D8"
+              },
+              {
+                "seat": "W",
+                "card": "D3"
+              },
+              {
+                "seat": "N",
+                "card": "D2"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "HT"
+              },
+              {
+                "seat": "W",
+                "card": "H9"
+              },
+              {
+                "seat": "N",
+                "card": "H7"
+              },
+              {
+                "seat": "E",
+                "card": "H8"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "H6"
+              },
+              {
+                "seat": "W",
+                "card": "H4"
+              },
+              {
+                "seat": "N",
+                "card": "H3"
+              },
+              {
+                "seat": "E",
+                "card": "H5"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CT"
+              },
+              {
+                "seat": "W",
+                "card": "C8"
+              },
+              {
+                "seat": "N",
+                "card": "C7"
+              },
+              {
+                "seat": "E",
+                "card": "C9"
+              }
+            ]
+          },
+          {
+            "leader": "S",
+            "winner": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "C6"
+              },
+              {
+                "seat": "W",
+                "card": "C4"
+              },
+              {
+                "seat": "N",
+                "card": "C3"
+              },
+              {
+                "seat": "E",
+                "card": "C5"
+              }
+            ]
+          }
+        ],
+        "position": {
+          "hands": {
+            "N": [
+              "D7",
+              "D6",
+              "D5",
+              "H2",
+              "C2"
+            ],
+            "S": [
+              "DA",
+              "DK",
+              "HA",
+              "CA",
+              "S3"
+            ],
+            "E": [
+              "DQ",
+              "DJ",
+              "HK",
+              "CK",
+              "SK"
+            ],
+            "W": [
+              "DT",
+              "D9",
+              "HQ",
+              "CQ",
+              "SQ"
+            ]
+          },
+          "leader": "S",
+          "strain": "NT"
+        },
+        "example_continuation": [
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DA"
+              },
+              {
+                "seat": "W",
+                "card": "D9"
+              },
+              {
+                "seat": "N",
+                "card": "D5"
+              },
+              {
+                "seat": "E",
+                "card": "DJ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "DK"
+              },
+              {
+                "seat": "W",
+                "card": "DT"
+              },
+              {
+                "seat": "N",
+                "card": "D6"
+              },
+              {
+                "seat": "E",
+                "card": "DQ"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "HA"
+              },
+              {
+                "seat": "W",
+                "card": "HQ"
+              },
+              {
+                "seat": "N",
+                "card": "H2"
+              },
+              {
+                "seat": "E",
+                "card": "HK"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "CA"
+              },
+              {
+                "seat": "W",
+                "card": "CQ"
+              },
+              {
+                "seat": "N",
+                "card": "C2"
+              },
+              {
+                "seat": "E",
+                "card": "CK"
+              }
+            ],
+            "winner": "S"
+          },
+          {
+            "leader": "S",
+            "cards": [
+              {
+                "seat": "S",
+                "card": "S3"
+              },
+              {
+                "seat": "W",
+                "card": "SQ"
+              },
+              {
+                "seat": "N",
+                "card": "D7"
+              },
+              {
+                "seat": "E",
+                "card": "SK"
+              }
+            ],
+            "winner": "E"
+          }
+        ],
+        "premature_entry_counterline": []
+      },
+      "provenance": {
+        "authorship": "new_local_authored_template",
+        "external_deal_copied": false,
+        "generator_source_commit": "cc06429f22785aa4a836e37c96dd5f0f2502e31b",
+        "generator_seed": 2026101301,
+        "sampled_world_fingerprint": "2f597c3b1045d1fa6488edb396782a52a8129742ae6abf9e908ac208b07d849f",
+        "construction": "authored five-card template; sampler orders free E/W setup cards; explicit C/D symmetry and HA/H2 counterexample",
+        "deal_sha256": "84e5c763ff5adac0bab82691f35490e56516f8dce359750ebfe4a132c1f66345"
+      }
+    }
+  ]
+}

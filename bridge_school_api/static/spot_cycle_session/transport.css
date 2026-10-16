@@ -1,0 +1,24 @@
+/* Layout for teacher-supplied questions; no lesson logic. */
+.transport-field,.transport-pair { margin:0 0 18px; min-width:0; }
+.transport-field label,.question-page>label { display:block; margin:0 0 8px; font-size:14px; line-height:1.5; }
+.transport-field select,.transport-field input,.question-page textarea { width:100%; padding:10px; border:1px solid var(--line); border-radius:7px; color:var(--ink); background:#fffef9; }
+.transport-field select { white-space:normal; }
+.transport-pair { border:1px solid var(--line); border-radius:8px; padding:12px; }
+.transport-pair legend { font-size:14px; line-height:1.5; padding:0 5px; }
+.transport-pair .transport-field:last-child { margin-bottom:0; }
+.given-conditions { margin-bottom:20px; font-size:13px; line-height:1.55; }
+.given-conditions summary { cursor:pointer; font-weight:600; }
+.given-conditions .conditions { padding-left:20px; }
+.given-conditions li { display:list-item; }
+.given-conditions li::before { display:none; }
+.given-conditions li p { margin:4px 0; }
+.transport-error { border-left:3px solid var(--red); padding:10px; font-size:13px; }
+#connection-status { color:var(--muted); font-size:13px; }
+.preview-label { display:inline-block; background:#e5be7530; border:1px solid var(--accent); border-radius:8px; padding:8px 12px; font-size:13px; }
+.partial-suit .cards { flex-wrap:wrap; }
+.entry-board-note { margin:16px 0; }
+.question-page textarea { resize:vertical; min-height:120px; }
+button:disabled { opacity:.6; }
+select:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex="-1"]:focus { outline:3px solid #bb8531; outline-offset:3px; }
+.response-receipt h3,.feedback h3 { font-size:18px; }
+@media(max-width:560px) { .transport-field select { font-size:14px; } .table-surface.entry-table { padding:0 18px; } }

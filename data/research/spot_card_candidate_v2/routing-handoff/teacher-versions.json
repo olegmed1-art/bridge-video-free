@@ -1,0 +1,730 @@
+{
+  "schema": "local-teacher-routing-private-versions-v2",
+  "audience": "TEACHER_ONLY",
+  "versions": [
+    {
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "persisted": false,
+      "mastery_event_created": false,
+      "student_profile_written": false,
+      "curriculum_activated": false,
+      "canon_written": false,
+      "actual_mastery": null,
+      "exercise_version": {
+        "prompt": {
+          "exercise_id": "spot.a7c2",
+          "task": "LOW_CARD_ENTRY_CANDIDATE",
+          "method_version": "spot-routing-handoff-v2",
+          "candidate_version": "spot-establishment-candidate-v1-routing.2",
+          "fixture_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "response_schema": "low-card-structured-response-v1",
+          "response_fields": [
+            "schema",
+            "exercise_id",
+            "prompt_sha256",
+            "answers",
+            "explanation"
+          ],
+          "presentation": {
+            "title": "Розыгрыш позиции",
+            "author_label": "Авторская учебная позиция.",
+            "strain": "NT",
+            "partial_deal": false,
+            "position_kind": "COMPLETE_REMAINING_HANDS",
+            "trick_index": 9,
+            "cards_per_hand": 5,
+            "declarer": "S",
+            "dummy_seat": "N",
+            "lead": "HAND",
+            "hand": {
+              "S": [
+                "3"
+              ],
+              "H": [
+                "2"
+              ],
+              "D": [
+                "A",
+                "K"
+              ],
+              "C": [
+                "A"
+              ]
+            },
+            "dummy": {
+              "S": [],
+              "H": [
+                "A"
+              ],
+              "D": [
+                "7",
+                "6",
+                "5"
+              ],
+              "C": [
+                "2"
+              ]
+            },
+            "target_suit": "D",
+            "card_encoding": "S.H.D.C; HAND = Юг, DUMMY = Север; A,K,Q,J,T,9..2.",
+            "given_information": {
+              "defenders_remaining_lengths": [
+                2,
+                2
+              ],
+              "played_in_target_suit": [
+                "D2",
+                "D3",
+                "D4",
+                "D8"
+              ]
+            },
+            "task_text": "Без козыря. До первого хода в девятой взятке ход в руке. Никакие действия из показанной позиции ещё не сделаны. Распределение оставшихся карт целевой масти у защиты 2–2 дано условием. Первые восемь взяток в ответ не входят. Считайте только будущие взятки, выигранные одной из фосок 7, 6, 5 стола, а не снос фоски на взятку руки.",
+            "questions": [
+              {
+                "id": "visible_count",
+                "type": "integer",
+                "prompt": "Сколько карт целевой масти осталось в руке и на столе вместе?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "missing_count",
+                "type": "integer",
+                "prompt": "Сколько карт этой масти осталось у защиты с учётом уже сыгранных карт?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "guaranteed_spot_tricks_from_position",
+                "type": "integer",
+                "prompt": "Сколько новых взяток фосками 7, 6, 5 стола можно гарантировать с девятой по тринадцатую взятку при лучшем плане из этой позиции против любой допустимой защиты? Считайте взятки, которые удастся взять имеющимися картами, а не просто число выработанных фосок.",
+                "minimum": 0,
+                "maximum": 3
+              }
+            ],
+            "explanation_prompt": "Объясните порядок ходов и почему ваш план работает или не работает."
+          },
+          "prompt_sha256": "871d6bd12d348617bcce3507e4747548720d8667bc05da134e31d2410da51ac8"
+        },
+        "expected_solution": {
+          "expected_answers": {
+            "visible_count": 5,
+            "missing_count": 4,
+            "guaranteed_spot_tricks_from_position": 1
+          },
+          "feedback": {
+            "visible_count": {
+              "code": "VISIBLE_COUNT_MISMATCH",
+              "text": "Пересчитайте оставшиеся карты целевой масти в обеих руках."
+            },
+            "missing_count": {
+              "code": "REMAINING_COUNT_MISMATCH",
+              "text": "Из 13 вычтите видимые оставшиеся карты и уже сыгранные карты этой масти."
+            },
+            "guaranteed_spot_tricks_from_position": {
+              "code": "PLAN_REQUIRES_REVIEW",
+              "text": "Сначала сыграть туза и короля длинной масти из руки, снося со стола две младшие карты. Затем перейти малой червой к тузу стола и взять оставшуюся фоску. Если потратить туза червей до отбора туза и короля масти, фоска останется без перехода."
+            }
+          },
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "evidence_ref": {
+            "path": "../candidate.json",
+            "sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+            "pointer": "/exercises/2/evidence"
+          }
+        },
+        "rubric": {
+          "scope": "FORMATIVE_TYPED_FIELDS_ONLY",
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "authority": {
+            "authority_class": "CANDIDATE_RESEARCH",
+            "review_state": "REVIEW_REQUIRED",
+            "publication_allowed": false,
+            "curriculum_activation_allowed": false,
+            "student_profile_write_allowed": false,
+            "canon_write_allowed": false,
+            "mastery_write_allowed": false
+          },
+          "automatic_assessment_enabled": false,
+          "mastery_inference_allowed": false,
+          "answer_metric": {
+            "field": "guaranteed_spot_tricks_from_position",
+            "metric_id": "guaranteed-spot-tricks-from-position-v1",
+            "contract_file": "SPOT_TRICK_COUNT_V1.json"
+          }
+        },
+        "generated_by": "spot-routing-handoff-v2",
+        "method_version": "spot-routing-handoff-v2",
+        "provenance": {
+          "candidate_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "source_exercise_id": "spot-length-d-entry-v1",
+          "rule_basis_ref": "RULE_BASIS.md",
+          "origin": "AUTHORED_EXERCISE_NOT_VIDEO_EPISODE"
+        },
+        "status": "candidate"
+      }
+    },
+    {
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "persisted": false,
+      "mastery_event_created": false,
+      "student_profile_written": false,
+      "curriculum_activated": false,
+      "canon_written": false,
+      "actual_mastery": null,
+      "exercise_version": {
+        "prompt": {
+          "exercise_id": "spot.f3b8",
+          "task": "LOW_CARD_ENTRY_CANDIDATE",
+          "method_version": "spot-routing-handoff-v2",
+          "candidate_version": "spot-establishment-candidate-v1-routing.2",
+          "fixture_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "response_schema": "low-card-structured-response-v1",
+          "response_fields": [
+            "schema",
+            "exercise_id",
+            "prompt_sha256",
+            "answers",
+            "explanation"
+          ],
+          "presentation": {
+            "title": "Розыгрыш позиции",
+            "author_label": "Авторская учебная позиция.",
+            "strain": "NT",
+            "partial_deal": false,
+            "position_kind": "COMPLETE_REMAINING_HANDS",
+            "trick_index": 9,
+            "cards_per_hand": 5,
+            "declarer": "S",
+            "dummy_seat": "N",
+            "lead": "HAND",
+            "hand": {
+              "S": [
+                "3"
+              ],
+              "H": [
+                "A"
+              ],
+              "D": [
+                "A"
+              ],
+              "C": [
+                "A",
+                "K"
+              ]
+            },
+            "dummy": {
+              "S": [],
+              "H": [
+                "2"
+              ],
+              "D": [
+                "2"
+              ],
+              "C": [
+                "7",
+                "6",
+                "5"
+              ]
+            },
+            "target_suit": "C",
+            "card_encoding": "S.H.D.C; HAND = Юг, DUMMY = Север; A,K,Q,J,T,9..2.",
+            "given_information": {
+              "defenders_remaining_lengths": [
+                2,
+                2
+              ],
+              "played_in_target_suit": [
+                "C2",
+                "C3",
+                "C4",
+                "C8"
+              ]
+            },
+            "task_text": "Без козыря. До первого хода в девятой взятке ход в руке. Никакие действия из показанной позиции ещё не сделаны. Распределение оставшихся карт целевой масти у защиты 2–2 дано условием. Первые восемь взяток в ответ не входят. Считайте только будущие взятки, выигранные одной из фосок 7, 6, 5 стола, а не снос фоски на взятку руки.",
+            "questions": [
+              {
+                "id": "visible_count",
+                "type": "integer",
+                "prompt": "Сколько карт целевой масти осталось в руке и на столе вместе?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "missing_count",
+                "type": "integer",
+                "prompt": "Сколько карт этой масти осталось у защиты с учётом уже сыгранных карт?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "guaranteed_spot_tricks_from_position",
+                "type": "integer",
+                "prompt": "Сколько новых взяток фосками 7, 6, 5 стола можно гарантировать с девятой по тринадцатую взятку при лучшем плане из этой позиции против любой допустимой защиты? Считайте взятки, которые удастся взять имеющимися картами, а не просто число выработанных фосок.",
+                "minimum": 0,
+                "maximum": 3
+              }
+            ],
+            "explanation_prompt": "Объясните порядок ходов и почему ваш план работает или не работает."
+          },
+          "prompt_sha256": "86ea1c43c6d1882107bea7c860f4f0dcbeb98d2c3f8dc74c9539389c1602cfa3"
+        },
+        "expected_solution": {
+          "expected_answers": {
+            "visible_count": 5,
+            "missing_count": 4,
+            "guaranteed_spot_tricks_from_position": 0
+          },
+          "feedback": {
+            "visible_count": {
+              "code": "VISIBLE_COUNT_MISMATCH",
+              "text": "Пересчитайте оставшиеся карты целевой масти в обеих руках."
+            },
+            "missing_count": {
+              "code": "REMAINING_COUNT_MISMATCH",
+              "text": "Из 13 вычтите видимые оставшиеся карты и уже сыгранные карты этой масти."
+            },
+            "guaranteed_spot_tricks_from_position": {
+              "code": "PLAN_REQUIRES_REVIEW",
+              "text": "После отбора туза и короля масти фоска стола станет старшей, но на стол нет перехода. Туз червей в руке не является переходом на стол. Защита может не помогать; наличие старшей фоски само по себе не гарантирует взятку."
+            }
+          },
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "evidence_ref": {
+            "path": "../candidate.json",
+            "sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+            "pointer": "/exercises/1/evidence"
+          }
+        },
+        "rubric": {
+          "scope": "FORMATIVE_TYPED_FIELDS_ONLY",
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "authority": {
+            "authority_class": "CANDIDATE_RESEARCH",
+            "review_state": "REVIEW_REQUIRED",
+            "publication_allowed": false,
+            "curriculum_activation_allowed": false,
+            "student_profile_write_allowed": false,
+            "canon_write_allowed": false,
+            "mastery_write_allowed": false
+          },
+          "automatic_assessment_enabled": false,
+          "mastery_inference_allowed": false,
+          "answer_metric": {
+            "field": "guaranteed_spot_tricks_from_position",
+            "metric_id": "guaranteed-spot-tricks-from-position-v1",
+            "contract_file": "SPOT_TRICK_COUNT_V1.json"
+          }
+        },
+        "generated_by": "spot-routing-handoff-v2",
+        "method_version": "spot-routing-handoff-v2",
+        "provenance": {
+          "candidate_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "source_exercise_id": "spot-length-c-no-entry-v1",
+          "rule_basis_ref": "RULE_BASIS.md",
+          "origin": "AUTHORED_EXERCISE_NOT_VIDEO_EPISODE"
+        },
+        "status": "candidate"
+      }
+    },
+    {
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "persisted": false,
+      "mastery_event_created": false,
+      "student_profile_written": false,
+      "curriculum_activated": false,
+      "canon_written": false,
+      "actual_mastery": null,
+      "exercise_version": {
+        "prompt": {
+          "exercise_id": "spot.d9e4",
+          "task": "LOW_CARD_ENTRY_CANDIDATE",
+          "method_version": "spot-routing-handoff-v2",
+          "candidate_version": "spot-establishment-candidate-v1-routing.2",
+          "fixture_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "response_schema": "low-card-structured-response-v1",
+          "response_fields": [
+            "schema",
+            "exercise_id",
+            "prompt_sha256",
+            "answers",
+            "explanation"
+          ],
+          "presentation": {
+            "title": "Розыгрыш позиции",
+            "author_label": "Авторская учебная позиция.",
+            "strain": "NT",
+            "partial_deal": false,
+            "position_kind": "COMPLETE_REMAINING_HANDS",
+            "trick_index": 9,
+            "cards_per_hand": 5,
+            "declarer": "S",
+            "dummy_seat": "N",
+            "lead": "HAND",
+            "hand": {
+              "S": [
+                "3"
+              ],
+              "H": [
+                "2"
+              ],
+              "D": [
+                "A"
+              ],
+              "C": [
+                "A",
+                "K"
+              ]
+            },
+            "dummy": {
+              "S": [],
+              "H": [
+                "A"
+              ],
+              "D": [
+                "2"
+              ],
+              "C": [
+                "7",
+                "6",
+                "5"
+              ]
+            },
+            "target_suit": "C",
+            "card_encoding": "S.H.D.C; HAND = Юг, DUMMY = Север; A,K,Q,J,T,9..2.",
+            "given_information": {
+              "defenders_remaining_lengths": [
+                2,
+                2
+              ],
+              "played_in_target_suit": [
+                "C2",
+                "C3",
+                "C4",
+                "C8"
+              ]
+            },
+            "task_text": "Без козыря. До первого хода в девятой взятке ход в руке. Никакие действия из показанной позиции ещё не сделаны. Распределение оставшихся карт целевой масти у защиты 2–2 дано условием. Первые восемь взяток в ответ не входят. Считайте только будущие взятки, выигранные одной из фосок 7, 6, 5 стола, а не снос фоски на взятку руки.",
+            "questions": [
+              {
+                "id": "visible_count",
+                "type": "integer",
+                "prompt": "Сколько карт целевой масти осталось в руке и на столе вместе?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "missing_count",
+                "type": "integer",
+                "prompt": "Сколько карт этой масти осталось у защиты с учётом уже сыгранных карт?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "guaranteed_spot_tricks_from_position",
+                "type": "integer",
+                "prompt": "Сколько новых взяток фосками 7, 6, 5 стола можно гарантировать с девятой по тринадцатую взятку при лучшем плане из этой позиции против любой допустимой защиты? Считайте взятки, которые удастся взять имеющимися картами, а не просто число выработанных фосок.",
+                "minimum": 0,
+                "maximum": 3
+              }
+            ],
+            "explanation_prompt": "Объясните порядок ходов и почему ваш план работает или не работает."
+          },
+          "prompt_sha256": "342896ac7f8012de30d4fc7f083a700b1f83045cf6c9c01322020a9f4f00f631"
+        },
+        "expected_solution": {
+          "expected_answers": {
+            "visible_count": 5,
+            "missing_count": 4,
+            "guaranteed_spot_tricks_from_position": 1
+          },
+          "feedback": {
+            "visible_count": {
+              "code": "VISIBLE_COUNT_MISMATCH",
+              "text": "Пересчитайте оставшиеся карты целевой масти в обеих руках."
+            },
+            "missing_count": {
+              "code": "REMAINING_COUNT_MISMATCH",
+              "text": "Из 13 вычтите видимые оставшиеся карты и уже сыгранные карты этой масти."
+            },
+            "guaranteed_spot_tricks_from_position": {
+              "code": "PLAN_REQUIRES_REVIEW",
+              "text": "Сначала сыграть туза и короля длинной масти из руки, снося со стола две младшие карты. Затем перейти малой червой к тузу стола и взять оставшуюся фоску. Если потратить туза червей до отбора туза и короля масти, фоска останется без перехода."
+            }
+          },
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "evidence_ref": {
+            "path": "../candidate.json",
+            "sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+            "pointer": "/exercises/0/evidence"
+          }
+        },
+        "rubric": {
+          "scope": "FORMATIVE_TYPED_FIELDS_ONLY",
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "authority": {
+            "authority_class": "CANDIDATE_RESEARCH",
+            "review_state": "REVIEW_REQUIRED",
+            "publication_allowed": false,
+            "curriculum_activation_allowed": false,
+            "student_profile_write_allowed": false,
+            "canon_write_allowed": false,
+            "mastery_write_allowed": false
+          },
+          "automatic_assessment_enabled": false,
+          "mastery_inference_allowed": false,
+          "answer_metric": {
+            "field": "guaranteed_spot_tricks_from_position",
+            "metric_id": "guaranteed-spot-tricks-from-position-v1",
+            "contract_file": "SPOT_TRICK_COUNT_V1.json"
+          }
+        },
+        "generated_by": "spot-routing-handoff-v2",
+        "method_version": "spot-routing-handoff-v2",
+        "provenance": {
+          "candidate_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "source_exercise_id": "spot-length-c-entry-v1",
+          "rule_basis_ref": "RULE_BASIS.md",
+          "origin": "AUTHORED_EXERCISE_NOT_VIDEO_EPISODE"
+        },
+        "status": "candidate"
+      }
+    },
+    {
+      "status": "PREPARED_LOCAL_CANDIDATE",
+      "persisted": false,
+      "mastery_event_created": false,
+      "student_profile_written": false,
+      "curriculum_activated": false,
+      "canon_written": false,
+      "actual_mastery": null,
+      "exercise_version": {
+        "prompt": {
+          "exercise_id": "spot.b6a1",
+          "task": "LOW_CARD_ENTRY_CANDIDATE",
+          "method_version": "spot-routing-handoff-v2",
+          "candidate_version": "spot-establishment-candidate-v1-routing.2",
+          "fixture_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "response_schema": "low-card-structured-response-v1",
+          "response_fields": [
+            "schema",
+            "exercise_id",
+            "prompt_sha256",
+            "answers",
+            "explanation"
+          ],
+          "presentation": {
+            "title": "Розыгрыш позиции",
+            "author_label": "Авторская учебная позиция.",
+            "strain": "NT",
+            "partial_deal": false,
+            "position_kind": "COMPLETE_REMAINING_HANDS",
+            "trick_index": 9,
+            "cards_per_hand": 5,
+            "declarer": "S",
+            "dummy_seat": "N",
+            "lead": "HAND",
+            "hand": {
+              "S": [
+                "3"
+              ],
+              "H": [
+                "A"
+              ],
+              "D": [
+                "A",
+                "K"
+              ],
+              "C": [
+                "A"
+              ]
+            },
+            "dummy": {
+              "S": [],
+              "H": [
+                "2"
+              ],
+              "D": [
+                "7",
+                "6",
+                "5"
+              ],
+              "C": [
+                "2"
+              ]
+            },
+            "target_suit": "D",
+            "card_encoding": "S.H.D.C; HAND = Юг, DUMMY = Север; A,K,Q,J,T,9..2.",
+            "given_information": {
+              "defenders_remaining_lengths": [
+                2,
+                2
+              ],
+              "played_in_target_suit": [
+                "D2",
+                "D3",
+                "D4",
+                "D8"
+              ]
+            },
+            "task_text": "Без козыря. До первого хода в девятой взятке ход в руке. Никакие действия из показанной позиции ещё не сделаны. Распределение оставшихся карт целевой масти у защиты 2–2 дано условием. Первые восемь взяток в ответ не входят. Считайте только будущие взятки, выигранные одной из фосок 7, 6, 5 стола, а не снос фоски на взятку руки.",
+            "questions": [
+              {
+                "id": "visible_count",
+                "type": "integer",
+                "prompt": "Сколько карт целевой масти осталось в руке и на столе вместе?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "missing_count",
+                "type": "integer",
+                "prompt": "Сколько карт этой масти осталось у защиты с учётом уже сыгранных карт?",
+                "minimum": 0,
+                "maximum": 13
+              },
+              {
+                "id": "guaranteed_spot_tricks_from_position",
+                "type": "integer",
+                "prompt": "Сколько новых взяток фосками 7, 6, 5 стола можно гарантировать с девятой по тринадцатую взятку при лучшем плане из этой позиции против любой допустимой защиты? Считайте взятки, которые удастся взять имеющимися картами, а не просто число выработанных фосок.",
+                "minimum": 0,
+                "maximum": 3
+              }
+            ],
+            "explanation_prompt": "Объясните порядок ходов и почему ваш план работает или не работает."
+          },
+          "prompt_sha256": "b9d62ebd6f1fd3d4e4285e6277cb41725d583bf013878438f0868e25e8f6f562"
+        },
+        "expected_solution": {
+          "expected_answers": {
+            "visible_count": 5,
+            "missing_count": 4,
+            "guaranteed_spot_tricks_from_position": 0
+          },
+          "feedback": {
+            "visible_count": {
+              "code": "VISIBLE_COUNT_MISMATCH",
+              "text": "Пересчитайте оставшиеся карты целевой масти в обеих руках."
+            },
+            "missing_count": {
+              "code": "REMAINING_COUNT_MISMATCH",
+              "text": "Из 13 вычтите видимые оставшиеся карты и уже сыгранные карты этой масти."
+            },
+            "guaranteed_spot_tricks_from_position": {
+              "code": "PLAN_REQUIRES_REVIEW",
+              "text": "После отбора туза и короля масти фоска стола станет старшей, но на стол нет перехода. Туз червей в руке не является переходом на стол. Защита может не помогать; наличие старшей фоски само по себе не гарантирует взятку."
+            }
+          },
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "evidence_ref": {
+            "path": "../candidate.json",
+            "sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+            "pointer": "/exercises/3/evidence"
+          }
+        },
+        "rubric": {
+          "scope": "FORMATIVE_TYPED_FIELDS_ONLY",
+          "human_review": {
+            "not_exact_phrases": true,
+            "automatic_prose_assessment": false,
+            "required_concepts": [
+              "length_exhaustion",
+              "lead_location",
+              "access_to_remaining_spot"
+            ],
+            "alternative_plan": "REVIEW_LEGALITY_AND_REASONING_NOT_EXACT_CARD_STRING"
+          },
+          "authority": {
+            "authority_class": "CANDIDATE_RESEARCH",
+            "review_state": "REVIEW_REQUIRED",
+            "publication_allowed": false,
+            "curriculum_activation_allowed": false,
+            "student_profile_write_allowed": false,
+            "canon_write_allowed": false,
+            "mastery_write_allowed": false
+          },
+          "automatic_assessment_enabled": false,
+          "mastery_inference_allowed": false,
+          "answer_metric": {
+            "field": "guaranteed_spot_tricks_from_position",
+            "metric_id": "guaranteed-spot-tricks-from-position-v1",
+            "contract_file": "SPOT_TRICK_COUNT_V1.json"
+          }
+        },
+        "generated_by": "spot-routing-handoff-v2",
+        "method_version": "spot-routing-handoff-v2",
+        "provenance": {
+          "candidate_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+          "source_exercise_id": "spot-length-d-no-entry-v1",
+          "rule_basis_ref": "RULE_BASIS.md",
+          "origin": "AUTHORED_EXERCISE_NOT_VIDEO_EPISODE"
+        },
+        "status": "candidate"
+      }
+    }
+  ]
+}
