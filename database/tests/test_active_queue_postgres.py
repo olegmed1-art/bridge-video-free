@@ -242,10 +242,16 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             self.run_script(conn, 'database/rollbacks/0374_autopilot_queue_health_semantics.sql')
             mailbox = conn.execute("SELECT mailbox_pr FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE'").fetchone()[0]
             conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='TASK_MATERIALIZED' WHERE singleton")
+            ready_dependency = None
             for state in ('READY', 'ACTIVE', 'BLOCKED', 'WAITING_DEPENDENCY'):
-                conn.execute("INSERT INTO autopilot.project_work_item(work_key,mailbox_pr,role,target_pr,state,created_by,source) "
-                             "VALUES(%s,%s,'AUTOPILOT',999973,%s,'sql-test','SQL_TEST')",
-                             ('sql-0374-' + self.prefix + state, mailbox, state))
+                work_id, saved_state = conn.execute(
+                    "INSERT INTO autopilot.project_work_item(work_key,mailbox_pr,role,target_pr,state,depends_on_work_item_id,created_by,source) "
+                    "VALUES(%s,%s,'AUTOPILOT',999973,%s,%s,'sql-test','SQL_TEST') RETURNING work_item_id,state",
+                    ('sql-0374-' + self.prefix + state, mailbox, state,
+                     ready_dependency if state == 'WAITING_DEPENDENCY' else None)).fetchone()
+                self.assertEqual(saved_state, state)
+                if state == 'READY':
+                    ready_dependency = work_id
             query = ("SELECT severity,details->>'open_actionable_count' FROM public.autopilot_operational_health_signal "
                      "WHERE signal_key='autopilot_planner_backlog'")
             self.assertEqual(conn.execute(query).fetchone()[0], 'critical')
