@@ -176,6 +176,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Compile video persistence adapters
@@ -185,6 +186,7 @@ jobs:
             database/runtime_health_preflight.py \
             database/runtime_app_preflight.py \
             database/outbox_publisher.py \
+            database/outbox_publication_decision.py \
             database/video_result_persistence.py \
             database/runtime_worker_persistence_smoke.py \
             database/backfill_video_results.py \
@@ -195,6 +197,9 @@ jobs:
 
       - name: Install runtime DSN test dependency
         run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' 'pytest==8.4.2'
+
+      - name: Verify one-job approval deadline contract
+        run: python -B -m unittest tests.test_one_job_staging_admission_local -v
 
       - name: Verify native source package integrity
         run: python -m unittest discover -s tests -p 'test_native_maintenance_bundle.py' -v
@@ -293,11 +298,36 @@ jobs:
           bash -n database/scripts/migrate.sh
           database/scripts/migrate.sh
 
+      - name: Verify video Canon firewall Unicode boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/402_video_canon_firewall_unicode_boundary_probe.sql
+
       - name: Inventory migrated catalog before invariant tests
         shell: bash
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/fixtures/native_cli_dependency_inventory.sql
+
+      - name: Verify outbox publisher guard and concurrent rebinding on PostgreSQL
+        timeout-minutes: 2
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BRIDGE_WORKER_DATABASE_URL: ''
+          BRIDGE_API_DATABASE_URL: ''
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          export OUTBOX_GUARD_SOURCE_SHA="$EXPECTED_SOURCE_SHA"
+          python -B -m unittest discover -s tests -p test_outbox_publisher.py -v
+          python -B -m unittest discover -s tests -p test_outbox_publication_decision.py -v
+          python -B -m unittest discover -s tests -p test_outbox_mixed_replay_contract.py -v
+          python -B -m unittest discover -s tests -p test_video_staging_handoff.py -v
+          python -B -m unittest discover -s tests -p test_semantic_v2_persistence_gate.py -v
+          python -B -m unittest discover -s database/tests -p test_outbox_publisher_postgres.py -v
 
       - name: Run invariant tests
         shell: bash
@@ -350,9 +380,12 @@ jobs:
 
       - name: Rehearse session and journalled executor from verified source package
         shell: bash
+        env:
+          CHECKED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" GITHUB_SHA="$GITHUB_SHA" \
+          test "$(git rev-parse HEAD)" = "$CHECKED_SOURCE_SHA"
+          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" GITHUB_SHA="$CHECKED_SOURCE_SHA" \
             PYTHONPATH="$PWD:$(python -m site --user-site)" \
             "$(command -v python)" database/fixtures/native_maintenance_bundle_rehearsal.py
 

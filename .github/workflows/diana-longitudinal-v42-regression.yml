@@ -1,6 +1,13 @@
 name: diana-longitudinal-v42-regression
 
 on:
+  workflow_dispatch:
+    inputs:
+      run_private_field_evidence:
+        description: 'Explicitly authorize the existing private Drive field check'
+        type: boolean
+        required: true
+        default: false
   pull_request:
     paths:
       - 'bridge_report_board_reconstruction.py'
@@ -94,7 +101,7 @@ jobs:
 
   v42-field-evidence:
     needs: v42-regression
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch' && inputs.run_private_field_evidence == true
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:

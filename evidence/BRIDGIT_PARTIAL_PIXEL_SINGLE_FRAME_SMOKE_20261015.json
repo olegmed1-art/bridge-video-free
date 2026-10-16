@@ -1,0 +1,306 @@
+{
+  "kind": "SINGLE_FRAME_SHADOW_SMOKE",
+  "source_frame_sha256": "b7a960a7bfcf3e3cbc4dc191988baa2d31ec740d72fb58e2a9c61f77ef103c13",
+  "source_frame_size": {
+    "width": 1680,
+    "height": 934
+  },
+  "geometry_status": "MANUALLY_SELECTED_UNVERIFIED_SLOTS",
+  "board_identity_verified": false,
+  "pts_verified": false,
+  "paired_frame_available": false,
+  "real_video_accuracy_evaluated": false,
+  "pinned_assets": [
+    {
+      "variant": 1,
+      "sha256": "627cc3170c39d19304d81b54e92144714bddb7b3917e21c66bd221c31bd82390",
+      "cells": 52
+    },
+    {
+      "variant": 2,
+      "sha256": "53b9a93fb25c7f4efd367b5219ae664c8b1b7b2e1243df5383f37df779ef2c90",
+      "cells": 52
+    },
+    {
+      "variant": 3,
+      "sha256": "0eee20f34a8fe380c06231f93129c5ff32acd2a31d790797e06f12b436dd2d8f",
+      "cells": 52
+    },
+    {
+      "variant": 4,
+      "sha256": "c59dd0cafb91506fdbd5513bf217061f816ea4d3fb956982f79a8859022c9c57",
+      "cells": 52
+    },
+    {
+      "variant": 5,
+      "sha256": "52eb9c97c9685758f48beb6e84013e9289bdb97f8a31b4ae8e46a0ecee3a37fb",
+      "cells": 52
+    },
+    {
+      "variant": 6,
+      "sha256": "eb47ec363bc2824587c5ab0f3897ae52c5d98e26a8403d9605353c3cbdf99517",
+      "cells": 52
+    },
+    {
+      "variant": 7,
+      "sha256": "c653e77694592f2059196f17c26f817a7e0c5a2ad6162014cc5ca5a5577c2695",
+      "cells": 52
+    },
+    {
+      "variant": 8,
+      "sha256": "22955238debcaefb4ccd797f5a1a3fb4590b3646e6061c314ba122cfa19689d0",
+      "cells": 52
+    }
+  ],
+  "slots": [
+    {
+      "index": 0,
+      "x": 318,
+      "y": 1,
+      "seat": "N"
+    },
+    {
+      "index": 1,
+      "x": 466,
+      "y": 1,
+      "seat": "N"
+    },
+    {
+      "index": 2,
+      "x": 652,
+      "y": 1,
+      "seat": "N"
+    },
+    {
+      "index": 3,
+      "x": 834,
+      "y": 1,
+      "seat": "N"
+    },
+    {
+      "index": 4,
+      "x": 1180,
+      "y": 282,
+      "seat": "E"
+    },
+    {
+      "index": 5,
+      "x": 1130,
+      "y": 326,
+      "seat": "E"
+    },
+    {
+      "index": 6,
+      "x": 1180,
+      "y": 370,
+      "seat": "E"
+    },
+    {
+      "index": 7,
+      "x": 1148,
+      "y": 414,
+      "seat": "E"
+    },
+    {
+      "index": 8,
+      "x": 318,
+      "y": 786,
+      "seat": "S"
+    },
+    {
+      "index": 9,
+      "x": 501,
+      "y": 786,
+      "seat": "S"
+    },
+    {
+      "index": 10,
+      "x": 651,
+      "y": 786,
+      "seat": "S"
+    },
+    {
+      "index": 11,
+      "x": 799,
+      "y": 786,
+      "seat": "S"
+    },
+    {
+      "index": 12,
+      "x": 14,
+      "y": 282,
+      "seat": "W"
+    },
+    {
+      "index": 13,
+      "x": 14,
+      "y": 326,
+      "seat": "W"
+    },
+    {
+      "index": 14,
+      "x": 14,
+      "y": 370,
+      "seat": "W"
+    },
+    {
+      "index": 15,
+      "x": 14,
+      "y": 414,
+      "seat": "W"
+    }
+  ],
+  "observations": {
+    "version": "bridgit-gambler-partial-pixels-v2",
+    "table_region": {
+      "x": 0,
+      "y": 0,
+      "w": 1332,
+      "h": 934
+    },
+    "cards": [
+      {
+        "card": "TC",
+        "confidence": 0.9917,
+        "box": {
+          "x": 466,
+          "y": 1,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "JD",
+        "confidence": 0.9822,
+        "box": {
+          "x": 652,
+          "y": 1,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "AD",
+        "confidence": 0.8026,
+        "box": {
+          "x": 1180,
+          "y": 370,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "AS",
+        "confidence": 0.9284,
+        "box": {
+          "x": 1148,
+          "y": 414,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "TH",
+        "confidence": 0.9825,
+        "box": {
+          "x": 318,
+          "y": 786,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "JS",
+        "confidence": 0.9841,
+        "box": {
+          "x": 799,
+          "y": 786,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "JH",
+        "confidence": 0.8628,
+        "box": {
+          "x": 14,
+          "y": 282,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "5D",
+        "confidence": 0.8361,
+        "box": {
+          "x": 14,
+          "y": 370,
+          "w": 109,
+          "h": 147
+        }
+      },
+      {
+        "card": "4S",
+        "confidence": 0.954,
+        "box": {
+          "x": 14,
+          "y": 414,
+          "w": 109,
+          "h": 147
+        }
+      }
+    ],
+    "unknown": [
+      {
+        "index": 0,
+        "reason": "CARD_UNCERTAIN",
+        "seat": "N",
+        "best_score": 0.9837,
+        "margin": 0.0247
+      },
+      {
+        "index": 3,
+        "reason": "CARD_UNCERTAIN",
+        "seat": "N",
+        "best_score": 0.991,
+        "margin": 0.0515
+      },
+      {
+        "index": 4,
+        "reason": "CARD_UNCERTAIN",
+        "seat": "E",
+        "best_score": 0.8411,
+        "margin": 0.0164
+      },
+      {
+        "index": 5,
+        "reason": "CARD_UNCERTAIN",
+        "seat": "E",
+        "best_score": 0.8023,
+        "margin": 0.018
+      },
+      {
+        "index": 9,
+        "reason": "CARD_UNCERTAIN",
+        "seat": "S",
+        "best_score": 0.9914,
+        "margin": 0.0517
+      },
+      {
+        "index": 10,
+        "reason": "CARD_UNCERTAIN",
+        "seat": "S",
+        "best_score": 0.9833,
+        "margin": 0.0271
+      },
+      {
+        "index": 13,
+        "reason": "CORNER_OCCLUDED",
+        "seat": "W"
+      }
+    ]
+  },
+  "observer_version": "bridgit-gambler-partial-pixels-v2",
+  "observed_count": 9,
+  "unknown_count": 7
+}

@@ -7,12 +7,15 @@ import os
 from database.video_result_persistence import persist_video_result
 
 
-def main() -> None:
+def smoke_inputs() -> tuple[dict, dict]:
+    """Build the fixed synthetic fixture shared by runtime and offline checks."""
     master = {
         "schema": "bridge-video-master-analysis",
         "schemaVersion": 2,
         "algorithmVersion": "3.1 FREE",
-        "algorithmRevision": "runtime-persistence-smoke",
+        # Migration 0053 seeds this diagnostic candidate; the registry gate
+        # resolves its ID. The synthetic job identity is not a revision.
+        "algorithmRevision": "3.1-free-r25.13-checkpoint",
         "job_id": "runtime-persistence-smoke",
         "source": {
             "driveId": "runtime-smoke-source",
@@ -63,6 +66,11 @@ def main() -> None:
             "masterJsonSha256": "3" * 64,
         },
     }
+    return master, done
+
+
+def main() -> None:
+    master, done = smoke_inputs()
     result = persist_video_result(
         os.environ.get("BRIDGE_WORKER_DATABASE_URL", ""),
         master,

@@ -6,14 +6,32 @@ on:
       - 'bridge_contracts/video_canon_replay.py'
       - 'bridge_contracts/video_source_draft.py'
       - 'bridge_contracts/video_replay_input.py'
+      - 'bridge_contracts/video_local_evidence.py'
+      - 'bridge_contracts/video_teacher_read.py'
       - 'bridge_contracts/video_canon*.py'
       - 'bridge_contracts/video_learning_candidate.py'
       - 'diana_longitudinal*.py'
+      - 'bridge_neon_persistence.py'
+      - 'video_completed_staging_handoff.py'
       - 'database/video_candidate_persistence.py'
+      - 'database/video_staging_*.py'
+      - 'database/video_result_persistence.py'
+      - 'database/runtime_worker_persistence_smoke.py'
+      - 'database/source_identity_persistence.py'
+      - 'bridge_school_api/knowledge.py'
+      - 'tests/test_video_candidate_persistence_revision.py'
+      - 'tests/test_video_staging_postgres.py'
+      - 'tests/test_video_staging_handoff.py'
+      - 'tests/test_knowledge_read_api.py'
+      - 'docs/research/bidding-engine/VIDEO_STAGING_PERSISTENCE_REHEARSAL_V1.md'
       - 'tools/replay_video_canon.py'
       - 'tests/test_video_canon*.py'
       - 'tests/test_video_source_draft.py'
       - 'tests/test_video_replay_input.py'
+      - 'tests/test_video_local_evidence.py'
+      - 'tests/test_video_teacher_read.py'
+      - 'universal_video/speaker_structure.py'
+      - 'tests/test_universal_video_speaker_source_alignment.py'
       - 'tests/test_diana_longitudinal*.py'
       - '.github/workflows/video-canon-staging-replay-ci.yml'
 
@@ -51,9 +69,72 @@ jobs:
             tests/test_video_canon*.py \
             tests/test_video_source_draft.py \
             tests/test_video_replay_input.py \
+            tests/test_video_local_evidence.py \
+            tests/test_video_teacher_read.py \
+            tests/test_universal_video_speaker_source_alignment.py \
+            tests/test_universal_video_speaker_structure.py \
+            tests/test_universal_video_speaker_role_verifier.py \
             tests/test_bridge_video_learning_candidate.py \
             tests/test_video_candidate_persistence_revision.py \
+            tests/test_video_staging_handoff.py \
             tests/test_video_extended_extraction.py \
             tests/test_canon_source_domain_policy.py \
             tests/test_bridge_report_board_reconstruction.py \
             tests/test_r29_status_file_idempotency.py
+
+  postgres-staging-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: video_rehearsal
+          POSTGRES_USER: rehearsal_owner
+          POSTGRES_PASSWORD: synthetic-ci-only
+        ports:
+          - 127.0.0.1:55433:5432
+        options: >-
+          --health-cmd "pg_isready -U rehearsal_owner -d video_rehearsal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: ''
+      BRIDGE_WORKER_DATABASE_URL: ''
+      BRIDGE_API_DATABASE_URL: ''
+      BRIDGE_VIDEO_REAL_FIXTURE_DIR: ''
+      BRIDGE_VIDEO_REHEARSAL_OUTPUT: ''
+      BRIDGE_VIDEO_REHEARSAL_DSN: host=127.0.0.1 port=55433 dbname=video_rehearsal user=rehearsal_owner
+      PGPASSWORD: synthetic-ci-only
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify exact source commit and disposable database target
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          git show -s --format='SOURCE_SHA=%H TREE_SHA=%T' HEAD
+          test "$BRIDGE_VIDEO_REHEARSAL_DSN" = 'host=127.0.0.1 port=55433 dbname=video_rehearsal user=rehearsal_owner'
+          test -z "$BRIDGE_VIDEO_REAL_FIXTURE_DIR"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies and PostgreSQL client
+        run: |
+          python -m pip install pytest requests google-auth google-auth-oauthlib pymupdf opencv-python-headless pillow 'psycopg[binary]==3.3.4' 'fastapi==0.141.1' httpx
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+      - name: Apply unchanged schema only to the disposable CI service
+        env:
+          DATABASE_URL: postgresql://rehearsal_owner@127.0.0.1:55433/video_rehearsal
+        run: |
+          test "$DATABASE_URL" = 'postgresql://rehearsal_owner@127.0.0.1:55433/video_rehearsal'
+          bash database/scripts/migrate.sh
+      - name: Exercise synthetic source contracts with actual PostgreSQL and HTTP auth
+        run: |
+          python -m pytest -q tests/test_video_staging_postgres.py tests/test_knowledge_read_api.py tests/test_api_dsn_contract.py

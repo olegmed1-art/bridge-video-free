@@ -18,11 +18,14 @@ No paid plan, AI Scan, Codex Security scan or auto-merge was enabled.
 This workflow runs on relevant PRs, manual dispatch, and weekly. Findings are
 advisory; tool failures are explicit failures, never silently clean reports.
 One standard Ubuntu runner, 15-minute timeout, cancellation of superseded runs,
-seven-day report retention, contents:read, no secrets or persistent checkout
+contents:read, no secrets or persistent checkout
 credentials. No application dependencies installed, no application execution,
 no production connection. Tools do not use model tokens. Public standard-runner
-minutes are free under current GitHub terms; artifact storage remains subject
-to the account's allowance. Billing limits and plans are unchanged.
+minutes are free under current GitHub terms. Pull requests retain the summary
+in the job summary and complete reports with SHA256 digests in the job log,
+without uploading an artifact. Manual and weekly runs retain their seven-day
+report artifacts. Artifact storage remains subject to the account's allowance;
+billing limits and plans are unchanged. Scanner errors still fail the job.
 
 Ruff 0.16.8 runs E4/E7/E9/F without fixes or repository-config suppression.
 Trivy 0.74.0 release archive is SHA256-pinned to the upstream GitHub asset digest;

@@ -23,10 +23,16 @@ class MailboxContractTests(unittest.TestCase):
         with patch.dict(os.environ, {'AUTOPILOT_DB_BACKEND': 'neon'}):
             self.assertEqual(target.mailbox_dsn('  ' + neon_dsn() + '  '), neon_dsn())
 
+    def test_neon_pooler_mailbox_identity_is_preserved(self):
+        # Readiness is a single read-only query, not callback ingestion.
+        raw = neon_dsn().replace(target.SOURCE, target.SOURCE.replace('.c-5.', '-pooler.c-5.'))
+        with patch.dict(os.environ, {'AUTOPILOT_DB_BACKEND': 'neon'}):
+            self.assertEqual(target.mailbox_dsn(raw), raw)
+
     def test_no_alternate_destination_principal_or_libpq_route(self):
         dsn = neon_dsn()
         invalid = [
-            dsn.replace(target.SOURCE, target.SOURCE.replace('.c-5.', '-pooler.c-5.')),
+            dsn.replace(target.SOURCE, target.SOURCE.replace('.c-5.', '-pooler.c-6.')),
             dsn.replace(target.SOURCE, 'legacy.neon.tech'),
             dsn.replace(target.SOURCE, 'attacker.invalid'),
             dsn.replace(target.SOURCE, target.SOURCE + ':9999'),

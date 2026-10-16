@@ -303,7 +303,10 @@ def mailbox_dsn(raw):
         valid = (
             not any(ord(c)<32 or ord(c)==127 for c in value)
             and parsed.scheme in {'postgres', 'postgresql'}
-            and parsed.hostname == SOURCE and parsed.port in {None, 5432}
+            # This single read-only query retains both existing mailbox pins;
+            # callback ingestion has its own direct-connection contract.
+            and parsed.hostname in {SOURCE, SOURCE.replace('.c-5.', '-pooler.c-5.')}
+            and parsed.port in {None, 5432}
             and unquote(parsed.username or '') == 'autopilot_callback_login'
             and bool(parsed.password) and parsed.path == '/neondb' and not parsed.fragment
             and set(query) <= {'sslmode', 'channel_binding', 'connect_timeout', 'application_name'}
