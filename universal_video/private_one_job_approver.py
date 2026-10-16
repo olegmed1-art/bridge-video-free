@@ -30,8 +30,9 @@ _KEYS = frozenset({
 })
 
 # The remaining Drive readback and private stage/read may exceed 30 seconds.
-# Nine minutes leaves a minute below the worker's 900-second lease renewal;
-# the SQL gate also rejects an expiry beyond the live lease or subset approval.
+# Nine minutes leaves six minutes below the worker's 900-second lease renewal.
+# SQL caps the request to the earlier live lease/subset deadline and requires
+# at least three minutes of work budget; this process cannot extend either.
 _APPROVAL_VALIDITY_SECONDS = 540
 
 _IDENTITY_SQL = """

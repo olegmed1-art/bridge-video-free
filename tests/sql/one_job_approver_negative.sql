@@ -5,8 +5,9 @@
 -- Supply exact live synthetic fixture variables:
 -- -v job_id=... -v lease_token=... -v worker_key=...
 -- -v attempt_count=... -v source_fingerprint=... -v expires_at=...
--- expires_at must be in the future and no later than the current lease and
--- subset approval expiries. This test never commits its approval or revoke.
+-- expires_at is a requested upper bound in the future. SQL caps the stored
+-- approval to the live lease and subset deadlines and requires >3 minutes
+-- remaining. This test never commits its approval or revoke.
 \if :{?job_id}
 \else
 \echo job_id is required
