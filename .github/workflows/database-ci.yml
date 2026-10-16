@@ -311,6 +311,22 @@ jobs:
           set -euo pipefail
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/fixtures/native_cli_dependency_inventory.sql
 
+      - name: Prove active queue capacity, concurrency and recovery
+        timeout-minutes: 2
+        env:
+          ACTIVE_QUEUE_CI_DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/bridge_school_queue_ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$ADMIN_DATABASE_URL" = 'postgresql://postgres:postgres@localhost:5432/bridge_school_ci'
+          cleanup() { psql "$ADMIN_DATABASE_URL" -Xv ON_ERROR_STOP=1 -c 'DROP DATABASE IF EXISTS bridge_school_queue_ci WITH (FORCE);'; }
+          trap cleanup EXIT
+          PYTHONPATH=. python -B -m unittest discover -s database/tests -p test_active_queue_postgres.py -v
+          psql "$ADMIN_DATABASE_URL" -Xv ON_ERROR_STOP=1 -c 'CREATE DATABASE bridge_school_queue_ci WITH TEMPLATE bridge_school_ci OWNER bridge_ci_owner;'
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/rollbacks/0403_autopilot_active_dispatch_capacity.sql
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/migrations/0403_autopilot_active_dispatch_capacity.sql
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/tests/403_autopilot_active_dispatch_capacity.sql
+
       - name: Verify outbox publisher guard and concurrent rebinding on PostgreSQL
         timeout-minutes: 2
         env:
@@ -399,6 +415,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0403_autopilot_active_dispatch_capacity.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0372_autopilot_audit_pass_alias.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \

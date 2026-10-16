@@ -194,7 +194,7 @@ def read_lease_record(process, minimum_epoch):
         raise LeaseHeaderError(LeaseHeaderReason.DECODE_INVALID) from None
     except json.JSONDecodeError:
         raise LeaseHeaderError(LeaseHeaderReason.JSON_INVALID) from None
-    except (AssertionError, KeyError, TypeError):
+    except (AssertionError, KeyError, TypeError, ValueError, UnicodeEncodeError):
         raise LeaseHeaderError(LeaseHeaderReason.RECORD_INVALID) from None
     if record is not None and record['route']['backend']!='paused':
         if process.poll() is not None:
@@ -328,8 +328,9 @@ def mailbox_read():
     _failure_stage = RoutingStage.MAILBOX_DSN
     dsn = mailbox_dsn(os.environ['DATABASE_URL'])
     _failure_stage = RoutingStage.MAILBOX_CONNECT
-    with psycopg.connect(dsn,autocommit=True,connect_timeout=10,
-                        options='-c default_transaction_read_only=on') as conn:
+    # PgBouncer may reject default_transaction_read_only in a startup packet.
+    # The first SQL statement below protects the entire transaction instead.
+    with psycopg.connect(dsn,autocommit=True,connect_timeout=10) as conn:
         with conn.transaction():
             with conn.cursor() as cur:
                 _failure_stage = RoutingStage.MAILBOX_QUERY

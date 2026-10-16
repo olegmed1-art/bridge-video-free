@@ -10,7 +10,7 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_0352_UNCLASSIFIED_NOT_OWNER_HOLD';
  END IF;
  SELECT * INTO r FROM autopilot.mailbox_rotation_readiness();
- IF r.mailbox_pr IS NULL OR r.max_dispatches<1 OR r.readiness NOT IN ('NORMAL','PREPARE_ROTATION','ROTATION_REQUIRED') THEN
+ IF r.mailbox_pr IS NULL OR r.max_dispatches<1 OR r.readiness NOT IN ('NORMAL','PREPARE_ROTATION','ROTATION_REQUIRED','NEAR_CAPACITY','CAPACITY_REACHED') THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_ROTATION_READINESS_INVALID';
  END IF;
  SELECT * INTO e FROM autopilot.mailbox_e2e_acceptance();
@@ -21,7 +21,8 @@ BEGIN
  IF position('PROJECT_DONE_WITH_PAUSED_BACKLOG' in planner_def)=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_PAUSED_WATCHDOG_MISSING';
  END IF;
- IF position('mailbox_rotation_signal' in pg_get_functiondef('autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure))=0 THEN
+ IF NOT EXISTS (SELECT FROM public.schema_migration WHERE migration_key='0403_autopilot_active_dispatch_capacity')
+    AND position('mailbox_rotation_signal' in pg_get_functiondef('autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure))=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_PRE_ROTATION_SIGNAL_MISSING';
  END IF;
  IF to_regclass('public.autopilot_operational_health_signal') IS NULL THEN

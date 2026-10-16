@@ -1,5 +1,11 @@
 # Autopilot mailbox rotation v1
 
+The lifetime-capacity policy below is superseded by migration 0403's active
+queue contract when that migration is installed. See
+[active queue and retained history](AUTOPILOT_ACTIVE_QUEUE_V1.md). Retention and
+authenticated late-receipt requirements still apply. Forty is a local safety
+heuristic, not a demonstrated external service limit.
+
 ## Purpose
 
 GitHub mailbox pull requests are bounded transport and audit surfaces, not the
