@@ -58,6 +58,7 @@ jobs:
       backup_bytes: ${{ steps.meta.outputs.backup_bytes }}
       source_tables: ${{ steps.source_stats.outputs.source_tables }}
       source_schemas: ${{ steps.source_stats.outputs.source_schemas }}
+      source_schema_names_hex: ${{ steps.source_stats.outputs.source_schema_names_hex }}
       source_jobs: ${{ steps.source_stats.outputs.source_jobs }}
       source_research_jobs: ${{ steps.source_stats.outputs.source_research_jobs }}
       monthly: ${{ steps.meta.outputs.monthly }}
@@ -83,12 +84,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          query="SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM assistant_lab.job)::text || '|' || (SELECT count(*) FROM assistant_lab.research_job)::text;"
+          query="SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM assistant_lab.job)::text || '|' || (SELECT count(*) FROM assistant_lab.research_job)::text || '|' || (SELECT encode(convert_to(COALESCE(json_agg(schema_name ORDER BY schema_name COLLATE \"C\"), '[]'::json)::text, 'UTF8'), 'hex') FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema'));"
           stats="$(docker run --rm -e DATABASE_URL postgres:18 psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c "$query")"
-          IFS='|' read -r tables schemas jobs research_jobs <<<"$stats"
-          [[ "$tables" =~ ^[0-9]+$ && "$schemas" =~ ^[0-9]+$ && "$jobs" =~ ^[0-9]+$ && "$research_jobs" =~ ^[0-9]+$ ]]
+          IFS='|' read -r tables schemas jobs research_jobs schema_names_hex <<<"$stats"
+          [[ "$tables" =~ ^[0-9]+$ && "$schemas" =~ ^[0-9]+$ && "$jobs" =~ ^[0-9]+$ && "$research_jobs" =~ ^[0-9]+$ && "$schema_names_hex" =~ ^([0-9a-f][0-9a-f])+$ ]]
           echo "source_tables=$tables" >> "$GITHUB_OUTPUT"
           echo "source_schemas=$schemas" >> "$GITHUB_OUTPUT"
+          echo "source_schema_names_hex=$schema_names_hex" >> "$GITHUB_OUTPUT"
           echo "source_jobs=$jobs" >> "$GITHUB_OUTPUT"
           echo "source_research_jobs=$research_jobs" >> "$GITHUB_OUTPUT"
 
@@ -264,6 +266,7 @@ jobs:
           PGPASSWORD: recovery-only
           EXPECTED_TABLES: ${{ needs.backup.outputs.source_tables }}
           EXPECTED_SCHEMAS: ${{ needs.backup.outputs.source_schemas }}
+          EXPECTED_SCHEMA_NAMES_HEX: ${{ needs.backup.outputs.source_schema_names_hex }}
           EXPECTED_JOBS: ${{ needs.backup.outputs.source_jobs }}
           EXPECTED_RESEARCH_JOBS: ${{ needs.backup.outputs.source_research_jobs }}
         run: |
@@ -271,6 +274,7 @@ jobs:
           psql_base=(psql -h 127.0.0.1 -p 5432 -U postgres -d recovery -XAtv ON_ERROR_STOP=1)
           tables="$("${psql_base[@]}" -c "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema');")"
           schemas="$("${psql_base[@]}" -c "SELECT count(*) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema');")"
+          schema_names_hex="$("${psql_base[@]}" -c "SELECT encode(convert_to(COALESCE(json_agg(schema_name ORDER BY schema_name COLLATE \"C\"), '[]'::json)::text, 'UTF8'), 'hex') FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema');")"
           jobs="$("${psql_base[@]}" -c "SELECT count(*) FROM assistant_lab.job;")"
           research_jobs="$("${psql_base[@]}" -c "SELECT count(*) FROM assistant_lab.research_job;")"
           checkpoint_exists="$("${psql_base[@]}" -c "SELECT to_regclass('public.recovery_checkpoint') IS NOT NULL;")"
@@ -304,6 +308,34 @@ jobs:
           echo "restored_schemas=$schemas" >> "$GITHUB_OUTPUT"
           echo "restored_jobs=$jobs" >> "$GITHUB_OUTPUT"
           echo "restored_research_jobs=$research_jobs" >> "$GITHUB_OUTPUT"
+          SOURCE_SCHEMA_NAMES_HEX="$EXPECTED_SCHEMA_NAMES_HEX" RESTORED_SCHEMA_NAMES_HEX="$schema_names_hex" \
+            SOURCE_SCHEMA_COUNT="$EXPECTED_SCHEMAS" RESTORED_SCHEMA_COUNT="$schemas" python - <<'PY'
+          import json
+          import os
+          import re
+
+          def names(label):
+              encoded = os.environ[label + '_SCHEMA_NAMES_HEX']
+              if not re.fullmatch(r'(?:[0-9a-f]{2})+', encoded):
+                  raise ValueError(label + ' schema inventory is not hex')
+              value = json.loads(bytes.fromhex(encoded).decode('utf-8'))
+              if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                  raise ValueError(label + ' schema inventory is not a string list')
+              if value != sorted(set(value)) or len(value) != int(os.environ[label + '_SCHEMA_COUNT']):
+                  raise ValueError(label + ' schema inventory is not sorted, unique, or count-consistent')
+              return value
+
+          try:
+              source = names('SOURCE')
+              restored = names('RESTORED')
+          except (ValueError, UnicodeError) as exc:
+              print('::error title=Invalid schema inventory::' + str(exc))
+              raise SystemExit(1)
+          dump = lambda value: json.dumps(value, ensure_ascii=True, separators=(',', ':'))
+          print('Schema inventory: source=' + dump(source) + '; restored=' + dump(restored) +
+                '; only_source=' + dump(sorted(set(source) - set(restored))) +
+                '; only_restored=' + dump(sorted(set(restored) - set(source))))
+          PY
           mismatch=0
           if [ "$tables" != "$EXPECTED_TABLES" ]; then
             echo '::error title=Restored table count mismatch::Restored table count differs from source'
