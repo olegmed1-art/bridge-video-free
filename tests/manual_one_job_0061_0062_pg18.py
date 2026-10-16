@@ -37,6 +37,7 @@ from universal_video.private_one_job_operator import ClaimReceiptJournal, write_
 from universal_video import private_one_job_entrypoint as claim_entry
 from universal_video import private_one_job_operator as operator
 from universal_video import private_one_job_approver as approver
+from tests import one_job_0060_default_acl_pg18 as acl_regression
 
 
 def _run(args: list[str], *, env: dict[str, str] | None = None) -> str:
@@ -650,6 +651,7 @@ def _approved_sql_inventory() -> list[Path]:
 def _exercise(port: int, tmp: Path, prefix: list[str], env: dict[str, str],
               database_label: str, role_password: str | None = None) -> None:
     files = _approved_sql_inventory()
+    check_default_acl = acl_regression.selected_candidate(files[-1])
     for path in files:
         _run(prefix + ['-f', str(path)], env=env)
         print(f'installed {path.stem}', flush=True)
@@ -658,7 +660,16 @@ def _exercise(port: int, tmp: Path, prefix: list[str], env: dict[str, str],
     for name in proposals:
         _run(prefix + ['-f', str(ROOT / 'database' / 'proposals' / name)], env=env)
         print(f'installed {name}', flush=True)
+    if check_default_acl:
+        with _connect(port) as db:
+            acl_regression.before_test_grants(db)
     _roles(port, role_password)
+    if check_default_acl:
+        with _connect(port) as db:
+            acl_regression.after_test_grants(db)
+        print(json.dumps({'status': '0060_DEFAULT_ACL_REGRESSION_PASS',
+                          'candidate_sha256': acl_regression.DEFAULT_ACL_0060_SHA256},
+                         sort_keys=True), flush=True)
     admitted = _admit(port, approval_seconds=420)
     print(json.dumps({'status': 'SYNTHETIC_BATCH_ADMITTED',
                       'job_id': admitted['job_id']}, sort_keys=True), flush=True)
@@ -677,6 +688,9 @@ def _exercise(port: int, tmp: Path, prefix: list[str], env: dict[str, str],
                               ROOT / 'tests' / 'manual_one_job_0061_0062_pg18.py',
                               *(ROOT / 'database' / 'proposals' / name
                                 for name in proposals))}
+    if check_default_acl:
+        path = ROOT / 'tests' / 'one_job_0060_default_acl_pg18.py'
+        checksums[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     checkout_sha = _run(['git', 'rev-parse', 'HEAD']).strip()
     print(json.dumps({'status': 'SCHEMA_INSTALLED', 'migrations': len(files),
                       'proposals': ['0061', '0062'], 'database': database_label,
