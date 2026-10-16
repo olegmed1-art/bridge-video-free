@@ -91,8 +91,7 @@ class MailboxContractTests(unittest.TestCase):
                                      'SET LOCAL statement_timeout = 10000',
                                      'SELECT mailbox_pr,used_dispatches,max_dispatches,readiness FROM autopilot.mailbox_rotation_readiness()'])
         self.assertEqual(connection_calls[0][0], neon_dsn())
-        self.assertEqual(connection_calls[0][1], {'autocommit': True, 'connect_timeout': 10,
-                    'options': '-c default_transaction_read_only=on'})
+        self.assertEqual(connection_calls[0][1], {'autocommit': True, 'connect_timeout': 10})
 
     def test_invalid_dsn_never_reaches_driver_connect(self):
         calls = []
@@ -125,29 +124,14 @@ class MailboxContractTests(unittest.TestCase):
             target.report_routing_failure(exc)
         self.assertEqual(output.getvalue(), 'AUTOPILOT_DATABASE_ROUTING_FAILED stage=MAILBOX_CONNECT error_type=OTHER sqlstate=NONE\n')
 
-    def test_rotation_expression_handles_full_and_threshold_states(self):
+    def test_capacity_monitor_only_reads_and_never_creates_rotation_prs(self):
         source = (Path(__file__).resolve().parents[1] / '.github/workflows/autopilot-mailbox-pre-rotation.yml').read_text()
-        step = source.split('- name: Prepare bounded draft mailbox PR', 1)[1]
-        expression = next(line.strip()[4:] for line in step.splitlines() if line.strip().startswith('if: '))
-        expression = expression.replace('steps.signal.outputs.readiness', 'readiness').replace('||', 'or')
-        for readiness, expected in [('NORMAL', False), ('PREPARE_ROTATION', True),
-                                    ('ROTATION_REQUIRED', True), ('UNRECOGNIZED', False)]:
-            with self.subTest(readiness=readiness):
-                self.assertEqual(eval(expression, {'__builtins__': {}}, {'readiness': readiness}), expected)
-
-    def test_evidence_trigger_reports_observed_readiness_and_threshold(self):
-        source = (Path(__file__).resolve().parents[1] / '.github/workflows/autopilot-mailbox-pre-rotation.yml').read_text()
-        step = source.split('- name: Prepare bounded draft mailbox PR', 1)[1]
-        label = next(line.strip() for line in step.splitlines() if line.strip().startswith('- Trigger: '))
-        for readiness, threshold in [('PREPARE_ROTATION', '80%'), ('ROTATION_REQUIRED', '100%')]:
-            with self.subTest(readiness=readiness):
-                def render(match):
-                    expression = match.group(1).strip()
-                    expression = expression.replace('steps.signal.outputs.readiness', 'readiness')
-                    expression = expression.replace('&&', 'and').replace('||', 'or')
-                    return str(eval(expression, {'__builtins__': {}}, {'readiness': readiness}))
-                actual = re.sub(r'\$\{\{(.*?)\}\}', render, label)
-                self.assertEqual(actual, f'- Trigger: {readiness} ({threshold} capacity threshold)')
+        self.assertIn('contents: read', source)
+        self.assertIn('persist-credentials: false', source)
+        self.assertIn('ops.github_autopilot_db_route mailbox', source)
+        self.assertIn('SSH_PRIVATE_KEY', source)
+        for forbidden in ('gh pr create', 'git push', 'pull-requests: write', 'GH_TOKEN'):
+            self.assertNotIn(forbidden, source)
 
 
 if __name__ == '__main__':

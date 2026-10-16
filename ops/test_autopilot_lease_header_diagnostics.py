@@ -54,6 +54,9 @@ class LeaseHeaderDiagnostics(unittest.TestCase):
             (b'{"unexpected":"synthetic-private-payload"}', target.LeaseHeaderReason.RECORD_INVALID),
             (json.dumps({'route': ROUTE, 'ca_pem': 'different-certificate'}).encode(),
              target.LeaseHeaderReason.RECORD_INVALID),
+            (json.dumps({'route': ROUTE, 'ca_pem': '\ud800'}).encode(),
+             target.LeaseHeaderReason.RECORD_INVALID),
+            (b'{"route":' + b'9' * 5000 + b'}', target.LeaseHeaderReason.RECORD_INVALID),
         )
         for raw, expected in cases:
             with self.subTest(reason=expected.value), \

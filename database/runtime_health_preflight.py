@@ -80,6 +80,7 @@ AUTOPILOT_COUNTER_QUERY = """
 """
 AUTOPILOT_SIGNAL_KEYS = frozenset({
     "autopilot_mailbox_capacity", "autopilot_planner_backlog", "autopilot_mailbox_e2e",
+    "autopilot_transport_history",
 })
 AUTOPILOT_COUNTER_FIELDS = {
     "autopilot_mailbox_capacity": ("used_dispatches", "max_dispatches", "remaining"),
