@@ -295,6 +295,13 @@ jobs:
           bash -n database/scripts/migrate.sh
           database/scripts/migrate.sh
 
+      - name: Verify video Canon firewall Unicode boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/402_video_canon_firewall_unicode_boundary_probe.sql
+
       - name: Inventory migrated catalog before invariant tests
         shell: bash
         run: |
