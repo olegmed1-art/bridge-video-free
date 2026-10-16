@@ -1,5 +1,12 @@
 \set ON_ERROR_STOP on
 BEGIN;
+DO $dependency$
+BEGIN
+ IF EXISTS (SELECT FROM public.schema_migration
+            WHERE migration_key='0374_autopilot_queue_health_semantics') THEN
+   RAISE EXCEPTION 'AUTOPILOT_ACTIVE_QUEUE_ROLLBACK_REQUIRES_0374_REMOVAL';
+ END IF;
+END $dependency$;
 LOCK TABLE autopilot.project_work_item IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.task IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.role_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE;

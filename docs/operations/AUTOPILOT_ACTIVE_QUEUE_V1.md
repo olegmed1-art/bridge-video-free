@@ -69,7 +69,7 @@ remain historical, not counts of active jobs or proof of current health.
 Before application: reconcile exact main, acquire the coordinator's database
 window, retain Light HOLD and video/IBM holds, capture the affected definitions
 and aggregate record/receipt identities, and verify the existing restore proof.
-Apply only 0373 to the confirmed current backend with bounded statement/lock
+Apply 0373 followed by 0374 to the confirmed current backend with bounded statement/lock
 timeouts. This change does not choose or migrate a backend, create credentials,
 change grants, activate the worker, replay an incident or clear owner holds.
 
@@ -90,3 +90,27 @@ statement. Neon documents that pooled connections can reject unsupported
 startup options: https://neon.com/docs/connect/connection-errors. This corrects
 a supported-route incompatibility; only an actual production read can show
 whether it resolves the observed `MAILBOX_CONNECT` failure.
+
+## Follow-up assurance: 0374 (2026-10-16)
+
+Review of PR #2181 identified four reproducible source defects. Migration 0374
+corrects the health view without editing the published 0373 migration. Ordinary
+READY/ACTIVE/BLOCKED/dependency work remains visible in counters; critical backlog
+severity is reserved for the existing `PROJECT_DONE_WITH_PAUSED_BACKLOG` failure
+decision. Capacity and expired delivery/callback deadlines retain their own
+critical signals. A RETRY is stalled only when its scheduled next attempt is
+more than 15 minutes overdue, regardless of the original row age. Transport
+history warnings now print their signal name, count and threshold through the
+bounded numeric projection; private details remain excluded.
+
+The 0355 retirement script now removes only its exact fence predicate from the
+current claim function. It preserves subsequent claim guards and rebases the
+internal 0373 predecessor snapshot so rollback cannot resurrect a retired fence.
+Unexpected predicate drift aborts the transaction. Applying 0374 does not retire
+the fence or enable processing. Fence retirement still requires its separately
+coordinated, quiescent window and compatibility decision.
+
+Recovery order is 0374 rollback, then 0373 rollback, under HOLD. Native disposable
+PostgreSQL tests reproduce the predecessor failures and exercise corrected full
+capacity claims, retry scheduling, planner health, and rollback/reapply. Offline
+mocked-driver diagnostics establish output contracts only, not production health.

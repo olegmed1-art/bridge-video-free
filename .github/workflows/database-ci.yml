@@ -255,6 +255,9 @@ jobs:
           PYTHONPATH=. python tests/test_worker_dsn_contract.py
           PYTHONPATH=. python tests/test_health_dsn_contract.py
 
+      - name: Verify bounded Autopilot health diagnostics
+        run: python -B -m unittest tests.test_autopilot_safe_diagnostics tests.test_oracle_autopilot_health_split -v
+
       - name: Install PostgreSQL client
         shell: bash
         run: |
@@ -323,8 +326,10 @@ jobs:
           trap cleanup EXIT
           PYTHONPATH=. python -B -m unittest discover -s database/tests -p test_active_queue_postgres.py -v
           psql "$ADMIN_DATABASE_URL" -Xv ON_ERROR_STOP=1 -c 'CREATE DATABASE bridge_school_queue_ci WITH TEMPLATE bridge_school_ci OWNER bridge_ci_owner;'
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/rollbacks/0374_autopilot_queue_health_semantics.sql
           psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/rollbacks/0373_autopilot_active_dispatch_capacity.sql
           psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/migrations/0373_autopilot_active_dispatch_capacity.sql
+          psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/migrations/0374_autopilot_queue_health_semantics.sql
           psql "$ACTIVE_QUEUE_CI_DATABASE_URL" -Xv ON_ERROR_STOP=1 -f database/tests/373_autopilot_active_dispatch_capacity.sql
 
       - name: Verify outbox publisher guard and concurrent rebinding on PostgreSQL
@@ -415,6 +420,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0374_autopilot_queue_health_semantics.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0373_autopilot_active_dispatch_capacity.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
