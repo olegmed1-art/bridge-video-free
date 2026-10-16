@@ -1,0 +1,6 @@
+{
+  "postgres_major": 18,
+  "catalog_sha256": "57a655f8dd8133cf57273cf6c93474e37b970e71428cc6cd00cef5f8eda15203",
+  "source": "PG18.6 reviewed fixture from PR2172 prerequisites through 0314 at 4433609 (the later unapplied 0060 candidate excluded), then 0329 and repaired 0402",
+  "purpose": "Refuse stale or modified DDL and ACL before fictional positive rehearsal; not production authorization"
+}
