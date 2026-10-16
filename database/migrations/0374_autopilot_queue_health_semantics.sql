@@ -45,7 +45,9 @@ queue AS (
  WHERE r.lifecycle='ACTIVE' GROUP BY r.mailbox_pr
 )
 SELECT 'autopilot_planner_backlog'::text signal_key,
-       CASE WHEN backlog.last_decision_code='PROJECT_DONE_WITH_PAUSED_BACKLOG' THEN 'critical'
+       CASE WHEN backlog.open_actionable_count>0
+                  AND backlog.last_decision_code='WAITING_FOR_MAILBOX_CAPACITY'
+                  AND EXISTS (SELECT FROM mailbox WHERE readiness='CAPACITY_REACHED') THEN 'critical'
             WHEN backlog.paused_count>0 THEN 'warning' ELSE 'ok' END::text severity,
        jsonb_build_object('planner_decision',backlog.last_decision_code,'paused_count',backlog.paused_count,'open_actionable_count',backlog.open_actionable_count) details,
        clock_timestamp() observed_at FROM backlog

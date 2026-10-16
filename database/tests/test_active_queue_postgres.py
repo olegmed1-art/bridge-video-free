@@ -236,7 +236,7 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             self.assertEqual(conn.execute(query).fetchone(), ('critical', '1'))
             self.assertEqual(self.readiness(conn)[0], 1)
 
-    def test_normal_open_work_is_not_critical_but_failure_decision_still_is(self):
+    def test_normal_open_work_is_not_critical_but_confirmed_capacity_wait_is(self):
         with self.connect() as conn:
             conn.autocommit = True
             self.run_script(conn, 'database/rollbacks/0374_autopilot_queue_health_semantics.sql')
@@ -258,8 +258,17 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             self.run_script(conn, 'database/migrations/0374_autopilot_queue_health_semantics.sql')
             self.assertNotEqual(conn.execute(query).fetchone()[0], 'critical')
             self.assertGreaterEqual(int(conn.execute(query).fetchone()[1]), 4)
-            conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='PROJECT_DONE_WITH_PAUSED_BACKLOG' WHERE singleton")
+            conn.execute("UPDATE autopilot.role_dispatch_mailbox_registry SET max_dispatches=1 WHERE lifecycle='ACTIVE'")
+            did = self.fixture(conn)
+            conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='WAITING_FOR_MAILBOX_CAPACITY' WHERE singleton")
             self.assertEqual(conn.execute(query).fetchone()[0], 'critical')
+            conn.execute("UPDATE autopilot.role_dispatch_outbox SET status='FAILED_CLOSED',completed_at=now() WHERE dispatch_id=%s", (did,))
+            self.assertNotEqual(conn.execute(query).fetchone()[0], 'critical')
+            conn.execute("INSERT INTO autopilot.project_work_item(work_key,mailbox_pr,role,target_pr,state,created_by,source) "
+                         "VALUES(%s,%s,'AUTOPILOT',999973,'PAUSED','sql-test','SQL_TEST')",
+                         ('sql-0374-' + self.prefix + 'paused', mailbox))
+            conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='PROJECT_DONE_WITH_PAUSED_BACKLOG' WHERE singleton")
+            self.assertEqual(conn.execute(query).fetchone()[0], 'warning')
 
     def run_script(self, conn, relative_path):
         # Only reached after the exact disposable CI identity gate. psycopg's

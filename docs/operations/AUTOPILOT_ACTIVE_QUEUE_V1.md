@@ -96,8 +96,10 @@ whether it resolves the observed `MAILBOX_CONNECT` failure.
 Review of PR #2181 identified four reproducible source defects. Migration 0374
 corrects the health view without editing the published 0373 migration. Ordinary
 READY/ACTIVE/BLOCKED/dependency work remains visible in counters; critical backlog
-severity is reserved for the existing `PROJECT_DONE_WITH_PAUSED_BACKLOG` failure
-decision. Capacity and expired delivery/callback deadlines retain their own
+severity requires a `WAITING_FOR_MAILBOX_CAPACITY` decision and corroborating
+current full capacity with open work. A stale decision after capacity clears
+does not remain critical; owner-paused backlog retains warning severity.
+Capacity and expired delivery/callback deadlines retain their own
 critical signals. A RETRY is stalled only when its scheduled next attempt is
 more than 15 minutes overdue, regardless of the original row age. Transport
 history warnings now print their signal name, count and threshold through the
