@@ -29,3 +29,4 @@ database/migrations/0058_universal_video_terminal_v2_gate/002_require_terminal_r
 /data/research/spot_card_candidate_v2/routing-handoff/teacher-versions.json text eol=crlf
 /data/research/evolutionary_course_diana2_club_split_skill_candidate_v1.json text eol=crlf
 /data/research/evolutionary_course_diana2_approved_rerun_receipt_v1.json text eol=crlf
+/site_integration/yan_spot_cycle/content/lesson.ui.json -text

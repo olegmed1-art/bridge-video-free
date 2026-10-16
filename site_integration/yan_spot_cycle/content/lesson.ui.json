@@ -1,0 +1,320 @@
+{
+  "package_format": "school-of-bridge-two-spot-content-v1",
+  "package_format_scope": "Локальная упаковка содержимого; не новый формат TeacherSessionStore и не public assignment.",
+  "language": "ru",
+  "title": "Выработка фоски и сохранение входа",
+  "status": "LOCAL_CONTENT_READY_FOR_UI_REVIEW",
+  "runtime_contract": {
+    "prompt_method_version": "spot-routing-handoff-v2",
+    "assignment_method_version": "local-teacher-routing-v1",
+    "session_mode": "SPOT_CANDIDATE_PREVIEW_V1",
+    "response_schema": "low-card-structured-response-v1",
+    "response_fields": [
+      "schema",
+      "exercise_id",
+      "prompt_sha256",
+      "answers",
+      "explanation"
+    ],
+    "answer_fields": [
+      "visible_count",
+      "missing_count",
+      "guaranteed_spot_tricks_from_position"
+    ],
+    "metric_id": "guaranteed-spot-tricks-from-position-v1",
+    "time_origin": "BEFORE_LEAD_TO_TRICK_9",
+    "horizon": [
+      9,
+      13
+    ],
+    "first_lead_capture": "explanation",
+    "prompt_objects": "COPY_UNCHANGED_FROM_EXISTING_PUBLIC_PROMPTS",
+    "assessment": "MANUAL_REVIEW_ONLY",
+    "automatic_assessment_enabled": false,
+    "approved_catalog_member": false,
+    "actual_mastery": null,
+    "criterion_met": null,
+    "learner_error": null,
+    "persisted": false,
+    "student_profile_written": false,
+    "curriculum_activated": false,
+    "mastery_event_created": false,
+    "explanation_review": "HUMAN_REVIEW_REQUIRED"
+  },
+  "shared_student_facts": [
+    "Игра без козыря. Перед первым ходом в девятой взятке ход у Юга. В таблице показаны все пять оставшихся карт Юга и все пять карт стола, Севера.",
+    "В целевой масти уже сыграны 2, 3, 4 и 8. По условию у защитников осталось по две карты этой масти, то есть 2–2. Ранги по конкретным защитникам и их остальные карты скрыты.",
+    "Защитники выбирают лучшую защиту. Считай только будущие взятки 9–13, выигранные одной из исходных фосок 7, 6, 5 стола. Снос фоски на взятку туза или короля руки не считается её собственной взяткой.",
+    "Две задачи независимы. Первые восемь взяток восстанавливать не нужно; результат всего контракта здесь не определяется."
+  ],
+  "presentation_policy": {
+    "before_response": "Показывать условие, открытые карты, вопрос и варианты; ключ и обратную связь давать после собственного ответа.",
+    "sequence": "Бубны → собственный ответ → ручной разбор → новая независимая задача с трефами → собственный ответ → ручной разбор.",
+    "coaching": "Варианты первого хода и 0/1 относятся к учебной оболочке. В штатном UI сохранить все три исходных integer-вопроса и диапазоны 0–13, 0–13, 0–3; первый ход записывать в explanation.",
+    "runtime_routing": "Порядок указан для преподавателя. Существующий preview host выбирает один spot на сеанс; этот пакет не создаёт автоматическую цепочку next_assignment."
+  },
+  "exercises": [
+    {
+      "exercise_id": "spot.a7c2",
+      "prompt": {
+        "exercise_id": "spot.a7c2",
+        "task": "LOW_CARD_ENTRY_CANDIDATE",
+        "method_version": "spot-routing-handoff-v2",
+        "candidate_version": "spot-establishment-candidate-v1-routing.2",
+        "fixture_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+        "response_schema": "low-card-structured-response-v1",
+        "response_fields": [
+          "schema",
+          "exercise_id",
+          "prompt_sha256",
+          "answers",
+          "explanation"
+        ],
+        "presentation": {
+          "title": "Розыгрыш позиции",
+          "author_label": "Авторская учебная позиция.",
+          "strain": "NT",
+          "partial_deal": false,
+          "position_kind": "COMPLETE_REMAINING_HANDS",
+          "trick_index": 9,
+          "cards_per_hand": 5,
+          "declarer": "S",
+          "dummy_seat": "N",
+          "lead": "HAND",
+          "hand": {
+            "S": [
+              "3"
+            ],
+            "H": [
+              "2"
+            ],
+            "D": [
+              "A",
+              "K"
+            ],
+            "C": [
+              "A"
+            ]
+          },
+          "dummy": {
+            "S": [],
+            "H": [
+              "A"
+            ],
+            "D": [
+              "7",
+              "6",
+              "5"
+            ],
+            "C": [
+              "2"
+            ]
+          },
+          "target_suit": "D",
+          "card_encoding": "S.H.D.C; HAND = Юг, DUMMY = Север; A,K,Q,J,T,9..2.",
+          "given_information": {
+            "defenders_remaining_lengths": [
+              2,
+              2
+            ],
+            "played_in_target_suit": [
+              "D2",
+              "D3",
+              "D4",
+              "D8"
+            ]
+          },
+          "task_text": "Без козыря. До первого хода в девятой взятке ход в руке. Никакие действия из показанной позиции ещё не сделаны. Распределение оставшихся карт целевой масти у защиты 2–2 дано условием. Первые восемь взяток в ответ не входят. Считайте только будущие взятки, выигранные одной из фосок 7, 6, 5 стола, а не снос фоски на взятку руки.",
+          "questions": [
+            {
+              "id": "visible_count",
+              "type": "integer",
+              "prompt": "Сколько карт целевой масти осталось в руке и на столе вместе?",
+              "minimum": 0,
+              "maximum": 13
+            },
+            {
+              "id": "missing_count",
+              "type": "integer",
+              "prompt": "Сколько карт этой масти осталось у защиты с учётом уже сыгранных карт?",
+              "minimum": 0,
+              "maximum": 13
+            },
+            {
+              "id": "guaranteed_spot_tricks_from_position",
+              "type": "integer",
+              "prompt": "Сколько новых взяток фосками 7, 6, 5 стола можно гарантировать с девятой по тринадцатую взятку при лучшем плане из этой позиции против любой допустимой защиты? Считайте взятки, которые удастся взять имеющимися картами, а не просто число выработанных фосок.",
+              "minimum": 0,
+              "maximum": 3
+            }
+          ],
+          "explanation_prompt": "Объясните порядок ходов и почему ваш план работает или не работает."
+        },
+        "prompt_sha256": "871d6bd12d348617bcce3507e4747548720d8667bc05da134e31d2410da51ac8"
+      },
+      "lesson_content": {
+        "exercise_id": "spot.a7c2",
+        "title": "Бубны и сохранение входа",
+        "target_suit": "D",
+        "question": "Как получить будущую взятку бубновой фоской стола? Выбери первый ход для плана: ♦A или ♥2. Затем укажи, сколько взяток именно ♦7, ♦6 или ♦5 можно гарантировать: 0 или 1.",
+        "first_lead_choices": [
+          {
+            "card": "DA",
+            "label": "Начать с ♦A."
+          },
+          {
+            "card": "H2",
+            "label": "Сначала перейти ♥2 к ♥A стола."
+          }
+        ],
+        "numeric_choices": [
+          {
+            "value": 0,
+            "label": "0 гарантированных взяток фоской."
+          },
+          {
+            "value": 1,
+            "label": "1 гарантированная взятка фоской."
+          }
+        ],
+        "explanation_request": "Назови число видимых бубен и остаток у защиты. Проследи, сколько фосок уйдёт со стола на ♦A и ♦K, где останется ход и какими двумя картами можно передать его Северу. Первый ход и объяснение запиши своими словами.",
+        "source_refs": [
+          "compact",
+          "public_prompts",
+          "evidence"
+        ]
+      }
+    },
+    {
+      "exercise_id": "spot.f3b8",
+      "prompt": {
+        "exercise_id": "spot.f3b8",
+        "task": "LOW_CARD_ENTRY_CANDIDATE",
+        "method_version": "spot-routing-handoff-v2",
+        "candidate_version": "spot-establishment-candidate-v1-routing.2",
+        "fixture_sha256": "e3f0710d1bba8dc17b136395197cf2dc4b7a6c24d00be4c78c4d883e69897090",
+        "response_schema": "low-card-structured-response-v1",
+        "response_fields": [
+          "schema",
+          "exercise_id",
+          "prompt_sha256",
+          "answers",
+          "explanation"
+        ],
+        "presentation": {
+          "title": "Розыгрыш позиции",
+          "author_label": "Авторская учебная позиция.",
+          "strain": "NT",
+          "partial_deal": false,
+          "position_kind": "COMPLETE_REMAINING_HANDS",
+          "trick_index": 9,
+          "cards_per_hand": 5,
+          "declarer": "S",
+          "dummy_seat": "N",
+          "lead": "HAND",
+          "hand": {
+            "S": [
+              "3"
+            ],
+            "H": [
+              "A"
+            ],
+            "D": [
+              "A"
+            ],
+            "C": [
+              "A",
+              "K"
+            ]
+          },
+          "dummy": {
+            "S": [],
+            "H": [
+              "2"
+            ],
+            "D": [
+              "2"
+            ],
+            "C": [
+              "7",
+              "6",
+              "5"
+            ]
+          },
+          "target_suit": "C",
+          "card_encoding": "S.H.D.C; HAND = Юг, DUMMY = Север; A,K,Q,J,T,9..2.",
+          "given_information": {
+            "defenders_remaining_lengths": [
+              2,
+              2
+            ],
+            "played_in_target_suit": [
+              "C2",
+              "C3",
+              "C4",
+              "C8"
+            ]
+          },
+          "task_text": "Без козыря. До первого хода в девятой взятке ход в руке. Никакие действия из показанной позиции ещё не сделаны. Распределение оставшихся карт целевой масти у защиты 2–2 дано условием. Первые восемь взяток в ответ не входят. Считайте только будущие взятки, выигранные одной из фосок 7, 6, 5 стола, а не снос фоски на взятку руки.",
+          "questions": [
+            {
+              "id": "visible_count",
+              "type": "integer",
+              "prompt": "Сколько карт целевой масти осталось в руке и на столе вместе?",
+              "minimum": 0,
+              "maximum": 13
+            },
+            {
+              "id": "missing_count",
+              "type": "integer",
+              "prompt": "Сколько карт этой масти осталось у защиты с учётом уже сыгранных карт?",
+              "minimum": 0,
+              "maximum": 13
+            },
+            {
+              "id": "guaranteed_spot_tricks_from_position",
+              "type": "integer",
+              "prompt": "Сколько новых взяток фосками 7, 6, 5 стола можно гарантировать с девятой по тринадцатую взятку при лучшем плане из этой позиции против любой допустимой защиты? Считайте взятки, которые удастся взять имеющимися картами, а не просто число выработанных фосок.",
+              "minimum": 0,
+              "maximum": 3
+            }
+          ],
+          "explanation_prompt": "Объясните порядок ходов и почему ваш план работает или не работает."
+        },
+        "prompt_sha256": "86ea1c43c6d1882107bea7c860f4f0dcbeb98d2c3f8dc74c9539389c1602cfa3"
+      },
+      "lesson_content": {
+        "exercise_id": "spot.f3b8",
+        "title": "Трефы и доступ к выработанной фоске",
+        "target_suit": "C",
+        "question": "Проверь трефовый план. Для начала выработки выбери ♣A или ♥A. Сколько взяток именно ♣7, ♣6 или ♣5 можно гарантировать из этой позиции: 0 или 1?",
+        "first_lead_choices": [
+          {
+            "card": "CA",
+            "label": "Начать выработку с ♣A."
+          },
+          {
+            "card": "HA",
+            "label": "Сначала взять ♥A."
+          }
+        ],
+        "numeric_choices": [
+          {
+            "value": 0,
+            "label": "0 гарантированных взяток фоской."
+          },
+          {
+            "value": 1,
+            "label": "1 гарантированная взятка фоской."
+          }
+        ],
+        "explanation_request": "Назови число видимых треф и остаток у защиты. Проследи, сколько треф останется на столе после ♣A и ♣K и в какой руке будет ход. Найди собственный гарантированный переход на стол либо объясни, почему его нет.",
+        "source_refs": [
+          "compact",
+          "public_prompts",
+          "evidence"
+        ]
+      }
+    }
+  ]
+}

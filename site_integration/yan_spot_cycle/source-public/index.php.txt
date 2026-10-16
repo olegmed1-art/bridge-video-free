@@ -1,0 +1,25 @@
+<?php
+/**
+ * @author      FishArt Studio
+ * @copyright   Copyright (c) 2015, FishArt Studio.
+ * @link        http://fishart.co.il
+ */
+
+
+require 'cms/bootstrap.inc.php';
+
+session_start();
+
+if($cms->admin()){
+  $edit = new edit($siteSettings['languages'], $db, $cms, $rout);
+  include SYS_CMS_DIR.'edit/edit.controller.inc.php';
+}
+
+$pageData = $cms->page();
+
+include $cms->includeView($rout->scriptName());
+
+
+// CMS ADMIN LOGIN
+if(!$cms->admin()) include SYS_CMS_DIR.'alogin/alogin.inc.php';
+else include SYS_CMS_DIR.'acontrol/acontrol.inc.php';
