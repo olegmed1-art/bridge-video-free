@@ -331,7 +331,8 @@ jobs:
           except (ValueError, UnicodeError) as exc:
               print('::error title=Invalid schema inventory::' + str(exc))
               raise SystemExit(1)
-          dump = lambda value: json.dumps(value, ensure_ascii=True, separators=(',', ':'))
+          # Legacy runner commands can occur anywhere in a log line.
+          dump = lambda value: json.dumps(value, ensure_ascii=True, separators=(',', ':')).replace('#', r'\u0023')
           print('Schema inventory: source=' + dump(source) + '; restored=' + dump(restored) +
                 '; only_source=' + dump(sorted(set(source) - set(restored))) +
                 '; only_restored=' + dump(sorted(set(restored) - set(source))))

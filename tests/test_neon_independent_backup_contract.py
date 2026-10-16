@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
 
@@ -18,6 +19,37 @@ def _restore_verification_script():
     section = workflow.split('      - name: Verify restored schema and critical read paths\n', 1)[1]
     section = section.split('      - name: Publish non-sensitive recovery evidence\n', 1)[0]
     return textwrap.dedent(section.split('        run: |\n', 1)[1])
+
+
+def _run_schema_inventory(source, restored):
+    script = _restore_verification_script().split("python - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_NAMES_HEX': _schema_hex(source),
+        'RESTORED_SCHEMA_NAMES_HEX': _schema_hex(restored),
+        'SOURCE_SCHEMA_COUNT': str(len(source)),
+        'RESTORED_SCHEMA_COUNT': str(len(restored)),
+    })
+    return subprocess.run(
+        [sys.executable, '-c', script], env=env,
+        capture_output=True, text=True, check=False,
+    )
+
+
+def _read_schema_inventory(output):
+    prefix = 'Schema inventory: '
+    assert output.startswith(prefix)
+    remaining = output[len(prefix):].removesuffix('\n')
+    values = {}
+    decoder = json.JSONDecoder()
+    for index, label in enumerate(('source', 'restored', 'only_source', 'only_restored')):
+        field = ('; ' if index else '') + label + '='
+        assert remaining.startswith(field)
+        value, end = decoder.raw_decode(remaining[len(field):])
+        values[label] = value
+        remaining = remaining[len(field) + end:]
+    assert remaining == ''
+    return values
 
 
 def _run_restore_verification(overrides=None):
@@ -218,6 +250,40 @@ def test_restore_verification_escapes_unusual_schema_names():
     assert not any(line.startswith('::error') for line in result.stdout.splitlines())
 
 
+def test_schema_inventory_blocks_legacy_runner_commands_and_preserves_names():
+    for command in ('error', 'stop-commands', 'add-mask'):
+        shared = f'prefix##[{command}]shared'
+        source_only = f'source##[{command}]payload'
+        restored_only = f'restored##[{command}]payload'
+        source = sorted(['public', shared, source_only])
+        restored = sorted(['public', shared, restored_only])
+        result = _run_schema_inventory(source, restored)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert '##[' not in result.stdout, command
+        assert r'\u0023\u0023[' in result.stdout, command
+        assert not any(line.lstrip().startswith('::') for line in result.stdout.splitlines())
+        assert _read_schema_inventory(result.stdout) == {
+            'source': source, 'restored': restored,
+            'only_source': [source_only], 'only_restored': [restored_only],
+        }
+
+
+def test_schema_inventory_round_trip_preserves_literal_escapes_and_all_schemas():
+    names = sorted([
+        '#', r'\u0023', 'pg_temp_42', 'pg_toast_temp_42',
+        'weird\n::error title=injected::\r|"',
+        '; restored=[]; only_source=[]', '\u0421\u0445\u0435\u043c\u0430',
+    ])
+    result = _run_schema_inventory(names, names)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '#' not in result.stdout
+    assert len(result.stdout.splitlines()) == 1
+    assert not result.stdout.lstrip().startswith('::')
+    assert _read_schema_inventory(result.stdout) == {
+        'source': names, 'restored': names, 'only_source': [], 'only_restored': [],
+    }
+
+
 def test_restore_verification_rejects_invalid_schema_inventory():
     for variable, value in [
         ('EXPECTED_SCHEMA_NAMES_HEX', 'not-hex'),
@@ -247,6 +313,8 @@ def main():
     test_neon_independent_backup_restore_is_fail_closed()
     test_raw_dump_is_not_uploaded()
     test_backup_and_restore_use_distinct_jobs()
+    test_schema_inventory_blocks_legacy_runner_commands_and_preserves_names()
+    test_schema_inventory_round_trip_preserves_literal_escapes_and_all_schemas()
     test_source_statistics_transports_schema_names_without_output_injection()
     test_restore_verification_accepts_matching_values()
     test_restore_verification_names_each_failure_and_keeps_counts()
