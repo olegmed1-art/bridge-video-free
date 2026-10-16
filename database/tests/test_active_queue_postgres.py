@@ -217,6 +217,135 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             self.assertEqual(health, ('critical', '1'))
             self.assertEqual(self.readiness(conn)[0], 1)
 
+    def test_retry_backoff_is_healthy_until_scheduled_attempt_is_overdue(self):
+        with self.connect() as conn:
+            conn.autocommit = True
+            self.run_script(conn, 'database/rollbacks/0374_autopilot_queue_health_semantics.sql')
+            did = self.fixture(conn, status='RETRY')
+            conn.execute("UPDATE autopilot.role_dispatch_outbox SET created_at=now()-interval '2 hours', "
+                         "next_attempt_at=now()+interval '1 hour' WHERE dispatch_id=%s", (did,))
+            query = ("SELECT severity,details->>'stalled_dispatches' FROM public.autopilot_operational_health_signal "
+                     "WHERE signal_key='autopilot_mailbox_e2e'")
+            # Reproduce the published predecessor, then prove the correction.
+            self.assertEqual(conn.execute(query).fetchone(), ('critical', '1'))
+            self.run_script(conn, 'database/migrations/0374_autopilot_queue_health_semantics.sql')
+            self.assertNotEqual(conn.execute(query).fetchone()[0], 'critical')
+            self.assertEqual(self.readiness(conn)[0], 1)
+            conn.execute("UPDATE autopilot.role_dispatch_outbox SET next_attempt_at=now()-interval '16 minutes' "
+                         "WHERE dispatch_id=%s", (did,))
+            self.assertEqual(conn.execute(query).fetchone(), ('critical', '1'))
+            self.assertEqual(self.readiness(conn)[0], 1)
+
+    def test_normal_open_work_is_not_critical_but_confirmed_capacity_wait_is(self):
+        with self.connect() as conn:
+            conn.autocommit = True
+            self.run_script(conn, 'database/rollbacks/0374_autopilot_queue_health_semantics.sql')
+            mailbox = conn.execute("SELECT mailbox_pr FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE'").fetchone()[0]
+            conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='TASK_MATERIALIZED' WHERE singleton")
+            ready_dependency = None
+            for state in ('READY', 'ACTIVE', 'BLOCKED', 'WAITING_DEPENDENCY'):
+                work_id, saved_state = conn.execute(
+                    "INSERT INTO autopilot.project_work_item(work_key,mailbox_pr,role,target_pr,state,depends_on_work_item_id,created_by,source) "
+                    "VALUES(%s,%s,'AUTOPILOT',999973,%s,%s,'sql-test','SQL_TEST') RETURNING work_item_id,state",
+                    ('sql-0374-' + self.prefix + state, mailbox, state,
+                     ready_dependency if state == 'WAITING_DEPENDENCY' else None)).fetchone()
+                self.assertEqual(saved_state, state)
+                if state == 'READY':
+                    ready_dependency = work_id
+            query = ("SELECT severity,details->>'open_actionable_count' FROM public.autopilot_operational_health_signal "
+                     "WHERE signal_key='autopilot_planner_backlog'")
+            self.assertEqual(conn.execute(query).fetchone()[0], 'critical')
+            self.run_script(conn, 'database/migrations/0374_autopilot_queue_health_semantics.sql')
+            self.assertNotEqual(conn.execute(query).fetchone()[0], 'critical')
+            self.assertGreaterEqual(int(conn.execute(query).fetchone()[1]), 4)
+            conn.execute("UPDATE autopilot.role_dispatch_mailbox_registry SET max_dispatches=1 WHERE lifecycle='ACTIVE'")
+            did = self.fixture(conn)
+            conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='WAITING_FOR_MAILBOX_CAPACITY' WHERE singleton")
+            self.assertEqual(conn.execute(query).fetchone()[0], 'critical')
+            conn.execute("UPDATE autopilot.role_dispatch_outbox SET status='FAILED_CLOSED',completed_at=now() WHERE dispatch_id=%s", (did,))
+            self.assertNotEqual(conn.execute(query).fetchone()[0], 'critical')
+            conn.execute("INSERT INTO autopilot.project_work_item(work_key,mailbox_pr,role,target_pr,state,created_by,source) "
+                         "VALUES(%s,%s,'AUTOPILOT',999973,'PAUSED','sql-test','SQL_TEST')",
+                         ('sql-0374-' + self.prefix + 'paused', mailbox))
+            conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='PROJECT_DONE_WITH_PAUSED_BACKLOG' WHERE singleton")
+            self.assertEqual(conn.execute(query).fetchone()[0], 'warning')
+            conn.execute("UPDATE autopilot.project_work_item SET state='DONE',completed_at=now() WHERE state<>'PAUSED'")
+            self.assertEqual(conn.execute(query).fetchone(), ('warning', '0'))
+
+    def run_script(self, conn, relative_path):
+        # Only reached after the exact disposable CI identity gate. psycopg's
+        # simple protocol executes the saved SQL transaction; no shell/DSN logs.
+        source = (ROOT / relative_path).read_text()
+        source = '\n'.join(line for line in source.splitlines() if not line.startswith('\\'))
+        conn.execute(source, prepare=False)
+
+    def test_fence_retirement_keeps_backpressure_and_rollback_cannot_resurrect_fence(self):
+        marker = 'LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1'
+        definition_query = "SELECT pg_get_functiondef('autopilot.claim_next_task(text,integer)'::regprocedure)"
+        with self.connect() as conn:
+            conn.autocommit = True
+            conn.execute("UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton")
+            before = conn.execute(definition_query).fetchone()[0]
+            self.assertIn(marker, before)
+            self.assertIn('ACTIVE_QUEUE_0373', before)
+            legacy_restore = conn.execute("SELECT function_definition FROM autopilot.migration_0355_function_backup "
+                                          "WHERE function_key='claim_next_task'").fetchone()[0]
+            self.run_script(conn, 'database/rollbacks/0355_autopilot_light_v3_compatibility_fence.sql')
+            after = conn.execute(definition_query).fetchone()[0]
+            self.assertNotIn(marker, after)
+            self.assertIn('ACTIVE_QUEUE_0373', after)
+            self.assertIn('autopilot.role_dispatch_queue_available', after)
+            # A normal migration runner can reinstall retired 0355. Its second
+            # retirement must accept an already-unfenced 0373 snapshot.
+            self.run_script(conn, 'database/migrations/0355_autopilot_light_v3_compatibility_fence.sql')
+            self.assertIn(marker, conn.execute(definition_query).fetchone()[0])
+            self.run_script(conn, 'database/rollbacks/0355_autopilot_light_v3_compatibility_fence.sql')
+            self.assertEqual(conn.execute(definition_query).fetchone()[0], after)
+            conn.execute("UPDATE autopilot.role_dispatch_mailbox_registry SET max_dispatches=1 WHERE lifecycle='ACTIVE'")
+            did = self.fixture(conn)
+            mailbox = conn.execute("SELECT mailbox_pr FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE'").fetchone()[0]
+            tid = conn.execute("INSERT INTO autopilot.task(task_key,goal_type,goal_json,status,current_step_key,created_by,source) "
+                               "VALUES(%s,'CHATGPT_ROLE_DISPATCH_V1',%s,'READY','github.chatgpt.role.dispatch','sql-test','SQL_TEST') RETURNING task_id",
+                               ('sql-0374-' + self.prefix, Jsonb({'mailbox_pr': mailbox, 'role': 'AUTOPILOT'}))).fetchone()[0]
+            # Reproduce the former retirement's exact restore operation in a
+            # rolled-back transaction. It claims at full capacity and spends an
+            # attempt; the fixed retirement must preserve READY/0 instead.
+            with self.assertRaisesRegex(RuntimeError, 'legacy-restore-probe-rollback'):
+                with conn.transaction():
+                    conn.execute(legacy_restore)
+                    self.assertEqual(conn.execute("SELECT task_id FROM autopilot.claim_next_task('oracle-autopilot-light-1',60)").fetchone()[0], tid)
+                    self.assertEqual(conn.execute('SELECT attempts FROM autopilot.task WHERE task_id=%s', (tid,)).fetchone()[0], 1)
+                    raise RuntimeError('legacy-restore-probe-rollback')
+            self.assertEqual(conn.execute("SELECT count(*) FROM autopilot.claim_next_task('oracle-autopilot-light-1',60)").fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT status,attempts FROM autopilot.task WHERE task_id=%s', (tid,)).fetchone(), ('READY', 0))
+            self.run_script(conn, 'database/rollbacks/0374_autopilot_queue_health_semantics.sql')
+            self.run_script(conn, 'database/rollbacks/0373_autopilot_active_dispatch_capacity.sql')
+            self.assertNotIn(marker, conn.execute(definition_query).fetchone()[0])
+            self.run_script(conn, 'database/migrations/0373_autopilot_active_dispatch_capacity.sql')
+            self.run_script(conn, 'database/migrations/0374_autopilot_queue_health_semantics.sql')
+            self.assertNotIn(marker, conn.execute(definition_query).fetchone()[0])
+            self.assertEqual(conn.execute("SELECT count(*) FROM autopilot.claim_next_task('oracle-autopilot-light-1',60)").fetchone()[0], 0)
+            conn.execute("UPDATE autopilot.role_dispatch_outbox SET status='FAILED_CLOSED',completed_at=now() WHERE dispatch_id=%s", (did,))
+            self.assertEqual(conn.execute("SELECT task_id FROM autopilot.claim_next_task('oracle-autopilot-light-1',60)").fetchone()[0], tid)
+
+    def test_fence_retirement_rejects_altered_marker_without_partial_changes(self):
+        marker = 'LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1'
+        definition_query = "SELECT pg_get_functiondef('autopilot.claim_next_task(text,integer)'::regprocedure)"
+        with self.connect() as conn:
+            conn.autocommit = True
+            conn.execute("UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton")
+            before = conn.execute(definition_query).fetchone()[0]
+            # Internal snapshot drift must roll back even the preceding current
+            # function edit. No partial retirement or migration-marker removal.
+            conn.execute("UPDATE autopilot.migration_0373_definition_backup SET definition=definition || %s "
+                         "WHERE object_key='autopilot.claim_next_task(text,integer)'", ('\n-- ' + marker,))
+            with self.assertRaisesRegex(psycopg.Error, 'AUTOPILOT_LIGHT_V3_FENCE_RETIREMENT_BACKUP_DRIFT'):
+                self.run_script(conn, 'database/rollbacks/0355_autopilot_light_v3_compatibility_fence.sql')
+            conn.execute('ROLLBACK')
+            self.assertEqual(conn.execute(definition_query).fetchone()[0], before)
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM public.schema_migration "
+                                              "WHERE migration_key='0355_autopilot_light_v3_compatibility_fence'").fetchone())
+
     def test_repeatable_read_admission_fails_closed(self):
         with self.connect() as conn:
             conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')

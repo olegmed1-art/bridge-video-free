@@ -13,6 +13,7 @@ PRIVATE = "SYNTHETIC_PRIVATE_VALUE"
 BAD_TEXT = "postgresql://synthetic:" + PRIVATE + "@example.invalid/db\npassword=" + PRIVATE
 CAPACITY = "autopilot_mailbox_capacity"
 BACKLOG = "autopilot_planner_backlog"
+TRANSPORT = "autopilot_transport_history"
 
 
 def mailbox_dsn():
@@ -234,10 +235,31 @@ class DiagnosticContract(unittest.TestCase):
         import re
         self.assertEqual(set(re.findall(r"details->'([^']+)'", health.AUTOPILOT_COUNTER_QUERY)), {
             "used_dispatches", "max_dispatches", "remaining", "paused_count", "open_actionable_count",
+            "legacy_mailbox_commands", "warning_threshold",
         })
         self.assertNotRegex(health.AUTOPILOT_COUNTER_QUERY, r"\bdetails\s*[,\n]")
         for field in ("planner_decision", "mailbox_pr", "readiness", "job"):
             self.assertNotIn(field, health.AUTOPILOT_COUNTER_QUERY)
+
+    def test_transport_warning_names_signal_and_bounded_counts(self):
+        code, stdout, stderr = self.health_check([(TRANSPORT, "warning", {
+            "legacy_mailbox_commands": 41, "warning_threshold": 40, "private": BAD_TEXT,
+        })])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("signal=autopilot_transport_history legacy_mailbox_commands=41 warning_threshold=40\n", stdout)
+        self.assertNotIn(PRIVATE, stdout)
+
+    def test_transport_counters_reject_private_and_malformed_values(self):
+        good = {"legacy_mailbox_commands": 40, "warning_threshold": 40}
+        for field in good:
+            for value in (-1, True, 2**31, BAD_TEXT, None):
+                code, stdout, stderr = self.health_check([(TRANSPORT, "warning", {**good, field: value})])
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertIn("RUNTIME_AUTOPILOT_COUNTERS_UNAVAILABLE: signal=" + TRANSPORT, stdout)
+                self.assertNotIn(PRIVATE, stdout)
+        for threshold in (0, 101):
+            self.assertIn("COUNTERS_UNAVAILABLE", health.autopilot_counter_line(
+                TRANSPORT, {**good, "warning_threshold": threshold}))
 
 
     def test_sensitive_nonnumeric_port_fails_without_traceback_or_database_call(self):
