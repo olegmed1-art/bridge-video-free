@@ -10,31 +10,49 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from psycopg.errors import InsufficientPrivilege
-
-
 BASELINE_0060_SHA256 = '27932f2b5f22f383d9f84341c0ae6e88dc346c7940ec92490edc0a3d37358dfe'
 DEFAULT_ACL_0060_SHA256 = 'cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc'
 
-SIXTY_NAMES = frozenset({
-    'subset_json', 'subset_sha', 'subset_shape', 'subset_capability',
-    'subset_disabled', 'subset_validate_contract', 'approve_subset',
-    'set_subset_runtime', 'revoke_subset_approval', 'subset_observed_sources',
-    'observe_subset', 'subset_build_binding', 'subset_assert_final',
-    'recover_subset_admission', 'admit_approved_subset', 'subset_guard',
-    'subset_deferred_guard', 'subset_worker_eligible', 'subset_lock_lease',
-    'authorize_subset_attempt', 'heartbeat_subset_job', 'retry_subset_job',
-    'finish_subset_job', 'claim_job', 'subset_claim_job',
-})
+SIXTY_SIGNATURES = {
+    'subset_json': 'video_queue.subset_json(jsonb)',
+    'subset_sha': 'video_queue.subset_sha(jsonb)',
+    'subset_shape': 'video_queue.subset_shape(jsonb,text[])',
+    'subset_capability': 'video_queue.subset_capability(text)',
+    'subset_disabled': 'video_queue.subset_disabled()',
+    'subset_validate_contract': 'video_queue.subset_validate_contract(text)',
+    'approve_subset': 'video_queue.approve_subset(uuid,text,jsonb,timestamptz)',
+    'set_subset_runtime': 'video_queue.set_subset_runtime(uuid,boolean)',
+    'revoke_subset_approval': 'video_queue.revoke_subset_approval(uuid)',
+    'subset_observed_sources': 'video_queue.subset_observed_sources(jsonb,jsonb,text)',
+    'observe_subset': 'video_queue.observe_subset(uuid,uuid,text,jsonb,timestamptz,uuid,uuid,uuid,integer,text)',
+    'subset_build_binding': 'video_queue.subset_build_binding(text)',
+    'subset_assert_final': 'video_queue.subset_assert_final(text)',
+    'recover_subset_admission': 'video_queue.recover_subset_admission(text,text,text)',
+    'admit_approved_subset': 'video_queue.admit_approved_subset(uuid,text,text,text,uuid)',
+    'subset_guard': 'video_queue.subset_guard()',
+    'subset_deferred_guard': 'video_queue.subset_deferred_guard()',
+    'subset_worker_eligible': 'video_queue.subset_worker_eligible(uuid)',
+    'subset_lock_lease': 'video_queue.subset_lock_lease(uuid,uuid,text)',
+    'authorize_subset_attempt': 'video_queue.authorize_subset_attempt(uuid,uuid,text,uuid)',
+    'heartbeat_subset_job': 'video_queue.heartbeat_subset_job(uuid,uuid,text,integer)',
+    'retry_subset_job': 'video_queue.retry_subset_job(uuid,uuid,text,text,integer)',
+    'finish_subset_job': 'video_queue.finish_subset_job(uuid,uuid,text,text,jsonb,uuid,text)',
+    'claim_job': 'video_queue.claim_job(text,integer,text,text)',
+    'subset_claim_job': 'video_queue.subset_claim_job(uuid,text,integer,text,text)',
+}
 
-PROPOSAL_NAMES = frozenset({
-    'approve_one_job_staging_attempt_v1', 'revoke_one_job_staging_v1',
-    'check_one_job_staging_scope_v1', 'assert_one_job_staging_v1',
-    'attest_one_job_staging_receipt_v1',
-    'assert_one_job_terminal_evidence_v1', 'finish_one_job_staging_v1',
-    'stage_one_job_private_result_v1', 'read_one_job_private_result_v1',
-    'finish_one_job_private_result_v1',
-})
+PROPOSAL_SIGNATURES = {
+    'approve_one_job_staging_attempt_v1': 'video_queue.approve_one_job_staging_attempt_v1(uuid,uuid,uuid,uuid,text,integer,text,timestamptz,text)',
+    'revoke_one_job_staging_v1': 'video_queue.revoke_one_job_staging_v1(uuid)',
+    'check_one_job_staging_scope_v1': 'video_queue.check_one_job_staging_scope_v1(uuid,uuid,uuid,text,integer,text,text)',
+    'assert_one_job_staging_v1': 'video_queue.assert_one_job_staging_v1(uuid,uuid,uuid,text,integer,text)',
+    'attest_one_job_staging_receipt_v1': 'video_queue.attest_one_job_staging_receipt_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text)',
+    'assert_one_job_terminal_evidence_v1': 'video_queue.assert_one_job_terminal_evidence_v1(uuid,jsonb)',
+    'finish_one_job_staging_v1': 'video_queue.finish_one_job_staging_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb)',
+    'stage_one_job_private_result_v1': 'video_queue.stage_one_job_private_result_v1(uuid,uuid,uuid,text,integer,text,uuid,text,text,text)',
+    'read_one_job_private_result_v1': 'video_queue.read_one_job_private_result_v1(uuid,uuid,uuid,text,integer,text,uuid)',
+    'finish_one_job_private_result_v1': 'video_queue.finish_one_job_private_result_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb)',
+}
 
 APPROVER_PROPOSALS = frozenset({
     'approve_one_job_staging_attempt_v1', 'revoke_one_job_staging_v1',
@@ -70,22 +88,35 @@ def _require(condition: bool, label: str) -> None:
         raise AssertionError(f'ONE_JOB_0060_ACL_REGRESSION:{label}')
 
 
-def _functions(db, names: frozenset[str], owner: str) -> dict[str, int]:
+def _validate_function_rows(rows, signatures: dict[str, str], owner: str,
+                            resolved: dict[str, int | None]) -> dict[str, int]:
+    names = set(signatures)
+    _require(len(rows) == len(names) and {row['proname'] for row in rows} == names,
+             f'{owner}_function_inventory')
+    for row in rows:
+        name = row['proname']
+        _require(resolved[name] is not None and row['oid'] == resolved[name],
+                 f'{name}_signature')
+        _require(row['prokind'] == 'f', f'{name}_prokind')
+        _require(row['owner'] == owner, f'{name}_owner')
+        _require(not row['public_execute'], f'{name}_public_execute')
+    return {row['proname']: row['oid'] for row in rows}
+
+
+def _functions(db, signatures: dict[str, str], owner: str) -> dict[str, int]:
     rows = db.execute(
-        "SELECT p.proname, p.oid, r.rolname AS owner,"
+        "SELECT p.proname, p.oid, p.prokind, r.rolname AS owner,"
         " EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,"
         " acldefault('f',p.proowner))) AS a"
         " WHERE a.grantee=0 AND a.privilege_type='EXECUTE') AS public_execute"
         " FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid=p.pronamespace"
         " JOIN pg_roles AS r ON r.oid=p.proowner"
         " WHERE n.nspname='video_queue' AND p.proname=ANY(%s)",
-        (sorted(names),)).fetchall()
-    _require(len(rows) == len(names) and {row['proname'] for row in rows} == names,
-             f'{owner}_function_inventory')
-    for row in rows:
-        _require(row['owner'] == owner, f'{row["proname"]}_owner')
-        _require(not row['public_execute'], f'{row["proname"]}_public_execute')
-    return {row['proname']: row['oid'] for row in rows}
+        (sorted(signatures),)).fetchall()
+    resolved = {name: db.execute('SELECT to_regprocedure(%s)::oid AS oid',
+                                 (signature,)).fetchone()['oid']
+                for name, signature in signatures.items()}
+    return _validate_function_rows(rows, signatures, owner, resolved)
 
 
 def _can_execute(db, role: str, oid: int) -> bool:
@@ -101,6 +132,8 @@ def _assert_matrix(db, functions: dict[str, int], roles: dict[str, frozenset[str
 
 
 def _expect_call(db, function: str, *, allowed: bool) -> None:
+    from psycopg.errors import InsufficientPrivilege
+
     db.execute('SAVEPOINT acl_probe_call')
     try:
         db.execute('SET ROLE one_job_acl_outsider')
@@ -180,8 +213,8 @@ def before_test_grants(db) -> None:
         " AND d.defaclobjtype='f'").fetchall()
     _require(len(defaults) == 1 and not defaults[0]['public_execute'],
              'global_owner_default_acl')
-    sixty = _functions(db, SIXTY_NAMES, 'video_subset_owner')
-    proposals = _functions(db, PROPOSAL_NAMES, 'postgres')
+    sixty = _functions(db, SIXTY_SIGNATURES, 'video_subset_owner')
+    proposals = _functions(db, PROPOSAL_SIGNATURES, 'postgres')
     _assert_matrix(db, proposals, {
         'video_subset_approver': frozenset(),
         'video_subset_collector': frozenset(),
@@ -199,7 +232,7 @@ def before_test_grants(db) -> None:
 
 def after_test_grants(db) -> None:
     """Run after the existing rehearsal has provisioned synthetic login roles."""
-    proposals = _functions(db, PROPOSAL_NAMES, 'postgres')
+    proposals = _functions(db, PROPOSAL_SIGNATURES, 'postgres')
     _assert_matrix(db, proposals, {
         'onejob_approver': APPROVER_PROPOSALS,
         'onejob_worker': WORKER_PROPOSALS,
@@ -207,7 +240,7 @@ def after_test_grants(db) -> None:
         'onejob_collector': frozenset(),
         'onejob_admitter': frozenset(),
     })
-    sixty = _functions(db, SIXTY_NAMES, 'video_subset_owner')
+    sixty = _functions(db, SIXTY_SIGNATURES, 'video_subset_owner')
     _assert_matrix(db, sixty, {
         'onejob_approver': SIXTY_APPROVER,
         'onejob_collector': SIXTY_COLLECTOR,

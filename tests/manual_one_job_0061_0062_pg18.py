@@ -28,16 +28,18 @@ from psycopg.types.json import Jsonb
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
 _SYNTHETIC_PASSWORD: ContextVar[str | None] = ContextVar(
     'one_job_synthetic_password', default=None)
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(TESTS_DIR))
 from universal_video.private_one_job_approver import approve_once
 from universal_video.private_one_job_entrypoint import claim_exact_private_job
 from universal_video.private_one_job_operator import ClaimReceiptJournal, write_claim_receipt
 from universal_video import private_one_job_entrypoint as claim_entry
 from universal_video import private_one_job_operator as operator
 from universal_video import private_one_job_approver as approver
-from tests import one_job_0060_default_acl_pg18 as acl_regression
+import one_job_0060_default_acl_pg18 as acl_regression
 
 
 def _run(args: list[str], *, env: dict[str, str] | None = None) -> str:
