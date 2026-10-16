@@ -3,6 +3,7 @@ name: Two Spot Lesson CI
 on:
   pull_request:
     paths:
+      - '.gitattributes'
       - 'app.py'
       - 'bridge_school_api/**'
       - 'evolutionary_course/**'
@@ -16,6 +17,7 @@ on:
   push:
     branches: ['codex/two-spot-learner-ui-20261015']
     paths:
+      - '.gitattributes'
       - 'app.py'
       - 'bridge_school_api/**'
       - 'evolutionary_course/**'
