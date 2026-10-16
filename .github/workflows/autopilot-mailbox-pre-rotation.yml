@@ -16,7 +16,7 @@ jobs:
   prepare:
     if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     env:
       DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
       SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
