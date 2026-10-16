@@ -1,5 +1,5 @@
 -- Explicit recovery state: preserve0059/0060, objects and history.
-SELECT EXISTS(SELECT FROM schema_migration WHERE migration_key='repair-0060-legacy-recovery-v1') AS legacy_recovered \gset
+SELECT EXISTS(SELECT FROM schema_migration WHERE migration_key IN ('repair-0060-legacy-recovery-v1','repair-0060-legacy-installed-v2')) AS legacy_recovered \gset
 \if :legacy_recovered
 BEGIN;
 DO $assert$ BEGIN IF NOT coalesce(((coalesce((SELECT pg_get_userbyid(o.nspowner)='neondb_owner' AND ARRAY(SELECT a::text FROM unnest(o.nspacl) a ORDER BY a::text COLLATE "C")=ARRAY['bridge_school_app=U/neondb_owner','bridge_school_reader=U/neondb_owner','bridge_school_worker=U/neondb_owner','neondb_owner=UC/neondb_owner']::text[] FROM pg_namespace o WHERE o.nspname='video_queue'),false) AND
@@ -21,8 +21,8 @@ coalesce((SELECT pg_get_userbyid(o.proowner)='neondb_owner' AND ARRAY(SELECT a::
  ), actual AS (
  SELECT p.oid,a.grantee,a.grantor,a.privilege_type,a.is_grantable FROM owned p,
  LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a)
- SELECT (SELECT count(*) FROM owned)=24
- AND NOT EXISTS(SELECT FROM names LEFT JOIN owned ON owned.proname=names.name GROUP BY names.name HAVING count(owned.oid)<>1)
+ SELECT (SELECT count(*) FROM owned)=24-CASE WHEN EXISTS(SELECT FROM schema_migration WHERE migration_key='repair-0060-legacy-installed-v2') THEN 1 ELSE 0 END
+ AND NOT EXISTS(SELECT FROM names LEFT JOIN owned ON owned.proname=names.name WHERE names.name<>'subset_claim_job' OR NOT EXISTS(SELECT FROM schema_migration WHERE migration_key='repair-0060-legacy-installed-v2') GROUP BY names.name HAVING count(owned.oid)<>1)
  AND NOT EXISTS((SELECT * FROM actual EXCEPT SELECT * FROM expected) UNION ALL
                 (SELECT * FROM expected EXCEPT SELECT * FROM actual)))) AND
 (NOT EXISTS(SELECT FROM pg_trigger t WHERE t.tgrelid IN ('video_queue.batch'::regclass,'video_queue.job'::regclass) AND t.tgname IN ('subset_guard','subset_final','subset_no_truncate'))) AND
@@ -34,8 +34,8 @@ coalesce((SELECT pg_get_userbyid(o.proowner)='neondb_owner' AND ARRAY(SELECT a::
 (NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace,LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a WHERE n.nspname='video_queue' AND c.relname IN ('subset_approval','source_observation','subset_admission','source_reservation') AND (a.grantee<>c.relowner OR a.is_grantable))) AND
 ((SELECT count(*)=1 FROM pg_default_acl d WHERE d.defaclrole='video_subset_owner'::regrole AND d.defaclnamespace=0 AND d.defaclobjtype='f' AND NOT EXISTS(SELECT FROM aclexplode(d.defaclacl) a WHERE a.grantee<>d.defaclrole OR a.grantor<>d.defaclrole OR a.privilege_type<>'EXECUTE' OR a.is_grantable))) AND
 ((SELECT checksum='be1275d293a6aa1a27d5e41b0d2f725179fd3e6b56dd849fe8f4d87c64819a08' FROM schema_migration WHERE migration_key='0059_universal_video_terminal_size_guard')) AND
-((SELECT checksum='cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc' FROM schema_migration WHERE migration_key='0060_fixed_subset_admission')) AND
-((SELECT checksum='7202fb09ed4a796d4dc6b9d80905b620ede18df4ce38254f133b6a53a0a879e5' FROM schema_migration WHERE migration_key='repair-0060-legacy-recovery-v1'))),false) THEN RAISE EXCEPTION 'LEGACY_RECOVERY_STATE_INVALID'; END IF; END $assert$;
+((SELECT checksum=CASE WHEN EXISTS(SELECT FROM schema_migration WHERE migration_key='repair-0060-legacy-installed-v2') THEN 'c2960f3b78a34985d1afd78930f896f38eebeae2cbd90f83c44a011fe7d779a7' ELSE 'cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc' END FROM schema_migration WHERE migration_key='0060_fixed_subset_admission')) AND
+((SELECT count(*)=1 FROM schema_migration WHERE migration_key IN ('repair-0060-legacy-recovery-v1','repair-0060-legacy-installed-v2')) AND EXISTS(SELECT FROM schema_migration WHERE (migration_key='repair-0060-legacy-recovery-v1' AND checksum='7202fb09ed4a796d4dc6b9d80905b620ede18df4ce38254f133b6a53a0a879e5') OR (migration_key='repair-0060-legacy-installed-v2' AND checksum='30ba592da8f2924092df699d7501f704fd020690b135d5a422944b0b76adaa03')))),false) THEN RAISE EXCEPTION 'LEGACY_RECOVERY_STATE_INVALID'; END IF; END $assert$;
 ROLLBACK;
 \else
 SELECT EXISTS(SELECT FROM schema_migration WHERE migration_key='0060_fixed_subset_admission') AS subset_state_present \gset

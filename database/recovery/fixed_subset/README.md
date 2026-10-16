@@ -1,5 +1,26 @@
 # Fixed-subset connector installation and capability recovery
 
+## Exact legacy 0060 recovery proposal
+
+`legacy_installed_packet.py` is a separate offline builder for the installed
+`legacy-744d068a` checksum, using its original acknowledged installation receipt
+and pre-install baseline. It rejects the newer candidate and arbitrary history.
+The existing candidate builder continues to refuse legacy history.
+
+The proposed `repair-0060-legacy-installed-v2.sql` restores the original legacy
+functions, owners and ACLs and disables the retained subset API. It also closes
+implicit PUBLIC EXECUTE in the retained NOLOGIN owner's future function defaults.
+This is a new explicit recovery transition with its own marker and pinned SQL
+checksum; neither 0060 nor recovery-v1 is rewritten or relabeled. The ordinary
+migrator recognizes the marker as audited history and never applies the body.
+
+The localhost-only `legacy_installed_recovery_fixture.py` installs the exact old
+0060 Git blob in a synthetic catalog, then exercises the v2 verifier and recovery,
+before/after ACL and data equality, rollback after owner/default-ACL changes and
+the 041-043 consumers. This proposal does not stop/resume external workers or
+authorize a production transaction. Provider transport, a fresh queue fence,
+target/catalog readback and action-time authorization remain separate inputs.
+
 ## ACL/owner evidence (local preparation only)
 
 `acl_snapshot.py` collects a consistent, read-only PostgreSQL catalog snapshot from

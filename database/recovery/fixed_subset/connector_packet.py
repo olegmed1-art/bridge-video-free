@@ -30,14 +30,16 @@ OWNER_ONLY = ("subset_json", "subset_sha", "subset_shape", "subset_capability", 
               "subset_worker_eligible", "subset_lock_lease")
 
 
-def function_acl_matrix(*, recovered=False):
+def function_acl_matrix(*, recovered=False, scoped_claim=True):
     """Exact direct ACL tuples, including unknown grantees, grantors and GO."""
-    names = sorted(set(FUNCTION_CAPS) | set(OWNER_ONLY))
+    capabilities = {n: r for n, r in FUNCTION_CAPS.items()
+                    if scoped_claim or n != "subset_claim_job"}
+    names = sorted(set(capabilities) | set(OWNER_ONLY))
     if recovered:
         names.remove("claim_job")
     values = ",".join("(" + recovery.quote(n) + ")" for n in names)
     caps = " UNION ALL SELECT p.oid,c.role_name::regrole::oid,p.proowner,'EXECUTE'::text,false FROM owned p JOIN (VALUES " + ",".join(
-        "(" + recovery.quote(n) + "," + recovery.quote(r) + ")" for n, r in FUNCTION_CAPS.items()) + ") c(name,role_name) ON c.name=p.proname"
+        "(" + recovery.quote(n) + "," + recovery.quote(r) + ")" for n, r in capabilities.items()) + ") c(name,role_name) ON c.name=p.proname"
     return f"""(WITH names(name) AS (VALUES {values}), owned AS (
  SELECT p.* FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
  WHERE n.nspname='video_queue' AND p.proowner='video_subset_owner'::regrole),

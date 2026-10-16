@@ -1,6 +1,7 @@
 # migration_key	sha256	version	provenance
 # Explicitly records production migrations that predate repository migration files.
 # Entries are audit exceptions only: they are never executed from this manifest.
+repair-0060-legacy-installed-v2	30ba592da8f2924092df699d7501f704fd020690b135d5a422944b0b76adaa03	legacy-installed-v2	Explicit proposed recovery for exact legacy-744d068a only; preserves installed 0059/0060, rows and reservations; never auto-apply
 2026-08-20-ai-decision-layer-v1	5b87f7a2cb3491fb60b88238482b35c1aefb3f500253432b6b87de1e94daa9bb	historical	Neon production ai schema; repository parity is restored by 0054_ai_decision_layer_reconciliation.sql
 2026-08-22-assistant-lab-v1	dfd28f43fc87485cd3730d841ad8c9e344b74f3ee7d36ce4bb6d1a43355808b4	historical	Assistant Lab v1 schema from PR #293 head c198385b71d71f151b16c3140ec6c5d3262ad683; exact SHA-256 of assistant_lab/schema.sql
 repair-0060-legacy-recovery-v1	7202fb09ed4a796d4dc6b9d80905b620ede18df4ce38254f133b6a53a0a879e5	recovery-v1	Explicit guarded recovery only: database/recovery/fixed_subset/repair-0060-legacy-recovery-v1.sql; retains0059/0060 and reservations; never auto-apply
