@@ -33,6 +33,9 @@ CREATE ROLE video_subset_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINH
 -- after transfer. Both privileges exist only inside this transaction.
 GRANT video_subset_owner TO CURRENT_USER
     WITH ADMIN FALSE, INHERIT TRUE, SET TRUE GRANTED BY CURRENT_USER;
+-- The retained owner must not give future functions implicit PUBLIC EXECUTE.
+ALTER DEFAULT PRIVILEGES FOR ROLE video_subset_owner
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 GRANT CREATE ON SCHEMA video_queue TO video_subset_owner
     GRANTED BY CURRENT_USER;
 -- END MANAGED OWNER GRANTS

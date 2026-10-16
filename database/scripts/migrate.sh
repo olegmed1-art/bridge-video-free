@@ -4,6 +4,19 @@ set -euo pipefail
 : "${DATABASE_URL:?DATABASE_URL must be set}"
 
 PSQL=(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t)
+# Native Windows psql writes CRLF even when Git Bash reads LF scripts.
+# Only line framing is normalized. Values fetched below are base64-encoded in
+# SQL so a data-level CR cannot be mistaken for the line-ending CR.
+psql_value() { "${PSQL[@]}" "$@" | sed $'s/\r$//'; }
+decode_value() {
+  local value
+  value="$(printf '%s' "$1" | base64 --decode)" || return 1
+  if [[ "$(printf '%s' "$value" | base64 --wrap=0)" != "$1" ]]; then
+    echo 'Migration history contains a value that cannot be read without loss' >&2
+    return 1
+  fi
+  printf '%s' "$value"
+}
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-database/migrations}"
 EXTERNAL_HISTORY_FILE="${EXTERNAL_HISTORY_FILE:-database/external_migration_history.tsv}"
 
@@ -37,8 +50,11 @@ assert_unique_numeric_prefixes() {
 validate_external_history() {
   [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
   local -A seen=()
-  local key checksum provenance
-  while IFS=$'\t' read -r key checksum provenance; do
+  local key checksum version provenance identity
+  local legacy_0060=c2960f3b78a34985d1afd78930f896f38eebeae2cbd90f83c44a011fe7d779a7
+  local candidate_0060=cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc
+  local count_0060=0
+  while IFS=$'\t' read -r key checksum version provenance; do
     [[ -z "$key" || "$key" == \#* ]] && continue
     if [[ ! "$key" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
       echo "Unsafe external migration key in $EXTERNAL_HISTORY_FILE: $key" >&2
@@ -48,19 +64,44 @@ validate_external_history() {
       echo "Invalid external migration SHA-256 for $key" >&2
       exit 1
     fi
-    if [[ -n "${seen[$key]:-}" ]]; then
-      echo "Duplicate external migration history key: $key" >&2
+    if [[ ! "$version" =~ ^[a-z][a-z0-9-]*$ || -z "$provenance" ]]; then
+      echo "Invalid external migration version/provenance for $key" >&2
       exit 1
     fi
-    seen[$key]="$checksum"
+    identity="$key"
+    if [[ "$key" == 0060_fixed_subset_admission ]]; then
+      case "$version:$checksum" in
+        "legacy-744d068a:$legacy_0060"|"new-scoped-claim:$candidate_0060") ;;
+        *) echo "Unsupported 0060 external migration version: $version" >&2; exit 1 ;;
+      esac
+      identity="$key:$version"
+      count_0060=$((count_0060+1))
+    fi
+    if [[ -n "${seen[$identity]:-}" ]]; then
+      echo "Duplicate external migration history key/version: $identity" >&2
+      exit 1
+    fi
+    seen[$identity]="$checksum"
   done < "$EXTERNAL_HISTORY_FILE"
+  if [[ "$count_0060" -ne 0 && "$count_0060" -ne 2 ]]; then
+    echo 'Incomplete 0060 external migration version matrix' >&2
+    exit 1
+  fi
 }
 
-external_checksum_for() {
+external_versions_for() {
   local requested_key="$1"
   [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
   awk -F '\t' -v wanted="$requested_key" '
-    $0 !~ /^#/ && $1 == wanted { print $2; exit }
+    $0 !~ /^#/ && $1 == wanted { print $3 }
+  ' "$EXTERNAL_HISTORY_FILE"
+}
+
+external_version_for() {
+  local requested_key="$1" requested_checksum="$2"
+  [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
+  awk -F '\t' -v wanted="$requested_key" -v checksum="$requested_checksum" '
+    $0 !~ /^#/ && $1 == wanted && $2 == checksum { print $3; exit }
   ' "$EXTERNAL_HISTORY_FILE"
 }
 
@@ -106,7 +147,7 @@ assert_unique_numeric_prefixes "$TESTS_DIR" "database-test"
 validate_external_history
 
 schema_table_exists() {
-  [[ "$("${PSQL[@]}" -c "SELECT to_regclass('public.schema_migration') IS NOT NULL;")" == "t" ]]
+  [[ "$(psql_value -c "SELECT to_regclass('public.schema_migration') IS NOT NULL;")" == "t" ]]
 }
 
 # Once migration history exists, every recorded migration must either still exist on
@@ -114,24 +155,27 @@ schema_table_exists() {
 # checksum. External-history entries are never executed; a numbered forward migration
 # must restore fresh-database schema parity.
 if schema_table_exists; then
-  while IFS=$'\t' read -r applied_key stored_checksum; do
+  while IFS=$'\t' read -r applied_key_b64 stored_checksum_b64; do
+    applied_key="$(decode_value "$applied_key_b64")"
+    stored_checksum="$(decode_value "$stored_checksum_b64")"
     [[ -z "$applied_key" ]] && continue
 
     if [[ "$applied_key" =~ ^[A-Za-z0-9_]+$ && -f "$MIGRATIONS_DIR/${applied_key}.sql" ]]; then
       continue
     fi
 
-    external_checksum="$(external_checksum_for "$applied_key")"
-    if [[ -n "$external_checksum" ]]; then
+    external_versions="$(external_versions_for "$applied_key")"
+    if [[ -n "$external_versions" ]]; then
       if [[ -z "$stored_checksum" ]]; then
         echo "External migration history lacks a stored database checksum: $applied_key" >&2
         exit 1
       fi
-      if [[ "$stored_checksum" != "$external_checksum" ]]; then
+      external_version="$(external_version_for "$applied_key" "$stored_checksum")"
+      if [[ -z "$external_version" ]]; then
         echo "External migration checksum mismatch: $applied_key" >&2
         exit 1
       fi
-      echo "Verified audited external migration history: $applied_key"
+      echo "Verified audited external migration history: $applied_key [$external_version]"
       continue
     fi
 
@@ -141,7 +185,7 @@ if schema_table_exists; then
     fi
     echo "Applied migration is missing from repository: ${applied_key}.sql" >&2
     exit 1
-  done < <("${PSQL[@]}" -F $'\t' -c "SELECT migration_key, COALESCE(checksum,'') FROM schema_migration ORDER BY migration_key;")
+  done < <(psql_value -F $'\t' -c "SELECT replace(encode(convert_to(migration_key,'UTF8'),'base64'), E'\\n',''), replace(encode(convert_to(COALESCE(checksum,''),'UTF8'),'base64'), E'\\n','') FROM schema_migration ORDER BY migration_key;")
 fi
 
 for migration in "$MIGRATIONS_DIR"/*.sql; do
@@ -153,13 +197,13 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid SHA-256 for $key" >&2; exit 1; }
 
   if schema_table_exists; then
-    applied="$("${PSQL[@]}" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
+    applied="$(psql_value -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
   else
     applied="f"
   fi
 
   if [[ "$applied" == "t" ]]; then
-    stored="$("${PSQL[@]}" -c "SELECT COALESCE(checksum,'') FROM schema_migration WHERE migration_key = '$key';")"
+    stored="$(decode_value "$(psql_value -c "SELECT replace(encode(convert_to(COALESCE(checksum,''),'UTF8'),'base64'), E'\\n','') FROM schema_migration WHERE migration_key = '$key';")")"
     if [[ -z "$stored" ]]; then
       echo "Bootstrapping checksum for already-applied migration $key"
       "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
@@ -203,14 +247,14 @@ PSQL
     exit 1
   fi
 
-  registered="$("${PSQL[@]}" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
+  registered="$(psql_value -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
   if [[ "$registered" != "t" ]]; then
     echo "Migration $key committed without registering itself in schema_migration" >&2
     exit 1
   fi
 
   "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
-  stored="$("${PSQL[@]}" -c "SELECT checksum FROM schema_migration WHERE migration_key = '$key';")"
+  stored="$(decode_value "$(psql_value -c "SELECT replace(encode(convert_to(checksum,'UTF8'),'base64'), E'\\n','') FROM schema_migration WHERE migration_key = '$key';")")"
   if [[ "$stored" != "$checksum" ]]; then
     echo "Failed to persist checksum for migration $key" >&2
     exit 1

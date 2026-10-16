@@ -21,6 +21,7 @@ CODE = ROOT / 'database/recovery/fixed_subset'
 sys.path.insert(0, str(CODE))
 import build_recovery as r
 import connector_packet as c
+import acl_snapshot as acl
 
 DATABASE = 'neondb'
 ADMIN = 'postgresql://postgres:postgres@127.0.0.1:5432/neondb'
@@ -66,8 +67,9 @@ def execute(statements, *, admin=False, fail_after=None):
 
 
 def command(args, evidence, *, env=None, expected=True):
-    proc = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, timeout=100)
-    evidence.write_text(proc.stdout+proc.stderr)
+    proc = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True,
+                          encoding='utf-8', timeout=100)
+    evidence.write_text(proc.stdout+proc.stderr, encoding='utf-8')
     if expected:
         assert proc.returncode == 0, evidence.name + ': ' + proc.stderr[-3000:]
     else:
@@ -142,7 +144,7 @@ def prepare(stage, out):
     write(out/'server-before.json',state)
     migration_dir=stage/'source/database/migrations'
     migration_dir.mkdir(parents=True)
-    for number in ('0056','0057','0058','0059','0060'):
+    for number in ('0056','0057','0058','0059'):
         path=next((ROOT/'database/migrations').glob(number+'_*.sql'))
         shutil.copyfile(path,migration_dir/path.name)
         if path.with_suffix('').is_dir():
@@ -150,6 +152,10 @@ def prepare(stage, out):
         if number in ('0056','0057','0058'):
             psql(path,out/(number+'-baseline.log'))
             execute([f"UPDATE schema_migration SET checksum='{checksum(path)}' WHERE migration_key='{path.stem}'"])
+    candidate=ROOT/'database/candidates/0060_fixed_subset_admission.sql'
+    candidate_dir=stage/'source/database/candidates'
+    candidate_dir.mkdir()
+    shutil.copyfile(candidate,candidate_dir/candidate.name)
     (stage/'source/database/tests').mkdir()
     shutil.copyfile(ROOT/'database/tests/041_universal_video_queue.sql',stage/'source/database/tests/041_universal_video_queue.sql')
     # Duplicate source across different closed legacy batches, mixed terminal states.
@@ -167,7 +173,7 @@ def prepare(stage, out):
     write(stage/'catalog-baseline.json',catalog)
     claim=query("SELECT pg_get_functiondef('video_queue.claim_job(text,integer,text,text)'::regprocedure)")
     write(stage/'claim-baseline.json',dict(claim_definition=claim,claim_definition_md5=hashlib.md5(claim.encode()).hexdigest()))
-    (stage/'restore_claim_job.sql').write_text(claim)
+    (stage/'restore_claim_job.sql').write_bytes(claim.encode('utf-8'))
     write(stage/'target.json',TARGET)
     r.ROOT=c.ROOT=stage
     write(stage/'semantic-catalog-baseline.json',{'catalog_md5':query('SELECT '+c.catalog_digest())})
@@ -202,7 +208,7 @@ def main(argv=None):
     if not args.execute:
         print('Offline: one localhost PG18 installer/verifier/recovery rehearsal; --execute required')
         return
-    assert sys.platform=='linux' and args.evidence
+    assert sys.platform in ('linux','win32') and args.evidence
     assert not any(os.environ.get(k) for k in ('DATABASE_URL','NEON_API_KEY','PGSERVICE','PGHOST','PGPASSWORD'))
     out=args.evidence.resolve(); out.mkdir(parents=True,exist_ok=True)
     result={'status':'FAIL_OR_UNKNOWN','scope':'DISPOSABLE_SYNTHETIC_ONLY','neon_transport_tested':False,'negative_cases':[]}
@@ -211,6 +217,10 @@ def main(argv=None):
             stage=Path(tmp)
             prepare(stage,out)
             before=snapshot(); write(out/'before-install.json',before)
+            with connect(admin=True) as db:
+                db.autocommit=True
+                acl_before=acl.collect(db)
+            acl.write_snapshot(out/'acl-before.json',acl_before)
             install=c.install_payload()['sql_statements']
             write(out/'install-envelope.json',install)
             grant=next(i for i,s in enumerate(install) if 'GRANT video_subset_owner TO CURRENT_USER' in s)
@@ -227,37 +237,79 @@ def main(argv=None):
             install=c.install_payload()['sql_statements']
             receipt=execute(install); write(out/'committed-install-receipt.json',receipt)
             installed=snapshot(); write(out/'after-install.json',installed)
+            # Execute the actual rollback body in an empty synthetic subset,
+            # inspect effective capabilities, then force transaction rollback.
+            rollback=(ROOT/'database/rollback/0060_fixed_subset_admission.sql').read_text()
+            rollback_parts=c.split_sql(rollback.replace('\\set ON_ERROR_STOP on\n','',1))
+            with connect(admin=True) as db:
+                # Only inside this doomed superuser transaction, simulate the
+                # rollback's required empty-state precondition. The installed
+                # immutable guard correctly refuses ordinary reservation DELETE.
+                db.execute('ALTER TABLE video_queue.source_reservation DISABLE TRIGGER USER')
+                db.execute('DELETE FROM video_queue.source_reservation')
+                for statement in rollback_parts:
+                    if c.bare(statement).upper() not in ('BEGIN','COMMIT'):
+                        db.execute(statement)
+                active=db.execute("""SELECT count(*) FROM pg_roles r CROSS JOIN pg_proc p
+                    JOIN pg_namespace n ON n.oid=p.pronamespace
+                    WHERE r.rolname IN ('video_subset_approver','video_subset_collector',
+                                        'video_subset_admitter','video_subset_worker_v2')
+                      AND n.nspname='video_queue'
+                      AND p.proname IN ('approve_subset','set_subset_runtime','revoke_subset_approval',
+                                        'observe_subset','admit_approved_subset','recover_subset_admission',
+                                        'claim_job','subset_claim_job','authorize_subset_attempt',
+                                        'heartbeat_subset_job','retry_subset_job','finish_subset_job')
+                      AND has_function_privilege(r.oid,p.oid,'EXECUTE')""").fetchone()[0]
+                assert active==0
+                db.rollback()
+            assert snapshot()==installed, 'rollback rehearsal changed installed state'
+            result['rollback_acl_matrix']='PASS_12_FUNCTIONS_FOUR_ROLES_TRANSACTION_RESTORED'
             for key in ('batch','job','job_event','sequence'):
                 assert installed[key]==before[key]
             assert sorted(len(x['historical_job_ids']) for x in installed['source_reservation'])==[1,2]
             psql(ROOT/'database/tests/041_universal_video_queue.sql',out/'041-installed.log')
-            verify=c.verify_payload(receipt)['sql_statements']
+            verify=c.verify_payload(receipt,installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
             write(out/'verify-envelope.json',verify)
             index=verify.index(c.TEMP_GRANT)
             result['negative_cases'].append(failure_case('verify-after-grant',verify,out,fail_after=index))
             assert execute(verify)=='COMMITTED_INSTALL_RECEIPT_MATCHES'
             assert snapshot()==installed, 'verifier changed persistent state'
-            recover=c.recover_payload(receipt)['sql_statements']
+            recover=c.recover_payload(receipt,installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
             write(out/'recovery-envelope.json',recover)
             for name,index in [('recovery-after-grant',recover.index(c.TEMP_GRANT)),
                                ('recovery-after-owner-restore',next(i for i,s in enumerate(recover) if c.bare(s).startswith('ALTER FUNCTION '+r.CLAIM+' OWNER TO')))]:
                 result['negative_cases'].append(failure_case(name,recover,out,fail_after=index))
             recovery_receipt=execute(recover); write(out/'committed-recovery-receipt.json',recovery_receipt)
             recovered=snapshot(); write(out/'after-recovery.json',recovered)
+            with connect(admin=True) as db:
+                db.autocommit=True
+                acl_after=acl.collect(db)
+            acl.write_snapshot(out/'acl-after.json',acl_after)
+            acl.assert_restored(acl_before,acl_after,allowed_memberships=frozenset({('bridge_school_app','bridge_school_worker')}))
             for key in ('batch','job','job_event','sequence','source_reservation','subset_approval','source_observation','subset_admission','roles','memberships'):
                 assert recovered[key]==installed[key], key+' not preserved'
             assert recovered['legacy']==before['legacy'], 'legacy ACL/owner/definition mismatch'
             prior={x['migration_key']:x for x in installed['registry']}
             current={x['migration_key']:x for x in recovered['registry']}
             assert all(current[k]==v for k,v in prior.items()) and set(current)-set(prior)=={r.KEY}
-            # Ordinary migrator sees only the affected five baseline migrations;
-            # all are already applied. No unrelated full-preflight is performed.
-            env=os.environ.copy(); env.update(DATABASE_URL=OWNER,MIGRATIONS_DIR=str(stage/'source/database/migrations'),EXTERNAL_HISTORY_FILE=str(ROOT/'database/external_migration_history.tsv'))
+            # Ordinary migrator sees only four numbered migrations. The gated
+            # 0060 candidate and repair are audited external history, never run.
+            env=os.environ.copy(); env.update(DATABASE_URL=OWNER,MIGRATIONS_DIR=(stage/'source/database/migrations').as_posix(),EXTERNAL_HISTORY_FILE=(ROOT/'database/external_migration_history.tsv').as_posix())
             rerun=command(['bash','database/scripts/migrate.sh'],out/'migrator-history.log',env=env)
-            assert rerun.stdout.count('Skipping already-applied migration ')==5
+            assert rerun.stdout.count('Skipping already-applied migration ')==4
+            assert 'Verified audited external migration history: 0060_fixed_subset_admission' in rerun.stdout
             assert 'Verified audited external migration history: '+r.KEY in rerun.stdout
             assert 'Applying migration ' not in rerun.stdout and 'Bootstrapping checksum' not in rerun.stdout
             assert snapshot()==recovered
+            original=snapshot()
+            execute(["UPDATE schema_migration SET checksum=checksum||chr(13) WHERE migration_key='0060_fixed_subset_admission'"],admin=True)
+            try:
+                bad=command(['bash','database/scripts/migrate.sh'],out/'migrator-trailing-cr-rejected.log',env=env,expected=False)
+                assert 'External migration checksum mismatch: 0060_fixed_subset_admission' in bad.stderr
+            finally:
+                execute([f"UPDATE schema_migration SET checksum='{c.PINNED['0060_fixed_subset_admission']}' WHERE migration_key='0060_fixed_subset_admission'"],admin=True)
+            assert snapshot()==original
+            result['negative_cases'].append(dict(name='migrator-trailing-data-cr',status='PASS',scope='database-history',exact_snapshot_equal=True))
             for number in ('041','042','043'):
                 path=next((ROOT/'database/tests').glob(number+'_*.sql'))
                 psql(path,out/(number+'-recovered.log'))
@@ -286,7 +338,7 @@ def main(argv=None):
             result.update(status='PASS_ISOLATED_CONNECTOR_RECOVERY',invariants={'041':'PASS_INSTALLED_AND_RECOVERED','042':'PASS_RECOVERED_LEGACY','043':'PASS_RECOVERED_SIZE_BOUNDARIES'},
                 old_rows_preserved=True,duplicate_reservations_preserved=True,sequence_preserved_by_recovery=True,
                 legacy_acl_owner_definition_equal=True,retained_0059=True,retained_tables=4,retained_nologin_roles=5,
-                migrator='FIVE_SKIPS_EXTERNAL_REPAIR_RECOGNIZED',temporary_grants_persist=False,
+                migrator='FOUR_SKIPS_EXTERNAL_CANDIDATE_AND_REPAIR_RECOGNIZED',temporary_grants_persist=False,
                 repair_sha256=digest((CODE/f'{r.KEY}.sql').read_bytes()))
     finally:
         write(out/'results.json',result)

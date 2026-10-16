@@ -15,14 +15,61 @@ import build_recovery as r
 import connector_packet as c
 
 
+def test_pinned_sql_files_have_identical_lf_bytes_on_checkout():
+    for key, expected in c.PINNED.items():
+        directory = 'candidates' if key.startswith('0060_') else 'migrations'
+        raw = (REPO/'database'/directory/(key+'.sql')).read_bytes()
+        assert b'\r' not in raw
+        assert hashlib.sha256(raw).hexdigest() == expected
+    repair = (CODE/(r.KEY+'.sql')).read_bytes()
+    assert b'\r' not in repair
+    assert hashlib.sha256(repair).hexdigest() == '7202fb09ed4a796d4dc6b9d80905b620ede18df4ce38254f133b6a53a0a879e5'
+
+
+def test_0060_is_guarded_candidate_and_audited_history_only():
+    key='0060_fixed_subset_admission'
+    assert not (REPO/'database/migrations'/(key+'.sql')).exists()
+    raw=(REPO/'database/candidates'/(key+'.sql')).read_bytes()
+    assert hashlib.sha256(raw).hexdigest()==c.PINNED[key]
+    rows=[line.split('\t') for line in (REPO/'database/external_migration_history.tsv').read_text().splitlines()
+          if line and not line.startswith('#')]
+    variants={(row[2],row[1]) for row in rows if row[0]==key}
+    assert variants=={('legacy-744d068a',c.LEGACY_0060_SHA256),
+                      ('new-scoped-claim',c.PINNED[key])}
+
+
+def test_0060_history_routes_new_and_refuses_legacy_or_unknown_before_sql(staged):
+    assert c.require_current_0060(c.PINNED['0060_fixed_subset_admission'])=='new-scoped-claim'
+    for builder in (c.verify_payload,c.recover_payload):
+        with pytest.raises(ValueError,match='LEGACY_0060_REQUIRES_PINNED_744d068a'):
+            builder(receipt(),installed_0060_checksum=c.LEGACY_0060_SHA256)
+        with pytest.raises(ValueError,match='UNRECOGNIZED_0060_HISTORY'):
+            builder(receipt(),installed_0060_checksum='0'*64)
+
+
+def test_windows_function_definition_newlines_preserve_md5_and_render_lf(staged):
+    claim_lf = "CREATE OR REPLACE FUNCTION video_queue.claim_job()\nRETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql\n"
+    claim_crlf = claim_lf.replace('\n', '\r\n')
+    path = r.ROOT/'restore_claim_job.sql'
+    path.write_bytes(claim_crlf.encode())
+    assert r.read_claim_exact(path) == claim_crlf
+    assert hashlib.md5(r.read_claim_exact(path).encode()).hexdigest() == hashlib.md5(claim_crlf.encode()).hexdigest()
+    rendered = r.render_recovery(staged, claim_crlf)
+    assert rendered == r.render_recovery(staged, claim_lf)
+    assert '\r' not in rendered
+    with pytest.raises(ValueError, match='line endings'):
+        r.render_recovery(staged, claim_lf.replace('RETURNS', '\rRETURNS'))
+
+
 @pytest.fixture
 def staged(tmp_path,monkeypatch):
     monkeypatch.setattr(r,'ROOT',tmp_path)
     monkeypatch.setattr(c,'ROOT',tmp_path)
     for name in c.PINNED:
-        dest=tmp_path/'source/database/migrations'/(name+'.sql')
+        directory = 'candidates' if name.startswith('0060_') else 'migrations'
+        dest=tmp_path/'source/database'/directory/(name+'.sql')
         dest.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(REPO/'database/migrations'/(name+'.sql'),dest)
+        shutil.copyfile(REPO/'database'/directory/(name+'.sql'),dest)
     dest=tmp_path/'source/database/tests/041_universal_video_queue.sql'
     dest.parent.mkdir(parents=True)
     shutil.copyfile(REPO/'database/tests/041_universal_video_queue.sql',dest)
@@ -89,14 +136,14 @@ def receipt():
 
 
 def test_verifier_cannot_restore_or_write_ledger(staged):
-    statements=c.verify_payload(receipt())['sql_statements']
+    statements=c.verify_payload(receipt(),installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
     assert c.TEMP_GRANT in statements and c.TEMP_REVOKE in statements
     assert not any('DROP TRIGGER' in s or 'INSERT INTO public.schema_migration' in s for s in statements)
     assert any('RECOVERY_FULL_HISTORY_DRIFT' in s for s in statements)
 
 
 def test_recovery_orders_checks_and_cleanup(staged):
-    statements=c.recover_payload(receipt())['sql_statements']
+    statements=c.recover_payload(receipt(),installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
     ledger=next(i for i,s in enumerate(statements) if 'INSERT INTO public.schema_migration' in s)
     for label in ('RECOVERY_LEGACY_CATALOG_MISMATCH','RECOVERY_SUBSET_NOT_DISABLED','RECOVERY_HISTORY_CHANGED'):
         assert next(i for i,s in enumerate(statements) if label in s)<ledger
@@ -107,7 +154,7 @@ def test_recovery_orders_checks_and_cleanup(staged):
 @pytest.mark.parametrize('change',[{'state':'UNKNOWN'},{'target':'other'},{'catalog_md5':'xyz'},{'extra':1}])
 def test_invalid_receipts_rejected(staged,change):
     bad={**receipt(),**change}
-    with pytest.raises(ValueError): c.recover_payload(bad)
+    with pytest.raises(ValueError): c.recover_payload(bad,installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])
 
 
 def test_model_restores_without_mutating_history(staged):

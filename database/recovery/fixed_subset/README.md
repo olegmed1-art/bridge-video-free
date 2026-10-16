@@ -1,5 +1,54 @@
 # Fixed-subset connector installation and capability recovery
 
+## ACL/owner evidence (local preparation only)
+
+`acl_snapshot.py` collects a consistent, read-only PostgreSQL catalog snapshot from
+an already-open autocommit psycopg connection. It has no connector, DSN parser, or
+database target. The JSON contains object owners, raw and expanded object/column
+ACLs (including grantors and grant options), non-system role attributes and
+membership options, global and schema default privileges, and MD5 digests of
+function definitions. It excludes role passwords, connection strings, function
+bodies, and application rows. Keep the local artifact restricted because role
+names and the permission graph are operational metadata.
+Tuple and `dict_row` cursor factories produce the same values; unexpected row
+shapes fail closed.
+
+Capture immediately before 0059/0060 installation and after any recovery; compare
+with `assert_restored(before, after, allowed_memberships=...)`. The allowlist must
+be reviewed against the pre-install graph. The comparison requires exact restoration
+of every pre-install owner, ACL, definition digest, column grant, default privilege,
+membership and role attribute, while permitting retained new subset objects and
+NOLOGIN roles. It rejects PUBLIC or unknown legacy writers, new subset API grants,
+unreviewed writer-role membership, and even implicit PUBLIC function EXECUTE in
+global defaults. PostgreSQL 18's creator bootstrap membership is permitted only
+for one of the five exact new subset roles to the pre-install `video_queue` schema
+owner, with `ADMIN TRUE, INHERIT FALSE, SET FALSE`. Its grantor must match the
+single bootstrap grantor already evidenced by the pre-install role graph; a
+superuser schema owner without such old edges may grant to itself. Conflicting
+or absent non-superuser bootstrap-grantor evidence fails closed.
+Memberships with inherited or SET capabilities remain forbidden. A failed
+comparison is a stop condition: do not apply guessed
+GRANTs or broad writer permissions to make it pass. The existing recovery SQL
+remains the rollback mechanism; this collector is evidence and a gate, not a
+privilege-changing repair tool.
+
+`database/tests/fixed_subset_admission/test_acl_snapshot_pg18.py` is an opt-in
+synthetic localhost PG18 test. It proves read-only collection, transaction rollback
+after GRANT/owner change, committed ACL/owner restoration, rejection of broad
+writer/default/membership grants, retained new objects and roles, and scoped test
+cleanup. The existing `connector_recovery_fixture.py` separately executes the
+exact 0059/0060 installer/verifier/recovery SQL and compares legacy ACL/owner state;
+this focused test does not claim to have rerun that full fixture.
+It requires `SUBSET_SYNTHETIC_PG18=1` and
+`SUBSET_SYNTHETIC_PG18_DATADIR` pointing to a disposable directory under the
+machine's temporary directory named `subset-acl-pg18-*`; the test independently
+checks the server's actual data directory before creating or dropping anything.
+
+The three SHA-pinned installer/recovery SQL files and the legacy 0056-0058 SQL
+files are checked out as LF on every platform via `.gitattributes`. The fixture stores raw `pg_get_functiondef` bytes
+for their server-specific MD5, while `build_recovery.py` normalizes only the
+rendered recovery SQL to LF. Checksum validation remains byte-exact.
+
 ASSURED/I2 candidate. Production execution requires a separate action-time approval.
 No CLI here connects to a database. The single synthetic CI has its own fixed
 localhost fixture; never give it a production DSN.
@@ -16,7 +65,8 @@ do not prove Neon API transport or durable acknowledgement handling.
 The builder requires private local `target.json` (project_id, branch_id,
 endpoint_id, database_name), `catalog-baseline.json`,
 `semantic-catalog-baseline.json`, `claim-baseline.json`, `restore_claim_job.sql`,
-and the hash-pinned source migrations under `source/database/migrations` and041
+and hash-pinned 0059 under `source/database/migrations`, guarded 0060 under
+`source/database/candidates`, and 041
 under `source/database/tests`. No implicit destination or catalog defaults.
 `build_recovery.py` renders the fixed repair; `connector_packet.py` emits argument
 objects for review. A recovery/verifier payload requires the exact receipt of a
@@ -37,14 +87,19 @@ across calls; no automatic retries. This package does not stop/resume workers.
 0060 creates five persistent NOLOGIN roles: `video_subset_owner`,
 `video_subset_approver`, `video_subset_collector`, `video_subset_admitter`,
 `video_subset_worker_v2`. PostgreSQL retains bootstrap ADMIN-only memberships for
-the creator. Four new tables and24 functions including replaced `claim_job` move
-to the definer owner. Capability roles receive exactly11 API EXECUTE grants and
-schema USAGE; no LOGIN memberships are provisioned. The definer gains legacy
-table SELECT/INSERT/UPDATE, sequence USAGE/SELECT and four legacy function EXECUTE
-grants. Five legacy API grants are cut off; six guards are added to old batch/job.
+the creator. Four new tables and 25 functions including replaced `claim_job` and
+`subset_claim_job` move to the definer owner. Capability roles receive exactly
+12 API EXECUTE grants and schema USAGE; no LOGIN memberships are provisioned.
+The definer gains legacy table SELECT/INSERT/UPDATE, sequence USAGE/SELECT and
+four legacy function EXECUTE grants. Five legacy API grants are cut off; six
+guards are added to old batch/job.
 These are material persistent installer changes, not a read-only operation.
 
-The installer temporarily grants definer membership with INHERIT/SET and schema
+The installer sets a global default function ACL for `video_subset_owner` that
+removes implicit PUBLIC EXECUTE. The default ACL persists with the retained
+NOLOGIN role after recovery. Installer, verifier, recovery, 041-043 and the
+independent ACL collector reject a missing or broadened default. The installer
+temporarily grants definer membership with INHERIT/SET and schema
 CREATE, then revokes both. Verifier/recovery temporarily grant only definer
 membership with ADMIN=false, INHERIT=true, SET=false, and revoke the exact
 installer-issued grant before COMMIT. This supplies substantial inherited owner
@@ -82,7 +137,7 @@ the old empty-only0060 rollback or delete existing ledger entries.
 
 ## Evidence scope
 
-The one Ubuntu PG18 fixture creates only0056–0058 synthetic baseline, then executes
+The disposable PG18 fixture (Linux CI or native Windows with Git Bash) creates only0056-0058 synthetic baseline, then executes
 the exact generated install/verifier/recovery lists as the nonsuperuser owner.
 It emulates Neon target GUCs explicitly, injects failures after GRANT/owner changes
 and before install COMMIT, tests unknown default-function grantees, records raw

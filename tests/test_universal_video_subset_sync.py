@@ -20,6 +20,8 @@ from universal_video.subset_drive_observation import (
 
 
 def test_mode_and_target_binding(monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
     monkeypatch.setenv("UNIVERSAL_VIDEO_SUBSET_SYNC", "yes")
     with pytest.raises(SubsetDriveObservationError, match="VIDEO_SUBSET_MODE_INVALID"):
         subset_sync_enabled()
@@ -29,9 +31,93 @@ def test_mode_and_target_binding(monkeypatch):
     with pytest.raises(SubsetDriveObservationError, match="VIDEO_SUBSET_TARGET_MISMATCH"):
         cfg.validate_target("postgresql://worker@127.0.0.1:5432/other")
     remote = SubsetDriveConfig("approval", "batch",
-        "postgresql://collector@example.neon.tech/neondb", "example.neon.tech", "neondb")
+        "postgresql://collector@example.neon.tech:5432/neondb", "example.neon.tech", "neondb")
     with pytest.raises(SubsetDriveObservationError, match="VIDEO_SUBSET_TLS_BINDING_REQUIRED"):
-        remote.validate_target("postgresql://worker@example.neon.tech/neondb")
+        remote.validate_target("postgresql://worker@example.neon.tech:5432/neondb")
+
+
+@pytest.mark.parametrize("bad_dsn", (
+    "postgresql://worker@127.0.0.1:5432/one?hostaddr=203.0.113.10",
+    "postgresql://worker@127.0.0.1:5432/one?service=other",
+    "host=127.0.0.1 hostaddr=203.0.113.10 port=5432 dbname=one user=worker",
+    "host=127.0.0.1 service=other port=5432 dbname=one user=worker",
+))
+def test_target_rejects_uri_and_keyword_connection_overrides(bad_dsn, monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    good_dsn = "postgresql://worker@127.0.0.1:5432/one"
+    for worker_dsn, collector_dsn in ((bad_dsn, good_dsn),
+                                      (good_dsn, bad_dsn)):
+        config = SubsetDriveConfig("approval", "batch", collector_dsn,
+                                   "127.0.0.1", "one")
+        with pytest.raises(SubsetDriveObservationError) as exc:
+            config.validate_target(worker_dsn)
+        assert str(exc.value) == "VIDEO_SUBSET_TARGET_MISMATCH"
+
+
+@pytest.mark.parametrize("variable", ("PGHOSTADDR", "PGSERVICE"))
+def test_target_rejects_implicit_libpq_overrides(variable, monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    dsn = "postgresql://worker@127.0.0.1:5432/one"
+    config = SubsetDriveConfig("approval", "batch", dsn, "127.0.0.1", "one")
+    monkeypatch.setenv(variable, "203.0.113.10" if variable == "PGHOSTADDR" else "other")
+    with pytest.raises(SubsetDriveObservationError) as exc:
+        config.validate_target(dsn)
+    assert str(exc.value) == "VIDEO_SUBSET_TARGET_MISMATCH"
+
+
+@pytest.mark.parametrize("bad_dsn", (
+    "postgresql://worker:synthetic-secret-marker@127.0.0.1/one",
+    "postgresql://worker@127.0.0.1:/one",
+    "postgresql://worker@127.0.0.1/one?port=",
+    "host=127.0.0.1 dbname=one user=worker",
+))
+@pytest.mark.parametrize("pgport", (None, "15432"))
+def test_target_requires_explicit_port_for_both_logins(bad_dsn, pgport, monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    if pgport is None:
+        monkeypatch.delenv("PGPORT", raising=False)
+    else:
+        monkeypatch.setenv("PGPORT", pgport)
+    good_dsn = "postgresql://worker@127.0.0.1:5432/one"
+    SubsetDriveConfig("approval", "batch", good_dsn,
+                      "127.0.0.1", "one").validate_target(good_dsn)
+    for worker_dsn, collector_dsn in ((bad_dsn, good_dsn),
+                                      (good_dsn, bad_dsn)):
+        config = SubsetDriveConfig("approval", "batch", collector_dsn,
+                                   "127.0.0.1", "one")
+        with pytest.raises(SubsetDriveObservationError) as exc:
+            config.validate_target(worker_dsn)
+        assert str(exc.value) == "VIDEO_SUBSET_TARGET_MISMATCH"
+        assert "synthetic-secret-marker" not in str(exc.value)
+
+
+@pytest.mark.parametrize("dsn,accepted", (
+    ("postgresql://worker@127.0.0.1/one?port=15432&port=5432", True),
+    ("postgresql://worker@127.0.0.1/one?port=5432&port=15432", False),
+    ("host=127.0.0.1 port=15432 port=5432 dbname=one user=worker", True),
+    ("host=127.0.0.1 port=5432 port=15432 dbname=one user=worker", False),
+    ("postgresql://worker@127.0.0.1/one?host=198.51.100.9&host=127.0.0.1&port=5432", True),
+    ("postgresql://worker@127.0.0.1/one?host=127.0.0.1&host=198.51.100.9&port=5432", False),
+    ("host=198.51.100.9 host=127.0.0.1 port=5432 dbname=one user=worker", True),
+    ("host=127.0.0.1 host=198.51.100.9 port=5432 dbname=one user=worker", False),
+))
+def test_target_checks_effective_last_duplicate_parameter(dsn, accepted, monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    monkeypatch.setenv("PGPORT", "15432")
+    good_dsn = "postgresql://worker@127.0.0.1:5432/one"
+    for worker_dsn, collector_dsn in ((dsn, good_dsn), (good_dsn, dsn)):
+        config = SubsetDriveConfig("approval", "batch", collector_dsn,
+                                   "127.0.0.1", "one")
+        if accepted:
+            config.validate_target(worker_dsn)
+        else:
+            with pytest.raises(SubsetDriveObservationError) as exc:
+                config.validate_target(worker_dsn)
+            assert str(exc.value) == "VIDEO_SUBSET_TARGET_MISMATCH"
 
 
 def test_wrong_batch_rejected_before_drive_or_sql():
