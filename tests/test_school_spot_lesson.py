@@ -43,9 +43,8 @@ def test_school_route_uses_only_server_bound_existing_store(monkeypatch, tmp_pat
     load_store_class().create(journal, "owned-session", preview_exercise_id="spot.a7c2")
     binding = LearnerLessonBinding("school-1", "learner-1", "owned-session", journal)
     verified = VerifiedSchoolSession("school-1", "learner-1", "test-csrf", "http://testserver")
-    monkeypatch.setattr(school_lesson, "verify_school_browser_session", lambda request: verified)
-    monkeypatch.setattr(school_lesson, "lookup_existing_lesson_session", lambda principal: binding)
     app = FastAPI()
+    app.state.school_spot_binding_resolver = lambda request: (verified, binding)
     app.include_router(router)
     client = TestClient(app, client=("127.0.0.1", 50000))
     write_headers = {"Origin": "http://testserver", "X-CSRF-Token": "test-csrf"}
@@ -72,15 +71,15 @@ def test_school_route_uses_only_server_bound_existing_store(monkeypatch, tmp_pat
     assert client.get(URL, headers={"X-Learner-Id": "learner-2"}).status_code == 403
     assert client.get(URL, headers={"X-School-Id": "school-2"}).status_code == 403
 
-    monkeypatch.setattr(school_lesson, "lookup_existing_lesson_session", lambda principal:
+    app.state.school_spot_binding_resolver = lambda request: (verified,
                         LearnerLessonBinding("school-2", "learner-1", "owned-session", journal))
     assert client.get(URL).status_code == 403
-    monkeypatch.setattr(school_lesson, "lookup_existing_lesson_session", lambda principal:
+    app.state.school_spot_binding_resolver = lambda request: (verified,
                         LearnerLessonBinding("school-1", "learner-2", "owned-session", journal))
     assert client.get(URL).status_code == 403
 
     foreign = tmp_path / "foreign.sqlite3"
     load_store_class().create(foreign, "foreign-session", preview_exercise_id="spot.a7c2")
-    monkeypatch.setattr(school_lesson, "lookup_existing_lesson_session", lambda principal:
+    app.state.school_spot_binding_resolver = lambda request: (verified,
                         LearnerLessonBinding("school-1", "learner-1", "owned-session", foreign))
     assert client.get(URL).status_code == 403

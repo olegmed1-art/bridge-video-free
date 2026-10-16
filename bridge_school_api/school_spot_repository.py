@@ -8,6 +8,7 @@ It is deliberately not wired into the public route until that verifier exists.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Mapping, Protocol
 
@@ -37,6 +38,62 @@ class TrustedJournalRecord:
 
 class TrustedJournalSource(Protocol):
     def find_existing(self, identity: VerifiedProviderIdentity) -> TrustedJournalRecord | None: ...
+
+
+class FileTrustedJournalSource:
+    """Host-owned lookup, not an authenticator. No request can select a file.
+
+    The caller supplies one public activity ID and an already trusted identity.
+    Journal paths must remain beneath the private manifest directory.
+    """
+
+    def __init__(self, manifest_path: Path, exercise_id: str):
+        self.path = Path(manifest_path)
+        self.exercise_id = exercise_id
+
+    def _owned_manifest(self, identity: VerifiedProviderIdentity):
+        if not isinstance(identity, VerifiedProviderIdentity) or self.path.is_symlink():
+            raise SchoolLessonOwnershipRejected('invalid journal source')
+        raw = self.path.read_bytes()
+        if len(raw) > 65536:
+            raise SchoolLessonOwnershipRejected('journal manifest size')
+        data = json.loads(raw)
+        if (type(data) is not dict or data.get('schema') != 'school-file-journal-bindings-v1'
+                or type(data.get('owner')) is not dict or type(data.get('assignments')) is not dict):
+            raise SchoolLessonOwnershipRejected('journal manifest shape')
+        owner = data['owner']
+        if (owner.get('provider_key') != identity.provider_key or
+                owner.get('provider_subject') != identity.provider_subject or
+                not all(type(owner.get(k)) is str and 1 <= len(owner[k]) <= 120
+                        for k in ('school_id', 'student_id'))):
+            raise SchoolLessonOwnershipRejected('journal owner mismatch')
+        if not set(data['assignments']) <= {'spot.a7c2', 'spot.f3b8'}:
+            raise SchoolLessonOwnershipRejected('unknown assigned activity')
+        return data
+
+    def assigned_ids(self, identity: VerifiedProviderIdentity) -> tuple[str, ...]:
+        return tuple(self._owned_manifest(identity)['assignments'])
+
+    def find_existing(self, identity: VerifiedProviderIdentity) -> TrustedJournalRecord | None:
+        data = self._owned_manifest(identity)
+        record = data['assignments'].get(self.exercise_id)
+        if record is None:
+            return None
+        if (type(record) is not dict or set(record) != {'exercise_id', 'session_id', 'journal'}
+                or record['exercise_id'] != self.exercise_id
+                or type(record['session_id']) is not str or not 1 <= len(record['session_id']) <= 120
+                or type(record['journal']) is not str):
+            raise SchoolLessonOwnershipRejected('invalid assigned journal')
+        relative = Path(record['journal'])
+        root = self.path.parent.resolve()
+        journal = (root / relative).resolve()
+        if (relative.is_absolute() or '..' in relative.parts or
+                not journal.is_relative_to(root) or (root / relative).is_symlink()
+                or not journal.is_file()):
+            raise SchoolLessonOwnershipRejected('private journal unavailable')
+        owner = data['owner']
+        return TrustedJournalRecord(owner['school_id'], owner['student_id'],
+                                    record['session_id'], journal)
 
 
 class ReadCursor(Protocol):

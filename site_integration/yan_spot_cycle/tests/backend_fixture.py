@@ -21,8 +21,7 @@ def dispatch(message):
             'local-preview-csrf', os.environ.get('BRIDGE_YAN_ORIGIN', 'http://site.test'))
         binding = lesson.LearnerLessonBinding('local-school', 'local-learner',
             'yan-local-preview', Path(os.environ['BRIDGE_YAN_JOURNAL']))
-        lesson.verify_school_browser_session = lambda request: principal
-        lesson.lookup_existing_lesson_session = lambda verified: binding
+        app.state.school_spot_binding_resolver = lambda request: (principal, binding)
     with TestClient(app, client=('127.0.0.1', 50000)) as client:
         response = client.request(message['method'], message['path'],
             headers=message['headers'], content=message['body'].encode('utf-8'))

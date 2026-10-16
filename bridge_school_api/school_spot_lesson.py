@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 import json
+import os
 from pathlib import Path
 import secrets
 
@@ -42,33 +43,44 @@ class VerifiedSchoolSession:
     learner_id: str
     csrf_token: str
     origin: str
+    binding_kind: str = 'SCHOOL_VERIFIED'
 
 
-def verify_school_browser_session(request: Request) -> VerifiedSchoolSession:
-    """Replace with the existing school session verifier; never trust headers."""
-
-    raise HTTPException(status_code=503, detail="school browser session verifier unavailable")
-
-
-def lookup_existing_lesson_session(verified: VerifiedSchoolSession) -> LearnerLessonBinding:
-    """Resolve an existing journal from server-owned school session records."""
-
-    raise HTTPException(status_code=503, detail="school lesson ownership lookup unavailable")
+def resolve_verified_lesson_binding(request: Request) -> tuple[VerifiedSchoolSession, LearnerLessonBinding]:
+    """One request-scoped, explicitly installed resolver; no production fallback."""
+    from .school_spot_repository import SchoolLessonOwnershipRejected
+    app = request.scope.get('app')
+    resolver = getattr(getattr(app, 'state', None), 'school_spot_binding_resolver', None)
+    if not callable(resolver):
+        raise HTTPException(status_code=503, detail='school lesson resolver unavailable')
+    try:
+        pair = resolver(request)
+    except (SchoolLessonOwnershipRejected, OSError, ValueError) as exc:
+        raise HTTPException(status_code=403, detail='lesson ownership rejected') from exc
+    if (type(pair) is not tuple or len(pair) != 2 or
+            not isinstance(pair[0], VerifiedSchoolSession) or
+            not isinstance(pair[1], LearnerLessonBinding)):
+        raise HTTPException(status_code=503, detail='school lesson resolver unavailable')
+    if pair[0].binding_kind not in {'SCHOOL_VERIFIED', 'LOCAL_SINGLE_USER'}:
+        raise HTTPException(status_code=503, detail='unknown binding kind')
+    if pair[0].binding_kind == 'LOCAL_SINGLE_USER' and (
+            getattr(app.state, 'school_spot_mode', None) != 'LOCAL_SINGLE_USER'
+            or os.environ.get('VERCEL_ENV')):
+        raise HTTPException(status_code=503, detail='local context unavailable')
+    return pair
 
 
 def require_learner_lesson_binding(request: Request) -> LearnerLessonBinding:
     """Admit only a verified learner bound to the matching existing journal.
 
-    The two upstream functions deliberately fail closed until the actual
-    school's verifier and ownership lookup are connected. Browser headers are
+    The installed host resolver owns verification and journal lookup. Browser headers are
     never used to select the principal, session, or journal. A shared
     BRIDGE_API_TOKEN is not a learner identity.
     """
 
-    verified = verify_school_browser_session(request)
+    verified, binding = resolve_verified_lesson_binding(request)
     if not isinstance(verified, VerifiedSchoolSession):
         raise HTTPException(status_code=503, detail="school browser session unavailable")
-    binding = lookup_existing_lesson_session(verified)
     if not isinstance(binding, LearnerLessonBinding):
         raise HTTPException(status_code=503, detail="school lesson binding unavailable")
     if (
@@ -98,6 +110,7 @@ def require_learner_lesson_binding(request: Request) -> LearnerLessonBinding:
     except (LocalSpotSessionUnavailable, ValueError, OSError) as exc:
         raise HTTPException(status_code=403, detail="lesson journal binding rejected") from exc
     request.state.school_lesson_csrf_token = verified.csrf_token
+    request.state.school_lesson_binding_kind = verified.binding_kind
     return binding
 
 
@@ -176,5 +189,9 @@ def school_spot_page(
         source = (SESSION_ASSETS / filename).read_text(encoding="utf-8")
         token = escape(request.state.school_lesson_csrf_token, quote=True)
         page = source.replace("<head>", f'<head>\n  <meta name="bridge-school-csrf-token" content="{token}">', 1)
+        if request.state.school_lesson_binding_kind == 'LOCAL_SINGLE_USER':
+            ids = ','.join(request.state.school_spot_assigned_ids)
+            page = page.replace('<head>', '<head>\n  <meta name="bridge-local-assigned-activities" '
+                                f'content="{escape(ids, quote=True)}">', 1)
         return HTMLResponse(page, headers=headers)
     return FileResponse(SESSION_ASSETS / filename, media_type=SESSION_ALLOWED[filename], headers=headers)

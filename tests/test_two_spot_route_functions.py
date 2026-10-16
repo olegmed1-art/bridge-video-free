@@ -76,19 +76,18 @@ def test_school_admission_fails_closed_for_missing_or_wrong_binding(monkeypatch,
 
     verified = lesson.VerifiedSchoolSession("school-1", "learner-1", "csrf", "http://testserver")
     binding = lesson.LearnerLessonBinding("school-1", "learner-1", "route-session", store.path)
-    monkeypatch.setattr(lesson, "verify_school_browser_session", lambda _request: verified)
-    monkeypatch.setattr(lesson, "lookup_existing_lesson_session", lambda _principal: binding)
+    monkeypatch.setattr(lesson, "resolve_verified_lesson_binding", lambda _request: (verified, binding))
     assert lesson.require_learner_lesson_binding(request()) == binding
     with pytest.raises(HTTPException) as spoofed:
         lesson.require_learner_lesson_binding(request(headers=(("x-learner-id", "other"),)))
     assert spoofed.value.status_code == 403
-    monkeypatch.setattr(lesson, "lookup_existing_lesson_session", lambda _principal:
-                        lesson.LearnerLessonBinding("school-1", "learner-2", "route-session", store.path))
+    monkeypatch.setattr(lesson, "resolve_verified_lesson_binding", lambda _request: (verified,
+                        lesson.LearnerLessonBinding("school-1", "learner-2", "route-session", store.path)))
     with pytest.raises(HTTPException) as foreign:
         lesson.require_learner_lesson_binding(request())
     assert foreign.value.status_code == 403
-    monkeypatch.setattr(lesson, "lookup_existing_lesson_session", lambda _principal:
-                        lesson.LearnerLessonBinding("school-1", "learner-1", "wrong-session", store.path))
+    monkeypatch.setattr(lesson, "resolve_verified_lesson_binding", lambda _request: (verified,
+                        lesson.LearnerLessonBinding("school-1", "learner-1", "wrong-session", store.path)))
     with pytest.raises(HTTPException) as mismatched_journal:
         lesson.require_learner_lesson_binding(request())
     assert mismatched_journal.value.status_code == 403

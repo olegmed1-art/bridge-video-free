@@ -7,12 +7,15 @@ function bridge_spot_error($status) {
     echo json_encode(array('detail' => 'lesson temporarily unavailable'));
 }
 
-function bridge_spot_url($suffix) {
+function bridge_spot_url($suffix, $activity = null) {
     $script = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/index.php';
     if (!preg_match('~^/(?:[A-Za-z0-9_.-]+/)*index\.php$~D', $script)) {
         $script = '/index.php';
     }
-    return $script.'?route='.rawurlencode('practice/spot-cycle'.$suffix);
+    if ($activity === null && isset($_GET['activity']) && is_string($_GET['activity'])) $activity = $_GET['activity'];
+    $url = $script.'?route='.rawurlencode('practice/spot-cycle'.$suffix);
+    if ($activity !== null) $url .= '&activity='.rawurlencode($activity);
+    return $url;
 }
 
 function bridge_spot_route($route) {
@@ -32,6 +35,12 @@ function bridge_spot_route($route) {
         $target = '/school/lessons/spot-cycle/'.$asset;
     } else {
         bridge_spot_error(404); return;
+    }
+    if (isset($_GET['activity'])) {
+        if (!is_string($_GET['activity']) || !in_array($_GET['activity'], array('spot.a7c2', 'spot.f3b8'), true)) {
+            bridge_spot_error(403); return;
+        }
+        $target .= '?activity='.rawurlencode($_GET['activity']);
     }
     $method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
     $expected = $suffix === '/transport' ? 'POST' : 'GET';
@@ -80,6 +89,15 @@ function bridge_spot_route($route) {
                     JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
                 $reply['body'] = str_replace('<head>', '<head>' . "\n" .
                     '<script type="application/json" id="bridge-lesson-host">'.$config.'</script>', $reply['body']);
+                if (preg_match('~<meta name="bridge-local-assigned-activities" content="([a-z0-9.,]+)">~', $reply['body'], $local)) {
+                    $links = '<nav aria-label="Назначенные задания"><strong>Локальная учебная сессия</strong> ';
+                    foreach (explode(',', $local[1]) as $id) {
+                        if (!in_array($id, array('spot.a7c2', 'spot.f3b8'), true)) continue;
+                        $label = $id === 'spot.a7c2' ? 'Упражнение 1' : 'Упражнение 2';
+                        $links .= '<a href="'.htmlspecialchars(bridge_spot_url('', $id), ENT_QUOTES, 'UTF-8').'">'.$label.'</a> ';
+                    }
+                    $reply['body'] = str_replace('<body>', '<body>'.$links.'</nav>', $reply['body']);
+                }
             }
             if (!is_string($reply['body'])) { bridge_spot_error(503); return; }
         }
