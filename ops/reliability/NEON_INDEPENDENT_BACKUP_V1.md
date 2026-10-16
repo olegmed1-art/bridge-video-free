@@ -26,6 +26,12 @@ No raw database dump is uploaded as a GitHub artifact.
 
 ## Acceptance
 
+Source table/schema counts, source schema names, restored counts/names and the manifest use the same scope: the existing `pg_catalog`/`information_schema` exclusions plus only `^pg_(toast_)?temp_[0-9]+$`. This excludes PostgreSQL's temporary system namespaces while retaining `pg_toast` and all other names. The manifest records this temporary namespace pattern; source statistics and `pg_dump` still use separate snapshots.
+
+The restored schema-name set must match the source set exactly within this scope. A missing or unexpected permanent schema fails verification even when schema counts are equal. The existing four count checks and two recovery-marker checks also remain mandatory; all mismatches are reported before failure.
+
+Run `38888790367` remains a recorded **FAIL**. Its complete logged inventories differ only by `pg_temp_23` and `pg_toast_temp_23`; applying the corrected scope to the saved lists yields the same nine schemas. This offline schema comparison needs no new production read, but does not rerun backup, checksum, decryption, restore, or the SQL reads and is not a new full restore PASS. The original counts and failure outcome are retained in `tests/fixtures/neon_restore_run_38888790367.json`.
+
 Issue #526 remains open until one real `/recovery neon-backup-restore` execution proves all of the following:
 
 1. backup job succeeds against production Neon;
