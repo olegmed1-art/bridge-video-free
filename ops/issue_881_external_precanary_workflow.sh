@@ -28,6 +28,15 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/ibm-machine-queue-proof.yml'
+  'docs/operations/IBM_MACHINE_QUEUE_CHANNEL.md'
+  'ops/ibm_machine_queue_db.py'
+  'ops/ibm_machine_queue_oracle.py'
+  'ops/ibm_machine_queue_protocol.py'
+  'ops/ibm_machine_queue_runner.py'
+  'ops/ibm_machine_queue_source.py'
+  'tests/ibm_machine_queue_fixture.py'
+  'tests/test_ibm_machine_queue.py'
   '.github/workflows/light-native-retirement-observe.yml'
   'ops/light_native_retirement_observe_runner.py'
   'ops/light_native_retirement_live.py'
