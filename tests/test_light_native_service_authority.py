@@ -1,11 +1,15 @@
 """Local stdlib contract tests; Linux process/filesystem evidence is separate."""
+import ast
 import base64
+import hashlib
 import io
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
+import json
 import os
+import re
 import stat
 from pathlib import Path
 import sys
@@ -16,6 +20,35 @@ import unittest
 from unittest.mock import patch
 
 from ops import light_native_service_authority as a
+
+
+def actual_codec_contracts():
+    """Run the existing pure codec/validation code without Linux-only imports."""
+    root = Path(__file__).resolve().parents[1]
+    def load(name, names, namespace):
+        selected = []
+        for node in ast.parse((root/name).read_bytes()).body:
+            if isinstance(node, ast.FunctionDef) and node.name in names:
+                selected.append(node)
+            elif isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id in names for target in node.targets):
+                selected.append(node)
+        exec(compile(ast.Module(body=selected, type_ignores=[]), name, 'exec'), namespace)
+        return SimpleNamespace(**namespace)
+    identifiers = load('ops/native_maintenance_bundle.py', {'identifier'}, dict(re=re))
+    release = load('ops/light_native_pilot_release.py',
+        {'SUPERVISOR_HELPERS', 'OWNER_HELPERS', 'EXTRA', 'HELPERS', 'MARKERS',
+         'require', 'encoded', 'validate'},
+        dict(json=json, hashlib=hashlib, Path=Path, source=identifiers))
+    wire = load('ops/light_native_lane_execution.py', {'encoded', 'parse'},
+                dict(json=json, require=a.require))
+    engine = load('database/native_cli_permission_engine.py', {'encode'}, dict(json=json))
+    intake = load('database/light_native_pilot_intake.py', {'strict'},
+                  dict(json=json, encoded=engine.encode, require=a.require))
+    owner = load('ops/light_native_lane_controller.py',
+        {'EXTRA', 'RETIREMENT_HELPERS', 'validate_package'},
+        dict(release=release, parse=wire.parse, sha=a.sha, require=a.require))
+    return SimpleNamespace(owner=owner, release=release, wire=wire, engine=engine, intake=intake)
 
 
 def stamp(value):
@@ -71,7 +104,7 @@ def make_fixture(count=2):
 
 
 @contextmanager
-def loaded_fixture(fixture=None):
+def loaded_fixture(fixture=None, *, validate_packages=False):
     f = make_fixture() if fixture is None else fixture
     temp_parent = Path.home()/'AppData'/'Local'/'Temp' if sys.platform == 'win32' else None
     with tempfile.TemporaryDirectory(dir=temp_parent) as directory:
@@ -97,11 +130,103 @@ def loaded_fixture(fixture=None):
         with patch.object(a, 'protected_read', side_effect=read), \
              patch.object(a, 'root_directory'), patch.object(a, 'host_identity', return_value=f.process), \
              patch.object(a, 'proc_identity', return_value=own), patch.object(a, '_descendant', return_value=True), \
-             patch.object(a, '_packages'), patch.object(a, '_current_main'), \
+             patch.object(a, '_packages', wraps=a._packages if validate_packages else None), \
+             patch.object(a, '_current_main'), \
              patch.object(a, '_retain_context', side_effect=retain), \
              patch.object(a.os, 'uname', return_value=SimpleNamespace(nodename=a.HOST), create=True):
             host = a.HostAuthority(a.sha(f.manifest_raw), root=root)
             yield SimpleNamespace(host=host, records=records, root=root, fixture=f)
+
+
+class HistoricalCodecContracts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.contracts = actual_codec_contracts()
+
+    def fixture(self, *, plan_utf8=False, policy_ascii=False, runtime_utf8=False):
+        c = self.contracts
+        f = make_fixture(1)
+        text = 'Read \u043c\u043e\u0441\u0442 \U0001f0a1 exactly.'
+        plan = a.parse(base64.b64decode(f.policy['plans'][0]['plan_base64']))
+        plan['objective'] = text
+        plan_raw = c.wire.encoded(plan) if plan_utf8 else c.engine.encode(plan)
+        f.policy['plans'][0] = dict(plan_base64=base64.b64encode(plan_raw).decode(),
+                                   accepted_plan_sha256=a.sha(plan_raw))
+        # These are synthetic file contents, but complete real package shapes;
+        # the actual controller/release validators run without validator mocks.
+        files = dict.fromkeys(c.release.EXTRA, '# synthetic codec fixture\n')
+        files['oracle_autopilot/light_native_loader.py'] = '# '+text+'\n'
+        bundle = dict(revision=a.RETAINED_SOURCE, files=files)
+        bundle['sha256'] = a.sha(c.release.encoded(bundle))
+        retained = dict(version=1, source=a.RETAINED_SOURCE, runtime=bundle,
+                        helpers=dict.fromkeys(c.release.HELPERS, '# synthetic helper\n'))
+        f.runtime = c.wire.encoded(retained) if runtime_utf8 else c.release.encoded(retained)
+        f.controller = c.wire.encoded(dict(version=1, kind='LIGHT_LANE_CONTROLLER',
+            source=f.policy['source'], helpers=dict.fromkeys(
+                (*c.release.HELPERS, *c.owner.EXTRA), '# '+text+'\n')))
+        f.policy['authority']['evidence'] = text
+        f.policy.update(accepted_controller_sha256=a.sha(f.controller),
+                        accepted_runtime_sha256=a.sha(f.runtime))
+        f.raw = c.release.encoded(f.policy) if policy_ascii else c.wire.encoded(f.policy)
+        f.manifest.update(controller_sha256=a.sha(f.controller), runtime_sha256=a.sha(f.runtime),
+                          policy_sha256=a.sha(f.raw))
+        f.manifest_raw = a.encoded(f.manifest)
+        f.install.update(manifest_sha256=a.sha(f.manifest_raw),
+            **{key: f.manifest[key] for key in ('controller_sha256', 'runtime_sha256', 'policy_sha256')})
+        f.plan_raw, f.retained = plan_raw, retained
+        return f
+
+    def test_unicode_policy_and_ascii_plan_preserve_original_bytes_and_hashes(self):
+        f = self.fixture()
+        plan = self.contracts.intake.strict(f.plan_raw, 16384)
+        self.assertIn(b'\\u043c', f.plan_raw)
+        self.assertIn('\u043c\u043e\u0441\u0442'.encode(), f.raw)
+        self.assertEqual(self.contracts.wire.parse(f.raw), f.policy)
+        result = a.validate_policy(f.raw, a.Manifest.load(f.manifest_raw))
+        self.assertIs(result.raw, f.raw)
+        self.assertEqual(result.digest, a.sha(f.raw))
+        self.assertEqual(result.plans[0].plan_sha256, a.sha(f.plan_raw))
+        self.assertEqual(plan['objective'], f.policy['authority']['evidence'])
+
+    def test_ascii_reencoded_unicode_policy_refuses_even_with_matching_pin(self):
+        f = self.fixture(policy_ascii=True)
+        self.assertEqual(a.sha(f.raw), f.manifest['policy_sha256'])
+        with self.assertRaisesRegex(a.Refusal, '^NATIVE_SERVICE_RECORD$'):
+            a.validate_policy(f.raw, a.Manifest.load(f.manifest_raw))
+
+    def test_utf8_reencoded_unicode_plan_refuses_even_with_matching_pins(self):
+        f = self.fixture(plan_utf8=True)
+        self.assertEqual(a.sha(f.plan_raw), f.policy['plans'][0]['accepted_plan_sha256'])
+        with self.assertRaisesRegex(a.Refusal, '^NATIVE_SERVICE_RECORD$'):
+            a.validate_policy(f.raw, a.Manifest.load(f.manifest_raw))
+
+    def test_ascii_unicode_release_passes_actual_package_validators_and_host_guard(self):
+        f = self.fixture()
+        self.assertIn(b'\\u043c', f.runtime)
+        self.assertNotEqual(self.contracts.wire.encoded(f.retained), f.runtime)
+        with patch.dict(sys.modules, {'ops.light_native_lane_controller': self.contracts.owner}), \
+             patch.object(sys.modules['ops'], 'light_native_lane_controller', self.contracts.owner, create=True), \
+             loaded_fixture(f, validate_packages=True) as loaded:
+            loaded.host.assert_current()
+            self.assertEqual(loaded.host.policy.raw, f.raw)
+            self.assertEqual(loaded.records[loaded.root/'runtime.json'], f.runtime)
+            self.assertEqual(loaded.host.manifest.runtime_sha256, a.sha(f.runtime))
+
+    def test_utf8_reencoded_unicode_release_refuses_even_with_matching_pin(self):
+        f = self.fixture(runtime_utf8=True)
+        self.assertEqual(a.sha(f.runtime), f.manifest['runtime_sha256'])
+        with patch.dict(sys.modules, {'ops.light_native_lane_controller': self.contracts.owner}), \
+             patch.object(sys.modules['ops'], 'light_native_lane_controller', self.contracts.owner, create=True):
+            with self.assertRaisesRegex(a.Refusal, '^NATIVE_SERVICE_RECORD$'):
+                a._packages(f.controller, f.runtime, a.Manifest.load(f.manifest_raw))
+
+    def test_default_service_record_codec_remains_utf8_and_rejects_ascii_alias(self):
+        value = dict(note='\u043c\u043e\u0441\u0442 \U0001f0a1')
+        raw = self.contracts.wire.encoded(value)
+        self.assertEqual(a.encoded(value), raw)
+        self.assertEqual(a.parse(raw), value)
+        with self.assertRaisesRegex(a.Refusal, '^NATIVE_SERVICE_RECORD$'):
+            a.parse(self.contracts.release.encoded(value))
 
 
 class AuthorityContracts(unittest.TestCase):

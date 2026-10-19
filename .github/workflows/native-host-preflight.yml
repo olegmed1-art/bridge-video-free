@@ -1,4 +1,4 @@
-name: Native host read-only preflight
+name: Native host contracts and transition rehearsal
 
 on:
   pull_request:
@@ -6,6 +6,7 @@ on:
       - '.github/workflows/native-host-preflight.yml'
       - 'ops/light_native_continuity.py'
       - 'ops/light_native_legacy_capture.py'
+      - 'ops/light_native_legacy_transition.py'
       - 'ops/light_native_current_*.py'
       - 'ops/light_native_reconciliation.py'
       - 'ops/light_native_retirement.py'
@@ -15,6 +16,8 @@ on:
       - 'ops/light_native_service_supervisor.py'
       - 'tests/test_light_native_continuity.py'
       - 'tests/test_light_native_legacy_capture.py'
+      - 'tests/test_light_native_legacy_transition.py'
+      - 'tests/fixtures/light_native_legacy_transition_systemd.py'
       - 'tests/test_light_native_current_*.py'
       - 'tests/test_light_native_reconciliation*.py'
       - 'tests/test_light_native_service_authority.py'
@@ -43,6 +46,7 @@ jobs:
               'tests.test_light_native_service_authority',
               'tests.test_light_native_service_supervisor',
               'tests.test_light_native_legacy_capture',
+              'tests.test_light_native_legacy_transition',
               'tests.test_light_native_current_anchor',
               'tests.test_light_native_reconciliation',
               'tests.test_light_native_reconciliation_transport',
@@ -56,6 +60,19 @@ jobs:
           unexpected_skips = [(test.id(), reason) for test, reason in result.skipped
                               if test.id() not in allowed_notrun]
           assert not unexpected_skips, unexpected_skips
-          assert result.testsRun >= 122
+          assert result.testsRun >= 150
           raise SystemExit(not result.wasSuccessful())
           PY
+  disposable-systemd-transition:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Rehearse bounded transition and PID1 recovery in disposable units
+        shell: bash
+        run: |
+          sudo -n /usr/bin/env GITHUB_ACTIONS="$GITHUB_ACTIONS" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            /usr/bin/python3 -I -S -B tests/fixtures/light_native_legacy_transition_systemd.py \
+            ci "$GITHUB_WORKSPACE" "$GITHUB_SHA"
