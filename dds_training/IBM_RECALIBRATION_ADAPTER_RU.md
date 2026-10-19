@@ -45,6 +45,10 @@ recalibration новым predictor fit или запуском полного St
 ## Точные входы адаптера
 
 Функции: `prepare_plan(spec)` и `check_train_artifact(spec, local_root)`.
+Первая проверяет только конфигурацию и остаётся чистой функцией. Inspector и CLI
+перед чтением входов проверяют фактические CPython / major.minor = 3.14;
+несоответствие даёт `BLOCKED / RUNTIME_MISMATCH`. Квитанция содержит
+`observed_runtime` с реальной implementation и полной версией интерпретатора.
 CLI выводит только JSON в stdout; файлов результатов и серверных действий нет:
 
 ```text
@@ -91,18 +95,25 @@ prediction SHA-256 `ae946bec73f12bead7ebd6e54947bb6f2d2268798cf08b7b468495f943be
 ## Проверки и лимиты
 
 Scanner использует один descriptor для хеширования и чтения каждого входа,
-проверяет неизменность identity/размера/mtime и дополнительно ctime на POSIX.
+сохраняет все четыре descriptors открытыми до завершения проверки bundle.
+После OOF scan повторно проверяет SHA-256 всех четырёх входов, затем их
+identity/размер/mtime и дополнительно ctime на POSIX. Это отклоняет в том числе
+позднюю замену байтов ранее прочитанного файла с восстановлением размера и mtime.
 Symlink/reparse point и файлы не обычного типа отклоняются. На Windows stat и
 fstat могут различаться семантикой ctime; размер, mtime, identity и digest
 сохраняются обязательными. Все descriptors закрываются и при раннем отказе.
 
 Ограничения проверки: один процесс, 60 секунд monotonic deadline, максимум
-256 MiB всех входов, 64 KiB на JSONL-строку, 16 MiB на metadata файл, 42000
+256 MiB входных файлов, два прохода чтения суммарно до 512 MiB, 64 KiB на
+JSONL-строку, 16 MiB на metadata файл, 42000
 строк. Нет скрытого sampling: несовпадение точных IDs, количества или хеша —
 отказ. Дубликаты JSON keys, NaN/Infinity, неизвестные поля projection,
 противоречия provenance, пропущенные задачи и неполные scores отклоняются.
 Opening-lead scores должны покрывать все 13 легальных карт, содержать целые
 взятки 0–13 и согласованный максимум. Старый source-card dd_regret не используется.
+Канонический backoff `family_prior` разрешён для opening-lead prediction,
+который выдаёт `rank_opening_leads` при отсутствии enabled family records.
+Для contract prediction этот label и для обоих типов неизвестные labels отклоняются.
 
 Запрос будущего IBM исполнения: **1 vCPU, MemoryMax=2 GiB, 900 секунд**, до
 512 MiB новых выходов, heartbeat каждые 30 секунд. Это запрошенный envelope,
