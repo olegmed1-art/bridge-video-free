@@ -59,7 +59,7 @@ def make_row(
             "model_evidence_count": support,
             "raw_confidence_probability": 0.75,
         }
-        result = {"scores": scores, "dd_regret": float(old_loss)}
+        result = {"scores": scores, "best_defense_tricks": 5, "dd_regret": float(old_loss)}
     return {
         "task_id": f"R-{task_type}-{index}",
         "task_type": task_type,
@@ -103,7 +103,7 @@ def check_prediction_bound_lead_evidence() -> None:
 
     tied = deepcopy(rows[0])
     tied["prediction"]["card"] = "sk"
-    tied["result"] = {"scores": {"sa": 5, "SK": 5, "S2": 3}, "dd_regret": 2}
+    tied["result"] = {"scores": {"sa": 5, "SK": 5, "S2": 3}, "best_defense_tricks": 5, "dd_regret": 2}
     assert row_success(tied) is True
     assert row_loss(tied) == 0
 
@@ -113,7 +113,11 @@ def check_prediction_bound_lead_evidence() -> None:
         {"scores": {"SA": 5, "S2": 3}, "dd_regret": 0},
         {"scores": {"SA": 5, "SK": 3, "sk": 4}, "dd_regret": 0},
         {"scores": {"SA": 5, "SK": None}, "dd_regret": 0},
+        {"scores": {"SK": 3}, "best_defense_tricks": 5, "dd_regret": 2},
+        {"scores": {"SA": 5, "SK": 3}, "best_defense_tricks": 4, "dd_regret": 0},
     ]
+    for best in (None, "invalid", float("nan"), float("inf"), -1, 14):
+        malformed_results.append({"scores": {"SA": 5, "SK": 3}, "best_defense_tricks": best})
     for score in (float("nan"), float("inf"), -1, 14):
         for card in ("SA", "SK"):
             result = {"scores": {"SA": 5, "SK": 3, "S2": 2}, "dd_regret": 0}
@@ -122,6 +126,7 @@ def check_prediction_bound_lead_evidence() -> None:
     for result in malformed_results:
         invalid = deepcopy(tied)
         invalid["result"] = result
+        before = deepcopy(invalid)
         for check in (
             lambda: row_success(invalid),
             lambda: row_loss(invalid),
@@ -136,6 +141,7 @@ def check_prediction_bound_lead_evidence() -> None:
                 pass
             else:
                 raise AssertionError("Incomplete/invalid lead evidence did not fail closed")
+            assert invalid == before, "Evidence rejection rewrote immutable source data"
 
     # Independently derive loss by searching the smallest compensation that
     # dominates every alternative, rather than reusing max(scores)-chosen.
@@ -280,6 +286,7 @@ def main() -> None:
                 "queue_strain_enrichment": True,
                 "candidate_card_calibration": True,
                 "invalid_lead_score_evidence_rejected": True,
+                "recorded_optimum_consistency_checked": True,
                 "exhaustive_independent_score_oracle_cases": 384,
             },
             ensure_ascii=False,

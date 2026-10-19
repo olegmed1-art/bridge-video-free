@@ -93,6 +93,7 @@ def opening_lead_loss(prediction: Mapping[str, object], result: Mapping[str, obj
     Stage 2B reuses immutable DDS score tables across source and candidate
     predictions. Missing card-specific evidence must stop preparation rather
     than silently relabel the candidate with the source prediction's outcome.
+    A recorded optimum, when present, must agree with the score map maximum.
     """
     raw_scores = result.get("scores")
     if not isinstance(raw_scores, Mapping) or not raw_scores:
@@ -112,7 +113,17 @@ def opening_lead_loss(prediction: Mapping[str, object], result: Mapping[str, obj
     chosen = str(prediction.get("card", "")).upper()
     if chosen not in scores:
         raise ValueError("Opening-lead prediction card is missing from the DDS score map")
-    return max(scores.values()) - scores[chosen]
+    best = max(scores.values())
+    if "best_defense_tricks" in result:
+        try:
+            recorded_best = float(result["best_defense_tricks"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Opening-lead DDS optimum must be a finite trick count in 0..13") from exc
+        if not math.isfinite(recorded_best) or not 0 <= recorded_best <= 13:
+            raise ValueError("Opening-lead DDS optimum must be a finite trick count in 0..13")
+        if recorded_best != best:
+            raise ValueError("Opening-lead DDS score map contradicts best_defense_tricks")
+    return best - scores[chosen]
 
 
 def row_success(row: Mapping[str, object]) -> bool:
