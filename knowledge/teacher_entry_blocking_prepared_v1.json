@@ -1,0 +1,210 @@
+{
+  "schema": "teacher-entry-blocking-prepared-v1",
+  "status": "SOURCE_ONLY_TEST_FIXTURE_NOT_ACTIVATED",
+  "test_only": true,
+  "inspected_main_sha": "320414c9b5d77562bbcffadc19614317641ada3e",
+  "source": {
+    "spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
+    "rule_gid": 300003,
+    "rule_range": "A561:O562",
+    "fact_gid": 300002,
+    "fact_range": "A50:J51",
+    "skill_gid": 1531256233,
+    "skill_range": "A4:P5"
+  },
+  "source_literals": {
+    "rules": [
+      {
+        "rule_id": "RULE-L1-PLAY-PRESERVE-ENTRIES",
+        "skill_id": "SKILL-0003",
+        "system_version": "SCHOOL_L1_DB_V1",
+        "rule_type": "PLAN_STEP",
+        "trigger_literal": "role=declarer; context=communications",
+        "conditions_literal": "planned_target_hand_known=true",
+        "meaning_literal": "До ключевой последовательности определить, каким входом попасть в нужную руку, и сохранить этот вход до момента использования.",
+        "constraints_literal": "Навык повторяется на разных уровнях; правило не определяет advanced timing сверх L1.",
+        "action_literal": "identify_required_entry; preserve_required_entry",
+        "priority_literal": "210",
+        "forcing_status": null,
+        "alert_status": null,
+        "certainty": "EXPLICIT",
+        "status": "ACTIVE",
+        "fact_ids_literal": "FACT-L1-SKILL-0003"
+      },
+      {
+        "rule_id": "RULE-L1-PLAY-AVOID-BLOCKING",
+        "skill_id": "SKILL-0004",
+        "system_version": "SCHOOL_L1_DB_V1",
+        "rule_type": "PLAN_CHECK",
+        "trigger_literal": "role=declarer; context=suit_timing",
+        "conditions_literal": "entry_or_access_risk=true",
+        "meaning_literal": "Если порядок отбора старших карт может лишить доступа к отработанным взяткам, выбрать порядок, сохраняющий коммуникации и не блокирующий масть.",
+        "constraints_literal": "Только базовая L1-идея предотвращения блокировки.",
+        "action_literal": "reject_blocking_order; choose_access_preserving_order",
+        "priority_literal": "210",
+        "forcing_status": null,
+        "alert_status": null,
+        "certainty": "EXPLICIT",
+        "status": "ACTIVE",
+        "fact_ids_literal": "FACT-L1-SKILL-0004"
+      }
+    ],
+    "facts": [
+      {
+        "fact_id": "FACT-L1-SKILL-0003",
+        "skill_id": "SKILL-0003",
+        "source_id": "SRC-0022",
+        "source_location": "Навыки / SKILL-0003 / урок 5; далее урок 6 и последующие уровни",
+        "original_statement": "Учитывать возможность перехода между рукой и столом и сохранять нужные входы для реализации плана.",
+        "normalized_statement": "Учитывать возможность перехода между рукой и столом и сохранять нужные входы для реализации плана.",
+        "fact_type": "SKILL_DEFINITION",
+        "provenance_class": "EXPLICIT_SKILL_GRAPH",
+        "system_dependence": "SCHOOL_L1",
+        "review_status": "APPROVED_SOURCE"
+      },
+      {
+        "fact_id": "FACT-L1-SKILL-0004",
+        "skill_id": "SKILL-0004",
+        "source_id": "SRC-0022",
+        "source_location": "Навыки / SKILL-0004 / урок 5",
+        "original_statement": "Замечать, когда порядок отбора старших карт может лишить доступа к отработанным взяткам, и выбирать порядок, сохраняющий коммуникации.",
+        "normalized_statement": "Замечать, когда порядок отбора старших карт может лишить доступа к отработанным взяткам, и выбирать порядок, сохраняющий коммуникации.",
+        "fact_type": "SKILL_DEFINITION",
+        "provenance_class": "EXPLICIT_SKILL_GRAPH",
+        "system_dependence": "SCHOOL_L1",
+        "review_status": "APPROVED_SOURCE"
+      }
+    ]
+  },
+  "prepared_case_scope": {
+    "source_id": "SRC-0156",
+    "source_locator": "Техника игры картами / глава 1 / с. 31–33",
+    "player_visible_combination": "Axx opposite QJxx",
+    "missing_side_entry": "consider low from A toward QJ; if Q holds, retain A for return",
+    "sufficient_communications": "these two skills alone do not rank candidate orders",
+    "physical_source_read": false,
+    "test_only": true
+  },
+  "items": [
+    {
+      "item_id": "prepared:SKILL-0003:v1",
+      "version_no": 1,
+      "system_profile": "SCHOOL_L1_DB_V1",
+      "review_status": "approved",
+      "version_status": "active",
+      "dependency_generation": 1,
+      "provenance": [
+        {
+          "source_id": "SRC-0022",
+          "source_locator": "Навыки / SKILL-0003 / урок 5; далее урок 6 и последующие уровни",
+          "review_status": "APPROVED_SOURCE"
+        }
+      ],
+      "content": {
+        "skill_contract": {
+          "contract_version": 1,
+          "skill_id": "SKILL-0003",
+          "adapter_ref": "bridge_school_api.teacher_entry_blocking_adapter:decide",
+          "canonical_refs": {
+            "rule_id": "RULE-L1-PLAY-PRESERVE-ENTRIES",
+            "fact_id": "FACT-L1-SKILL-0003"
+          },
+          "applicability": {
+            "system_profile": "SCHOOL_L1_DB_V1",
+            "role": "declarer",
+            "phase": "suit_timing",
+            "trump": "NT",
+            "holding_pattern": "Axx_QJxx",
+            "task_class": "SYMBOLIC_ENTRY_ORDER"
+          },
+          "actions": [
+            "identify_required_entry",
+            "preserve_required_entry"
+          ],
+          "effects": [
+            {
+              "kind": "RESERVE_RESOURCE",
+              "resource": "ACE_ENTRY_A",
+              "condition": "RETURN_TO_A_PLANNED",
+              "until": "RETURN_TO_A"
+            }
+          ],
+          "required_resources": [
+            "ACE_ENTRY_A",
+            "LOW_A",
+            "LOW_B"
+          ],
+          "consumed_resources": [],
+          "threats": [
+            "ENTRY_SPENT_BEFORE_RETURN",
+            "Q_MAY_LOSE_TO_K"
+          ],
+          "exceptions": [
+            "SUFFICIENT_SIDE_ENTRIES_DO_NOT_RANK",
+            "LEAD_FROM_B_REQUIRES_REPLAN"
+          ]
+        }
+      }
+    },
+    {
+      "item_id": "prepared:SKILL-0004:v1",
+      "version_no": 1,
+      "system_profile": "SCHOOL_L1_DB_V1",
+      "review_status": "approved",
+      "version_status": "active",
+      "dependency_generation": 1,
+      "provenance": [
+        {
+          "source_id": "SRC-0022",
+          "source_locator": "Навыки / SKILL-0004 / урок 5",
+          "review_status": "APPROVED_SOURCE"
+        }
+      ],
+      "content": {
+        "skill_contract": {
+          "contract_version": 1,
+          "skill_id": "SKILL-0004",
+          "adapter_ref": "bridge_school_api.teacher_entry_blocking_adapter:decide",
+          "canonical_refs": {
+            "rule_id": "RULE-L1-PLAY-AVOID-BLOCKING",
+            "fact_id": "FACT-L1-SKILL-0004"
+          },
+          "applicability": {
+            "system_profile": "SCHOOL_L1_DB_V1",
+            "role": "declarer",
+            "phase": "suit_timing",
+            "trump": "NT",
+            "holding_pattern": "Axx_QJxx",
+            "task_class": "SYMBOLIC_ENTRY_ORDER"
+          },
+          "actions": [
+            "reject_blocking_order",
+            "choose_access_preserving_order"
+          ],
+          "effects": [
+            {
+              "kind": "COMPARE_RESOURCE_ORDER",
+              "resource": "ACE_ENTRY_A",
+              "condition": "SIDE_ENTRIES_TO_A_NONE",
+              "until": "RETURN_TO_A"
+            }
+          ],
+          "required_resources": [
+            "ACE_ENTRY_A",
+            "LOW_A",
+            "LOW_B"
+          ],
+          "consumed_resources": [],
+          "threats": [
+            "ENTRY_SPENT_BEFORE_RETURN",
+            "Q_MAY_LOSE_TO_K"
+          ],
+          "exceptions": [
+            "SUFFICIENT_SIDE_ENTRIES_DO_NOT_RANK",
+            "LEAD_FROM_B_REQUIRES_REPLAN"
+          ]
+        }
+      }
+    }
+  ]
+}

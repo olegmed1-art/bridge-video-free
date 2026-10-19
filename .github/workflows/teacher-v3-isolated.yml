@@ -1,0 +1,74 @@
+name: Teacher v3 isolated qualification
+on:
+  push:
+    branches: [test/teacher-v3-context-20261019]
+permissions:
+  contents: read
+concurrency:
+  group: teacher-v3-isolated-qualification-20261019
+  cancel-in-progress: false
+jobs:
+  isolated-tests:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/test/teacher-v3-context-20261019'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /bridge_school_api/l1_canonical_registry.py
+            /bridge_school_api/l1_canonical_runtime.py
+            /bridge_school_api/l1_canonical_runtime_v2.py
+            /bridge_school_api/l1_canonical_runtime_v3.py
+            /bridge_school_api/l1_canonical_runtime_v4.py
+            /bridge_school_api/teacher_entry_blocking_adapter.py
+            /bridge_school_api/teacher_entry_blocking_reader_path.py
+            /bridge_school_api/teacher_v04_integration.py
+            /bridge_school_api/bml_ready_package_adapter.py
+            /knowledge/teacher_entry_blocking_prepared_v1.json
+            /tests/test_teacher_entry_blocking_adapter.py
+            /tests/test_teacher_entry_blocking_reader_path.py
+            /tests/test_teacher_v04_integration.py
+            /tests/test_l1_canonical_registry.py
+            /tests/test_l1_canonical_runtime.py
+            /tests/test_l1_canonical_runtime_v3.py
+            /tests/test_l1_canonical_runtime_v4.py
+            /tests/test_bml_ready_package_adapter.py
+            /tests/test_teacher_identity_binding.py
+            /tests/test_l1_observation_safety.py
+            /tests/fixtures/bml_ready_owner/teacher_entry_blocking_reader_path.py
+            /tests/fixtures/bml_ready_owner/teacher_v04_integration.py
+            /docs/bml_ready_package_boundary_v1.md
+            /tools/teacher_v3_ci_runtime.py
+            /tools/teacher_v3_isolated_qualification.py
+            /tests/teacher_v3_source_manifest.json
+            /tests/teacher_v3_empty_pytest.ini
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install only pinned test framework
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_NO_CACHE_DIR: '1'
+        run: python -I -m pip install --disable-pip-version-check pytest==8.4.2
+      - name: Execute actual Teacher and closed BML with L1 negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest_site="$(python -I -B -c 'import pathlib,pytest; print(pathlib.Path(pytest.__file__).resolve().parent.parent)')"
+          python -I -S -B -X utf8 tools/teacher_v3_isolated_qualification.py \
+            --pytest-site "$pytest_site" \
+            --source-commit '${{ github.sha }}' \
+            --output qualification-results/CI_273_RUN.json
+      - name: Retain synthetic test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: teacher-v3-isolated-${{ github.sha }}
+          path: qualification-results/CI_273_RUN.json
+          retention-days: 3
+          if-no-files-found: error

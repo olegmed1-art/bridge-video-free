@@ -1,0 +1,32 @@
+{
+  "schema": "teacher-bml-shared-pin-acceptance-request-v3",
+  "owner_role": "BML",
+  "status": "TARGET_PINS_ACCEPTED_LOCAL_QUALIFICATION_ONLY",
+  "scope": "TEST_ONLY_COMPATIBILITY_NO_READY_ADMISSION",
+  "BML_code_unchanged_sha256": "e76069163d8d1c4b1cb9eee729d0ef6bc2ada8aa409927ddd687c9c44340b9b8",
+  "required_teacher_files": {
+    "bridge_school_api/l1_canonical_registry.py": "4f724aa0b4c350b1ed36b77c5d39da5a217c9b17e7369a29201a3fe4fa61679b",
+    "bridge_school_api/l1_canonical_runtime.py": "49eff9c230929d458e925a4cc9bf30a8ac0761a65450554942156c348742a35e",
+    "bridge_school_api/l1_canonical_runtime_v2.py": "9b4bc446e1bed8bc578cbfcc16200915a4c1d2127734f345e06b32b7e10c2001",
+    "bridge_school_api/l1_canonical_runtime_v3.py": "4254b9b728e16e5b985d175e12809a8cfd9653038b997c701244b4d772d28e8b",
+    "bridge_school_api/l1_canonical_runtime_v4.py": "8e48612f426b65195334fbe7157e8843f284d05214dfd51a9a5462f41e651818",
+    "bridge_school_api/teacher_entry_blocking_adapter.py": "e81c98399fc77f4886826862d2d798a9eb3acf80bf93a6b9f636d278c8a24ad0",
+    "bridge_school_api/teacher_entry_blocking_reader_path.py": "c66c596da73665c68af1f021f76a1417b7d0e6ea543185cea1f20b5a39c4d6d9",
+    "bridge_school_api/teacher_v04_integration.py": "dc48578a3fc6b22fa7601a18ed1765707476e515e0ee7cdb83023d1c6fbb9b8b",
+    "bridge_school_api/bml_ready_package_adapter.py": "e76069163d8d1c4b1cb9eee729d0ef6bc2ada8aa409927ddd687c9c44340b9b8"
+  },
+  "boundary": "Actual BML reader still refuses; all ten FULL_CALL remain ABSTAIN. No source registration is runtime readiness.",
+  "owner_response_required": [
+    "Accept exact new pins for test-only package or identify a concrete compatibility defect",
+    "Do not accept runtime scope/method/selector/READY by acknowledging source pins"
+  ],
+  "owner_acknowledgment": {
+    "kind": "Explicit existing BML owner message; supplied exact target pins compared with retained I2 source_pins",
+    "native_suites_repeated": false,
+    "historical_receipts_or_source_copies_rewritten": false,
+    "new_bytes_installed_in_BML_claimed": false,
+    "production_binding_accepted": false,
+    "READY_admitted": false,
+    "FULL_CALL": "ABSTAIN"
+  }
+}

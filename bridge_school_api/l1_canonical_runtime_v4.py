@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from .l1_canonical_registry import SYSTEM_VERSION
-from .l1_canonical_runtime import RuleEvaluation, resolve
+from .l1_canonical_runtime import RuleEvaluation, resolve, _hcp, _evaluate_observed
 from .l1_canonical_runtime_v3 import evaluate as _evaluate_v3
 
-ENGINE_VERSION = "l1-canonical-runtime-v4"
+ENGINE_VERSION = "l1-canonical-runtime-v4-context-safe-v1"
 
 # Final autonomous source-explicit wave. These rules are procedural, structural,
 # or guidance rules whose action is already stated in the canonical rule table.
@@ -79,12 +79,6 @@ def _no(rule_id: str, reason: str) -> RuleEvaluation:
     return _result(rule_id, "NO_MATCH", reason=reason, priority=0, specificity=0, scope_rank=0)
 
 
-def _hcp(c: dict[str, Any]) -> int:
-    if "HCP" in c:
-        return int(c["HCP"])
-    return 4 * int(c.get("A", 0)) + 3 * int(c.get("K", 0)) + 2 * int(c.get("Q", 0)) + int(c.get("J", 0))
-
-
 def _called_suit(c: dict[str, Any]) -> str | None:
     value = str(c.get("called_suit") or "").upper()
     return value if value in {"C", "D", "H", "S"} else None
@@ -104,7 +98,6 @@ def _partner(seat: str) -> str | None:
 
 
 def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
-    h = _hcp(c)
 
     if rule_id == "RULE-L1-AUCTION-ORDER-FINAL-CONTRACT":
         if not c.get("dealer_known"):
@@ -165,7 +158,8 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, {"declarer": declarer, "dummy": dummy, "defenders": defenders}, evidence=("FACT-L1-SKILL-0017",))
 
     if rule_id == "RULE-L1-DIRECT-OVERCALL-1S":
-        if int(c.get("legal_entry_level", c.get("level", 0))) != 1 or not (10 <= h <= 17) or int(c.get("S", 0)) < 5:
+        h = _hcp(c)
+        if int(c["legal_entry_level"] if "legal_entry_level" in c else c["level"]) != 1 or not (10 <= h <= 17) or int(c.get("S", 0)) < 5:
             return _no(rule_id, "level-1 direct 1S overcall requires 10-17 and S>=5")
         return _match(rule_id, "1S", evidence=("FACT-L1-OVERCALL-1LEVEL",))
 
@@ -182,6 +176,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _no(rule_id, "recognized double context required")
 
     if rule_id == "RULE-L1-JUMP-OVERCALL-PREEMPT":
+        h = _hcp(c)
         suit = _called_suit(c)
         length = int(c.get("called_suit_length", 0))
         if suit is None or not (6 <= h <= 9) or not c.get("called_suit_has_at_least_two_honors") or length not in {6, 7, 8}:
@@ -190,6 +185,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, f"{level}{suit}", evidence=("FACT-L1-SKILL-0061",))
 
     if rule_id == "RULE-L1-LESSON2-RESPONDER-AFTER-1M":
+        h = _hcp(c)
         if int(c.get("lesson_stage", 0)) != 2 or not c.get("partner_opened_1M"):
             return _no(rule_id, "lesson-stage-2 response to 1M required")
         if h <= 5:
@@ -221,6 +217,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, "SHOW_4PLUS_FIT", evidence=("FACT-L1-SKILL-0042",))
 
     if rule_id == "RULE-L1-OVERCALL-2PLUS-LEVEL":
+        h = _hcp(c)
         suit = _called_suit(c)
         level = int(c.get("legal_entry_level", 0))
         length = int(c.get("called_suit_length", 0))
@@ -341,7 +338,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
     return _no(rule_id, "v4 handler missing")
 
 
-def evaluate(
+def _evaluate_unchecked(
     rule_id: str,
     context: dict[str, Any],
     *,
@@ -350,9 +347,13 @@ def evaluate(
     if system_version != SYSTEM_VERSION:
         return _evaluate_v3(rule_id, context, system_version=system_version)
     if rule_id in EXTRA_PROCEDURAL_RULE_IDS:
-        return _evaluate_extra(rule_id, dict(context))
+        return _evaluate_extra(rule_id, context)
     return _evaluate_v3(rule_id, context, system_version=system_version)
 
 
 def resolve_registered(evaluations: Iterable[RuleEvaluation]) -> RuleEvaluation:
     return resolve(evaluations)
+
+
+def evaluate(rule_id: str, context: dict[str, Any], *, system_version: str = SYSTEM_VERSION) -> RuleEvaluation:
+    return _evaluate_observed(rule_id, context, _evaluate_unchecked, system_version=system_version)

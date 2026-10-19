@@ -31,7 +31,8 @@ from bridge_school_api.l1_canonical_runtime_v3 import (
         ("RULE-L1-MINOR-RESPONSE-PRIORITY", {}, "OWN_PREFERRED_SUIT>MINOR_FIT>NT"),
         ("RULE-L1-OPENER-SECOND-SUIT-REBID", {"fit_not_found": True, "second_suit_length": 4, "HCP": 18}, "SECOND_SUIT_JUMP"),
         ("RULE-L1-OPENER-NT-REBID", {"no_fit": True, "no_second_4plus_suit": True, "opening_suit_length": 5, "HCP": 14}, "NT_NO_JUMP"),
-        ("RULE-L1-2C-NEGATIVE-OPENER-REBID", {"auction_2C_2D": True, "balanced": True, "HCP": 24}, "2NT"),
+        # Explicitly exclude the earlier 5+ own-suit branch in this synthetic NT case.
+        ("RULE-L1-2C-NEGATIVE-OPENER-REBID", {"auction_2C_2D": True, "balanced": True, "HCP": 24, "own_suit_length": 4}, "2NT"),
         ("RULE-L1-RESPONSE-TO-1LEVEL-OVERCALL-BANDS", {"HCP": 15}, "MAXIMUM"),
         ("RULE-L1-RESPONSE-TO-2LEVEL-OVERCALL-BANDS", {"HCP": 11}, "INVITE"),
         ("RULE-L1-NT-STOPPER-REQUIRED-COMPETITION", {"opponent_suit_known": True, "considering_NT": True, "stopper_in_opponent_suit": True}, "NT_ALLOWED_BY_STOPPER_GATE"),

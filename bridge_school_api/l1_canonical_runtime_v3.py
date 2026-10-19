@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from .l1_canonical_registry import SYSTEM_VERSION
-from .l1_canonical_runtime import RuleEvaluation, resolve
+from .l1_canonical_runtime import RuleEvaluation, resolve, _hcp, _evaluate_observed
 from .l1_canonical_runtime_v2 import evaluate as _evaluate_v2
 
-ENGINE_VERSION = "l1-canonical-runtime-v3"
+ENGINE_VERSION = "l1-canonical-runtime-v3-context-safe-v1"
 
 # Second bounded execution wave. Every rule here has an explicit trigger/condition/action
 # in the canonical Drive rule table. Qualitative or incomplete rules remain fail-closed in v2.
@@ -91,12 +91,6 @@ def _block(rule_id: str, action: str, reason: str) -> RuleEvaluation:
     return _result(rule_id, "BLOCK", action, reason=reason, priority=0, specificity=0, scope_rank=0)
 
 
-def _hcp(c: dict[str, Any]) -> int:
-    if "HCP" in c:
-        return int(c["HCP"])
-    return 4 * int(c.get("A", 0)) + 3 * int(c.get("K", 0)) + 2 * int(c.get("Q", 0)) + int(c.get("J", 0))
-
-
 def _partner_minor(c: dict[str, Any]) -> str | None:
     value = str(c.get("partner_minor") or "").upper()
     return value if value in {"C", "D"} else None
@@ -108,7 +102,6 @@ def _called_suit(c: dict[str, Any]) -> str | None:
 
 
 def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
-    h = _hcp(c)
 
     if rule_id == "RULE-L1-CONTRACT-SUCCESS":
         if "declarer_tricks" not in c or "required_tricks" not in c:
@@ -120,6 +113,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         )
 
     if rule_id == "RULE-L1-OPEN-PASS-THRESHOLD":
+        h = _hcp(c)
         if int(c.get("lesson_stage", 0)) != 2 or not c.get("ordinary_one_level_opening_model"):
             return _no(rule_id, "lesson_stage=2 ordinary model required")
         return _match(
@@ -143,6 +137,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, bool(int(c["combined_HCP"]) >= 25), evidence=("FACT-L1-SKILL-0025",))
 
     if rule_id == "RULE-L1-RESPONDER-STRENGTH-BANDS":
+        h = _hcp(c)
         if h < 6:
             return _no(rule_id, "6+ HCP response classification")
         action = "MINIMUM" if h <= 10 else "INVITE" if h <= 12 else "MAXIMUM"
@@ -167,6 +162,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0031",))
 
     if rule_id == "RULE-L1-MINOR-SUPPORT-BANDS":
+        h = _hcp(c)
         minor = _partner_minor(c)
         if not minor or not c.get("no_preferred_own_suit") or int(c.get("support_in_partner_minor", 0)) < 5 or h < 6:
             return _no(rule_id, "explicit minor-support branch not met")
@@ -174,6 +170,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0033",))
 
     if rule_id == "RULE-L1-MINOR-NT-RESPONSE-BANDS":
+        h = _hcp(c)
         if not c.get("no_preferred_own_suit") or not c.get("no_minor_fit") or h < 6:
             return _no(rule_id, "explicit minor NT branch not met")
         action = "1NT" if h <= 10 else "2NT" if h <= 12 else "3NT"
@@ -195,11 +192,13 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, "OPENER_MUST_CONTINUE", evidence=("FACT-L1-SKILL-0095",))
 
     if rule_id == "RULE-L1-2C-NEGATIVE-2D":
+        h = _hcp(c)
         if not c.get("partner_opened_2C") or not (0 <= h <= 7):
             return _no(rule_id, "2C opening and 0-7 HCP required")
         return _match(rule_id, "2D", evidence=("FACT-L1-SKILL-0054",))
 
     if rule_id in {"RULE-L1-WEAK3-OPEN", "RULE-L1-WEAK4-OPEN"}:
+        h = _hcp(c)
         suit = _called_suit(c)
         required_length = 7 if rule_id.endswith("WEAK3-OPEN") else 8
         level = 3 if required_length == 7 else 4
@@ -208,11 +207,13 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, f"{level}{suit}", evidence=("FACT-L1-SKILL-0056",))
 
     if rule_id == "RULE-L1-REVALUE-AFTER-FIT":
+        h = _hcp(c)
         if not c.get("trump_fit") or "distribution_points" not in c:
             return _no(rule_id, "trump fit and distribution_points required")
         return _match(rule_id, h + int(c["distribution_points"]), evidence=("FACT-L1-SKILL-0111",))
 
     if rule_id == "RULE-L1-MINOR-OPENING-PATH":
+        h = _hcp(c)
         ok = (
             12 <= h <= 22
             and bool(c.get("no_5_card_major"))
@@ -225,12 +226,14 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, "OWN_PREFERRED_SUIT>MINOR_FIT>NT", evidence=("FACT-L1-SKILL-0032",))
 
     if rule_id == "RULE-L1-OPENER-SECOND-SUIT-REBID":
+        h = _hcp(c)
         if not c.get("fit_not_found") or int(c.get("second_suit_length", 0)) < 4 or not (12 <= h <= 22):
             return _no(rule_id, "fit not found, second suit 4+, HCP 12-22 required")
         action = "SECOND_SUIT_NO_JUMP" if h <= 17 else "SECOND_SUIT_JUMP"
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0043",))
 
     if rule_id == "RULE-L1-OPENER-NT-REBID":
+        h = _hcp(c)
         if not c.get("no_fit") or not c.get("no_second_4plus_suit") or int(c.get("opening_suit_length", 99)) >= 6:
             return _no(rule_id, "NT rebid shape branch not met")
         if 12 <= h <= 14:
@@ -242,6 +245,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0045",))
 
     if rule_id == "RULE-L1-2C-NEGATIVE-OPENER-REBID":
+        h = _hcp(c)
         if not c.get("auction_2C_2D"):
             return _no(rule_id, "2C-2D auction required")
         if int(c.get("own_suit_length", 0)) >= 5:
@@ -255,14 +259,19 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0055",))
 
     if rule_id == "RULE-L1-RESPONSE-TO-1LEVEL-OVERCALL-BANDS":
+        h = _hcp(c)
         action = "PASS" if h <= 7 else "MINIMUM" if h <= 11 else "INVITE" if h <= 14 else "MAXIMUM"
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0062",))
 
     if rule_id == "RULE-L1-RESPONSE-TO-2LEVEL-OVERCALL-BANDS":
+        h = _hcp(c)
         action = "PASS" if h <= 10 else "INVITE" if h <= 12 else "MAXIMUM"
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0063",))
 
     if rule_id == "RULE-L1-NT-STOPPER-REQUIRED-COMPETITION":
+        # An explicit false applicability fact short-circuits unknown fields.
+        if any(field in c and c[field] is False for field in ("opponent_suit_known", "considering_NT")):
+            return _no(rule_id, "competitive NT choice context not applicable")
         if not c.get("opponent_suit_known") or not c.get("considering_NT"):
             return _no(rule_id, "competitive NT choice context required")
         if not c.get("stopper_in_opponent_suit"):
@@ -275,6 +284,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, "INFER_STRONG_DOUBLE_18PLUS", evidence=("FACT-L1-SKILL-0071",))
 
     if rule_id == "RULE-L1-STRONG-DOUBLE-RAISE-BANDS":
+        h = _hcp(c)
         if not c.get("partner_suit_fit") or h < 18:
             return _no(rule_id, "strong doubler fit branch requires 18+")
         action = "RAISE_ONE_LEVEL" if h <= 21 else "JUMP_RAISE" if h <= 24 else "GAME"
@@ -286,27 +296,32 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, "INHERIT_OPENING_1NT_L1", evidence=("FACT-L1-SKILL-0090",))
 
     if rule_id == "RULE-L1-2NT-OVERCALL-RESPONSE":
+        h = _hcp(c)
         if not c.get("partner_overcalled_2NT") or str(c.get("partner_range") or "") != "15-17":
             return _no(rule_id, "partner 2NT overcall 15-17 required")
         return _match(rule_id, "PASS" if h <= 8 else "GAME_SEARCH", evidence=("FACT-L1-SKILL-0091",))
 
     if rule_id == "RULE-L1-PREEMPT-OVERCALL-RESPONSE":
+        h = _hcp(c)
         if not c.get("partner_made_preemptive_overcall"):
             return _no(rule_id, "partner preemptive overcall required")
         action = "PASS" if h <= 15 else "INVITE" if h <= 17 else "MAXIMUM"
         return _match(rule_id, action, evidence=("FACT-L1-SKILL-0092",))
 
     if rule_id == "RULE-L1-3LEVEL-OVERCALL-RESPONSE":
+        h = _hcp(c)
         if not c.get("partner_natural_overcall_level_3"):
             return _no(rule_id, "partner natural 3-level overcall required")
         return _match(rule_id, "PASS" if h <= 9 else "GAME_SEARCH", evidence=("FACT-L1-SKILL-0093",))
 
     if rule_id == "RULE-L1-STRONG-DOUBLE-OWN-SUIT-REBID":
+        h = _hcp(c)
         if c.get("fit_to_partner") or int(c.get("own_suit_length", 0)) < 5 or h < 18:
             return _no(rule_id, "no fit, own 5+ suit, 18+ required")
         return _match(rule_id, "OWN_SUIT_NO_JUMP" if h <= 21 else "OWN_SUIT_JUMP", evidence=("FACT-L1-SKILL-0102",))
 
     if rule_id == "RULE-L1-STRONG-DOUBLE-NT-REBID":
+        h = _hcp(c)
         if c.get("fit_to_partner") or c.get("own_5plus_suit") or not c.get("stopper_in_opponent_suit") or h < 18:
             return _no(rule_id, "no fit/no 5+ suit/st stopper/18+ required")
         action = "NT_NO_JUMP" if h <= 21 else "NT_JUMP" if h <= 24 else "3NT"
@@ -337,6 +352,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, action, evidence=("FACT-L1-1NT-STAYMAN-SEMANTICS",))
 
     if rule_id == "RULE-L1-1NT-STAYMAN-RESPONDER-CONTINUE":
+        h = _hcp(c)
         if not c.get("stayman_response_received") or h < 8 or "fit_found" not in c:
             return _no(rule_id, "Stayman response, 8+, and fit status required")
         if c.get("fit_found"):
@@ -346,6 +362,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, action, evidence=("FACT-L1-1NT-STAYMAN-SEMANTICS",))
 
     if rule_id == "RULE-L1-1M-NT-RESPONSE-BANDS-CONTEXT":
+        h = _hcp(c)
         if not c.get("no_fit") or not c.get("no_preferred_own_suit_in_current_branch") or h < 6:
             return _no(rule_id, "contextual no-fit/no-preferred-suit branch required")
         action = "1NT" if h <= 10 else "2NT" if h <= 12 else "3NT"
@@ -377,6 +394,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
         return _match(rule_id, "ACCEPT_INVITE" if c.get("sufficient_combined_balance") else "STOP", evidence=("FACT-L1-SKILL-0098",))
 
     if rule_id == "RULE-L1-PENALTY-PASS-ON-DOUBLE-CONTEXT":
+        h = _hcp(c)
         if not c.get("considering_pass") or not c.get("opponent_opened_in_responder_strong_suit") or h < 6:
             return _no(rule_id, "explicit penalty-conversion context and 6+ required")
         return _match(rule_id, "PASS_CONVERTS_TO_PENALTY", evidence=("FACT-L1-SKILL-0104",))
@@ -384,7 +402,7 @@ def _evaluate_extra(rule_id: str, c: dict[str, Any]) -> RuleEvaluation:
     return _block(rule_id, "V3_HANDLER_MISSING", "registered v3 rule has no handler")
 
 
-def evaluate(
+def _evaluate_unchecked(
     rule_id: str,
     context: dict[str, Any],
     *,
@@ -394,7 +412,7 @@ def evaluate(
     if system_version != SYSTEM_VERSION:
         return _evaluate_v2(rule_id, context, system_version=system_version)
     if rule_id in EXTRA_SOURCE_EXPLICIT_RULE_IDS:
-        return _evaluate_extra(rule_id, dict(context))
+        return _evaluate_extra(rule_id, context)
     return _evaluate_v2(rule_id, context, system_version=system_version)
 
 
@@ -414,3 +432,7 @@ def runtime_status(rule_id: str) -> dict[str, Any]:
 
 def resolve_registered(evaluations: Iterable[RuleEvaluation]) -> RuleEvaluation:
     return resolve(evaluations)
+
+
+def evaluate(rule_id: str, context: dict[str, Any], *, system_version: str = SYSTEM_VERSION) -> RuleEvaluation:
+    return _evaluate_observed(rule_id, context, _evaluate_unchecked, system_version=system_version)

@@ -1,0 +1,126 @@
+{
+  "schema": "teacher-v3-portable-source-manifest-v1",
+  "scope": "EXPLICIT_SYNTHETIC_TEST_ONLY_NO_PRODUCTION_ADMISSION",
+  "qualified_packet_sha256": "ed5d765166d8e840d50c5fa768cb7d1890859d5c98b8f024f284aad1cf4c45c0",
+  "files": [
+    {
+      "path": "bridge_school_api/l1_canonical_registry.py",
+      "sha256": "4f724aa0b4c350b1ed36b77c5d39da5a217c9b17e7369a29201a3fe4fa61679b"
+    },
+    {
+      "path": "bridge_school_api/l1_canonical_runtime.py",
+      "sha256": "49eff9c230929d458e925a4cc9bf30a8ac0761a65450554942156c348742a35e"
+    },
+    {
+      "path": "bridge_school_api/l1_canonical_runtime_v2.py",
+      "sha256": "9b4bc446e1bed8bc578cbfcc16200915a4c1d2127734f345e06b32b7e10c2001"
+    },
+    {
+      "path": "bridge_school_api/l1_canonical_runtime_v3.py",
+      "sha256": "4254b9b728e16e5b985d175e12809a8cfd9653038b997c701244b4d772d28e8b"
+    },
+    {
+      "path": "bridge_school_api/l1_canonical_runtime_v4.py",
+      "sha256": "8e48612f426b65195334fbe7157e8843f284d05214dfd51a9a5462f41e651818"
+    },
+    {
+      "path": "bridge_school_api/teacher_entry_blocking_adapter.py",
+      "sha256": "e81c98399fc77f4886826862d2d798a9eb3acf80bf93a6b9f636d278c8a24ad0"
+    },
+    {
+      "path": "bridge_school_api/teacher_entry_blocking_reader_path.py",
+      "sha256": "c66c596da73665c68af1f021f76a1417b7d0e6ea543185cea1f20b5a39c4d6d9"
+    },
+    {
+      "path": "bridge_school_api/teacher_v04_integration.py",
+      "sha256": "dc48578a3fc6b22fa7601a18ed1765707476e515e0ee7cdb83023d1c6fbb9b8b"
+    },
+    {
+      "path": "knowledge/teacher_entry_blocking_prepared_v1.json",
+      "sha256": "3227727b640b25e22cb65e004b7cde44eed620eaa4d9bf67fad0e6c31be66457"
+    },
+    {
+      "path": "tests/test_teacher_entry_blocking_adapter.py",
+      "sha256": "5f8185dff7f155b68b205c4f0ee7c7970af0007b10e6a4fbc0b5f4d8821d6dd6"
+    },
+    {
+      "path": "tests/test_teacher_entry_blocking_reader_path.py",
+      "sha256": "636f59beda5a38fbeeac207ab571327f01f63bdfd35de2564f4a9471caf9f59a"
+    },
+    {
+      "path": "tests/test_teacher_v04_integration.py",
+      "sha256": "7a14971942ff3577b1008e92333ccbc0a0d8597cb274b2fe5e6d1f590f66f3ec"
+    },
+    {
+      "path": "tests/test_l1_canonical_registry.py",
+      "sha256": "2ded8f4fd8ea6113ef2f3e5305ebb287af21d73a09988be08992ae211e934f29"
+    },
+    {
+      "path": "tests/test_l1_canonical_runtime.py",
+      "sha256": "0c6d288607975b03abe888fab45548367ed09323501af78463a535e3426d59e6"
+    },
+    {
+      "path": "tests/test_l1_canonical_runtime_v3.py",
+      "sha256": "b9075b42bf031b4b9c9cd62d77c9663062738901d25ebcb2a2f86e567892eeb9"
+    },
+    {
+      "path": "tests/test_l1_canonical_runtime_v4.py",
+      "sha256": "47a66f5792fb85db28f8dcbc880569ed761eff4ae460acb76fe5e8b796d5f805"
+    },
+    {
+      "path": "bridge_school_api/bml_ready_package_adapter.py",
+      "sha256": "e76069163d8d1c4b1cb9eee729d0ef6bc2ada8aa409927ddd687c9c44340b9b8"
+    },
+    {
+      "path": "tests/test_bml_ready_package_adapter.py",
+      "sha256": "2ef56a35101a155d71370702f97dd801ad35ec17467dac54a8c7aeb3e4146b9f"
+    },
+    {
+      "path": "tests/fixtures/bml_ready_owner/teacher_v04_integration.py",
+      "sha256": "dc48578a3fc6b22fa7601a18ed1765707476e515e0ee7cdb83023d1c6fbb9b8b"
+    },
+    {
+      "path": "tests/fixtures/bml_ready_owner/teacher_entry_blocking_reader_path.py",
+      "sha256": "c66c596da73665c68af1f021f76a1417b7d0e6ea543185cea1f20b5a39c4d6d9"
+    },
+    {
+      "path": "docs/bml_ready_package_boundary_v1.md",
+      "sha256": "b824a7c68e5c500b77b3c38c5d0444fa62907b43701b8c9b6f8001edb557fae6"
+    },
+    {
+      "path": "tests/test_teacher_identity_binding.py",
+      "sha256": "2e0c80be18a92042e00c046439d0ad57ba4adb2b18ad0a64d84058c3b2a1052d"
+    },
+    {
+      "path": "tests/test_l1_observation_safety.py",
+      "sha256": "903fe43cf00532a90bb25d8d54a54797a4f42669b09d4246da69e7284e2c4236"
+    }
+  ],
+  "test_paths": [
+    "tests/test_teacher_entry_blocking_adapter.py",
+    "tests/test_teacher_entry_blocking_reader_path.py",
+    "tests/test_teacher_v04_integration.py",
+    "tests/test_l1_canonical_registry.py",
+    "tests/test_l1_canonical_runtime.py",
+    "tests/test_l1_canonical_runtime_v3.py",
+    "tests/test_l1_canonical_runtime_v4.py",
+    "tests/test_bml_ready_package_adapter.py",
+    "tests/test_teacher_identity_binding.py",
+    "tests/test_l1_observation_safety.py"
+  ],
+  "expected_per_file": {
+    "tests/test_teacher_entry_blocking_adapter.py": 40,
+    "tests/test_teacher_entry_blocking_reader_path.py": 23,
+    "tests/test_teacher_v04_integration.py": 13,
+    "tests/test_l1_canonical_registry.py": 8,
+    "tests/test_l1_canonical_runtime.py": 59,
+    "tests/test_l1_canonical_runtime_v3.py": 48,
+    "tests/test_l1_canonical_runtime_v4.py": 36,
+    "tests/test_bml_ready_package_adapter.py": 9,
+    "tests/test_teacher_identity_binding.py": 4,
+    "tests/test_l1_observation_safety.py": 33
+  },
+  "expected_total": 273,
+  "BML_FULL_CALL": "ABSTAIN",
+  "production_ready": false
+}
