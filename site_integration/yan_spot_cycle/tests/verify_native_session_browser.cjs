@@ -22,7 +22,9 @@ function browser(){
   const sentIds=[];
   async function fetch(url,options={}){
     assert.equal(new URL(url).origin,origin);
-    const headers={...options.headers,...(cookie?{Cookie:cookie}:{})};
+    // Native browser fetch supplies Origin on POST; Node fetch does not.
+    const headers={...(options.method==='POST'?{Origin:origin}:{}),
+      ...options.headers,...(cookie?{Cookie:cookie}:{})};
     const response=await globalThis.fetch(url,{...options,headers,redirect:'error'});
     const set=response.headers.get('set-cookie');if(set)cookie=set.split(';')[0];
     if(options.method==='POST' && options.body)sentIds.push(JSON.parse(options.body).request_id);
