@@ -36,6 +36,7 @@ from stage2b_v24 import (
     fit_opening_lead_family_model,
     fit_segmented_oof_calibrator,
     investigation_resolution_status,
+    opening_lead_loss,
     predict_hierarchical_residual,
     rank_opening_leads,
     sha256_file,
@@ -400,6 +401,8 @@ def prepare_oof_candidate(rows: Sequence[Mapping[str, object]]) -> dict:
 def _task_loss(task_type: str, prediction: Mapping[str, object], result: Mapping[str, object]) -> float:
     if task_type == "contract_tricks":
         return abs(int(prediction["tricks"]) - int(result["dds_tricks"]))
+    if task_type == "opening_lead":
+        return opening_lead_loss(prediction, result)
     scores = {str(card).upper(): float(value) for card, value in result.get("scores", {}).items()}
     card = str(prediction.get("card", "")).upper()
     if scores and card in scores:

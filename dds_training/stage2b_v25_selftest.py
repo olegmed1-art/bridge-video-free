@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from itertools import product
+
+from stage2b_prepare import compare_oof
+from stage2b_v24 import row_loss, row_success
 
 from stage2b_v25 import (
     CANDIDATE_ALGORITHM_VERSION,
@@ -68,7 +73,102 @@ def make_row(
     }
 
 
+def check_prediction_bound_lead_evidence() -> None:
+    # The immutable result.dd_regret belongs to the source prediction. A new
+    # candidate must be labelled from its own card, including equal optima.
+    for old_loss, new_loss in ((2, 0), (0, 2)):
+        rows = [
+            make_row(
+                index=2000 + index, task_type="opening_lead", strain=0,
+                source_version="bridge-adaptive-v0.2", old_loss=old_loss,
+                new_loss=new_loss, backoff="exact", support=250,
+            )
+            for index in range(120)
+        ]
+        before = deepcopy(rows)
+        calibrated, calibrator = recalibrate_oof_rows(rows, minimum_support=5)
+        assert calibrator["opening_lead_outcome_policy"] == "predicted-card-dds-score-v1"
+        expected_success = new_loss == 0
+        assert all(row_success(row) == expected_success for row in rows)
+        assert all(row_loss(row) == new_loss for row in rows)
+        assert all(row["prediction"]["calibrated_probability"] == int(expected_success) for row in calibrated)
+        assert all(row["prediction"]["accept"] == expected_success for row in calibrated)
+        metrics = stratified_oof_comparison(calibrated)["source_versions"]["bridge-adaptive-v0.2"]["opening_lead_suit"]
+        assert metrics["candidate_zero_loss_rate"] == int(expected_success)
+        assert compare_oof(rows)["families"]["opening_lead"]["candidate_mean_loss"] == new_loss
+        diagnostic = calibration_diagnostics(calibrated)["groups"]["opening_lead_suit:exact"]
+        assert diagnostic["accepted"] == (120 if expected_success else 0)
+        assert diagnostic["accepted_actual_success_rate"] == (1.0 if expected_success else None)
+        assert rows == before, "Calibration rewrote immutable source evidence"
+
+    tied = deepcopy(rows[0])
+    tied["prediction"]["card"] = "sk"
+    tied["result"] = {"scores": {"sa": 5, "SK": 5, "S2": 3}, "dd_regret": 2}
+    assert row_success(tied) is True
+    assert row_loss(tied) == 0
+
+    malformed_results = [
+        {"dd_regret": 0},
+        {"scores": {}, "dd_regret": 0},
+        {"scores": {"SA": 5, "S2": 3}, "dd_regret": 0},
+        {"scores": {"SA": 5, "SK": 3, "sk": 4}, "dd_regret": 0},
+        {"scores": {"SA": 5, "SK": None}, "dd_regret": 0},
+    ]
+    for score in (float("nan"), float("inf"), -1, 14):
+        for card in ("SA", "SK"):
+            result = {"scores": {"SA": 5, "SK": 3, "S2": 2}, "dd_regret": 0}
+            result["scores"][card] = score
+            malformed_results.append(result)
+    for result in malformed_results:
+        invalid = deepcopy(tied)
+        invalid["result"] = result
+        for check in (
+            lambda: row_success(invalid),
+            lambda: row_loss(invalid),
+            lambda: recalibrate_oof_rows([invalid]),
+            lambda: calibration_diagnostics([invalid]),
+            lambda: compare_oof([invalid]),
+            lambda: stratified_oof_comparison([invalid]),
+        ):
+            try:
+                check()
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Incomplete/invalid lead evidence did not fail closed")
+
+    # Independently derive loss by searching the smallest compensation that
+    # dominates every alternative, rather than reusing max(scores)-chosen.
+    # All 64 three-card tables in 0..3, each chosen card, both stale source
+    # labels: 384 cases, no bridge solver or corpus access.
+    for values in product(range(4), repeat=3):
+        scores = dict(zip(("SA", "SK", "S2"), values))
+        for chosen in scores:
+            expected_loss = next(
+                compensation for compensation in range(4)
+                if all(scores[chosen] + compensation >= score for score in values)
+            )
+            expected_success = all(scores[chosen] >= score for score in values)
+            for source_regret in (0, 2):
+                row = deepcopy(tied)
+                row["prediction"]["card"] = chosen
+                row["result"] = {"scores": scores, "dd_regret": source_regret}
+                assert row_success(row) == expected_success
+                assert row_loss(row) == expected_loss
+                assert compare_oof([row])["families"]["opening_lead"]["candidate_mean_loss"] == expected_loss
+                metrics = stratified_oof_comparison([row])["source_versions"]["bridge-adaptive-v0.2"]["opening_lead_suit"]
+                assert metrics["candidate_mean_loss"] == expected_loss
+                calibrated, _ = recalibrate_oof_rows([row], minimum_support=1)
+                assert calibrated[0]["prediction"]["calibrated_probability"] == int(expected_success)
+
+    for task_type in ("declarer_continuation", "defense_continuation"):
+        continuation = {"task_type": task_type, "prediction": {"card": "SA"}, "result": {"dd_regret": 1}}
+        assert row_loss(continuation) == 1
+        assert row_success(continuation) is False
+
+
 def main() -> None:
+    check_prediction_bound_lead_evidence()
     unsupported = {
         "model_backoff_level": "baseline",
         "model_evidence_count": 0,
@@ -132,6 +232,7 @@ def main() -> None:
 
     diagnostics = calibration_diagnostics(recalibrated)
     assert diagnostics["schema"] == "dds-stage2b-calibration-diagnostics-v2"
+    assert diagnostics["opening_lead_outcome_policy"] == "predicted-card-dds-score-v1"
     assert any(key.startswith("contract_suit:baseline") for key in diagnostics["groups"])
 
     interval = paired_bootstrap_interval([1.0] * 100, samples=200)
@@ -177,6 +278,9 @@ def main() -> None:
                 "suit_candidate_nt_fallback_policy": True,
                 "exact_50_50_curriculum": True,
                 "queue_strain_enrichment": True,
+                "candidate_card_calibration": True,
+                "invalid_lead_score_evidence_rejected": True,
+                "exhaustive_independent_score_oracle_cases": 384,
             },
             ensure_ascii=False,
             indent=2,

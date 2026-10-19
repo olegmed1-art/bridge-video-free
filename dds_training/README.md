@@ -11,6 +11,12 @@ Canonical Russian specification:
 Pilot postmortem and the v2.2 evidence correction are preserved in
 [METHODOLOGY_V2_2.md](METHODOLOGY_V2_2.md).
 
+Stage 2B **v2.5 remains candidate/testing**, not a replacement for accepted v2.3.
+See the [version gap and acceptance audit](DDS_LEARNING_GAP_AUDIT_20261019_RU.md)
+for the distinction from later Stage 2C evidence and the candidate-card
+calibration correction. Historical Stage 2B opening-lead confidence/acceptance
+metrics require recomputation before reuse; their DDS facts remain unchanged.
+
 ## Fixed architecture
 
 - Mathematical engine: **DDS3 v3.0.0**, built locally from official source.
