@@ -74,7 +74,7 @@ on:
       - '.github/workflows/database-app-runtime-smoke.yml'
       - '.github/workflows/database-health-monitor.yml'
   push:
-    branches: [main]
+    branches: [main, canon-0402-isolated-ci-20261019]
     paths:
       - 'database/**'
       - 'ops/light_native_pilot_owner*.py'
@@ -162,7 +162,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
-          - 5432:5432
+          - "127.0.0.1:5432:5432"
         options: >-
           --health-cmd "pg_isready -U postgres -d bridge_school_ci"
           --health-interval 5s
@@ -171,6 +171,8 @@ jobs:
     env:
       ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_school_ci
       DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/bridge_school_ci
+      CI_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      CI_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout
@@ -178,6 +180,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: Prove disposable PostgreSQL loopback isolation before DDL
+        env:
+          CI_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: python tools/canon_0402_ci.py isolate
 
       - name: Compile video persistence adapters
         run: |
@@ -296,10 +303,12 @@ jobs:
 
       - name: Apply migrations to ephemeral CI database
         shell: bash
+        env:
+          CI_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: |
           chmod +x database/scripts/migrate.sh
           bash -n database/scripts/migrate.sh
-          database/scripts/migrate.sh
+          python tools/canon_0402_ci.py rehearse
 
       - name: Verify video Canon firewall Unicode boundaries
         shell: bash
@@ -538,3 +547,9 @@ jobs:
 
       - name: Rehearse exact native pilot intake and conditional control restoration
         run: PYTHONPATH=. python database/fixtures/light_native_pilot_intake_rehearsal.py
+
+      - name: Remove and verify disposable PostgreSQL service and volumes
+        if: always()
+        env:
+          CI_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: python tools/canon_0402_ci.py cleanup
