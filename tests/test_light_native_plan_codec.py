@@ -214,12 +214,28 @@ class PlanCodecContracts(unittest.TestCase):
                                   SimpleNamespace(assert_current=lambda: None))
 
     def test_deep_plan_json_refuses_with_fixed_code_within_size_bound(self):
+        parse = self.c.owner.parse_plan
+        # Exact structural depth 64 is accepted for arrays, objects and mixes.
+        allowed = (b'{"a":'+b'['*63+b'0'+b']'*63+b'}',
+                   b'{"a":'*64+b'0'+b'}'*64,
+                   b'{"a":'+b'[{"b":'*31+b'[0]'+b'}]'*31+b'}')
+        for raw in allowed:
+            with self.subTest(allowed=raw[:20]):
+                self.assertEqual(self.c.engine.encode(parse(raw)), raw)
+        # Quoted brackets and odd/even escaped-backslash runs are string data.
+        for count in range(5):
+            value = dict(a='\\'*count+'"'+'['*80+'}'*80+'\\'*count, b=[0])
+            self.assertEqual(parse(self.c.engine.encode(value)), value)
         for raw in (b'{"a":'+b'['*3000+b'0'+b']'*3000+b'}',
-                    b'{"a":'*2000+b'['*1000+b'0'+b']'*1000+b'}'*2000):
+                    b'{"a":'*2000+b'['*1000+b'0'+b']'*1000+b'}'*2000,
+                    b'{"a":'+b'['*64+b'0'+b']'*64+b'}',
+                    b'{"a":'*65+b'0'+b'}'*65,
+                    b'{"a":'+b'[{"b":'*31+b'[[0]]'+b'}]'*31+b'}',
+                    b'{"a":"\\', b'{"a":[0}', b'{"a":'+b'['*63+b'0'):
             with self.subTest(size=len(raw)):
                 self.assertLessEqual(len(raw), 16384)
                 with self.assertRaisesRegex(RuntimeError, '^LANE_EXEC_PLAN$'):
-                    self.c.owner.parse_plan(raw)
+                    parse(raw)
 
     def test_retirement_decoder_already_accepts_original_ascii_plan(self):
         f = fixture(self.c)

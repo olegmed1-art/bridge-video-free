@@ -18,6 +18,17 @@ escaping without UTF-8 canonical re-encoding; retirement decoding therefore
 needed no code change. Unicode in nested task data, supplementary-plane
 characters, invalid UTF-8 re-encoding, altered accepted hashes, duplicate keys,
 nonfinite values, invalid type/size and noncanonical bytes are distinct tests.
+Plan JSON has an explicit structural depth limit of 64, independent of Python's
+recursion behavior; brackets and escaped quotes inside strings do not count.
+This is a deliberate new availability/compatibility bound. Host validate_policy
+and downstream intake.Plan do not impose the same explicit limit. Original
+bytes and hashes are preserved within it; deeper Plans fail before issuer effects.
+
+The first portable Linux run [39320287118](https://github.com/olegmed1-art/bridge-video-free/actions/runs/39320287118)
+ran 22 tests and failed two deep-input subcases: Ubuntu's decoder accepted the
+inputs, while the local runtime raised RecursionError. This exposed an implicit
+runtime-dependent limit. The explicit scanner and exact 64/65-depth boundaries
+replace that assumption. The failed run is retained; it is not a passing proof.
 
 The new Plan decoder grants no admission and does not weaken Plan semantics,
 source checks, HOLD, unknown-outcome handling or replay barriers. Full Plan

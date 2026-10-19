@@ -36,12 +36,30 @@ def parse(raw):
 
 
 def parse_plan(raw):
-    """Decode the retained Plan codec without changing its accepted bytes.
+    """Decode retained Plans within explicit size/depth bounds.
 
     native_cli_permission_engine.encode uses ASCII escaping; lane records and
-    issuer policies use UTF-8. Full Plan scope validation stays in the driver.
+    issuer policies use UTF-8. Bytes and hashes are never rewritten. Full Plan
+    scope validation stays in the driver; depth above 64 is refused here.
     """
     require(type(raw) is bytes and 0 < len(raw) <= 16384, 'LANE_EXEC_PLAN')
+    # Bound decoder/encoder work independently of Python's recursion behavior.
+    # Only structural brackets count; escaped quotes/backslashes stay strings.
+    depth=0
+    quoted=escaped=False
+    for token in raw:
+        if quoted:
+            if escaped:escaped=False
+            elif token == 92:escaped=True
+            elif token == 34:quoted=False
+        elif token == 34:quoted=True
+        elif token in (91,123):
+            depth+=1
+            require(depth <= 64, 'LANE_EXEC_PLAN')
+        elif token in (93,125):
+            depth-=1
+            require(depth >= 0, 'LANE_EXEC_PLAN')
+    require(depth == 0 and not quoted, 'LANE_EXEC_PLAN')
     def unique(pairs):
         value={}
         for key,item in pairs:

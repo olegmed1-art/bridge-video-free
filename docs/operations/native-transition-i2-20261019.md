@@ -82,10 +82,10 @@ Independently measured reviewed source hashes:
 
 | Artifact | SHA-256 |
 |---|---|
-| ops/light_native_lane_execution.py | `b458ec59ee57576460d3e86e6894740a55b795341d387d46c8c605e686a6e237` |
+| ops/light_native_lane_execution.py | `ac8fb7b14e1673f47c1f055ed9555aa8a985c6e064fa8844592cce1a5166ea42` |
 | ops/light_native_lane_controller.py | `038d30633c9acb8629f99b957e9eb613583ca8a729ac96412476c4f840e41f6a` |
 | ops/light_native_lane_issuer.py | `43550749d5e98742ae983435edf06d55801b35e85540698f18a6459b78f68dd3` |
-| tests/test_light_native_plan_codec.py | `c05bc1f19cc64f7717805942956f1574c0bc37a9efb136a79bd0b58ed57a454d` |
+| tests/test_light_native_plan_codec.py | `fda9236cf58f3f0051e78cb56f8b6ba942e9999e23a8d740f42c80b431f7a71c` |
 | .github/workflows/native-host-preflight.yml | `bb20351c66e1050fcb9fd9d43fb98466f6dd77a30be34193a0c0583a95394f2b` |
 | tests/test_native_host_preflight_scope.py | `ba293f5acca50c83bca6ba600a91f8f91b24a30dbb7344c50dc10313bc8f0144` |
 
@@ -100,3 +100,19 @@ This is I2 source review of those exact fixes, not production, installation,
 database, provider, admission or PID1 acceptance. The AST harnesses use synthetic
 package and observation ports. Their scope is the pure codecs, validators and
 selector paths they actually execute.
+
+The first Linux codec run [39320287118](https://github.com/olegmed1-art/bridge-video-free/actions/runs/39320287118)
+ran 22 tests and failed two deep-input subcases. Python 3.12 accepted inputs for
+which the local runtime raised RecursionError. The different-model reviewer then
+reviewed the bounded byte scanner and expanded test source without running them.
+It accepted the deterministic depth-64 boundary, quoted-bracket and escape
+handling, and unchanged historical byte codec. The two hashes above supersede
+the earlier execution/test hashes; the other four reviewed hashes are unchanged.
+The subsequent execution-file change only clarifies the docstring's bound.
+
+Depth 64 is a deliberate new acceptance limit. Host validate_policy and downstream
+intake.Plan do not currently impose that same explicit depth limit. Plans within
+the bound retain their original accepted bytes and hashes; deeper Plans fail
+closed before issuer effects. This is an availability/compatibility restriction,
+not evidence that every theoretically host-accepted Plan is issuer-admissible.
+The failed CI is discovery evidence, not a successful check.
