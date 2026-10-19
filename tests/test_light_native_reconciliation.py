@@ -86,14 +86,19 @@ def retained_fixture(runtime):
 
 
 @contextmanager
-def synthetic_flow():
+def synthetic_flow(*, runtime_ascii=True):
     now = int(time.time())
     clock = SimpleNamespace(now=float(now))
     hooks = SimpleNamespace(lock_exit=lambda: None, snapshot_exit=lambda: None)
     controller = b'synthetic-controller-not-production'
-    runtime_bundle = dict(revision=q.NATIVE_SOURCE, files={})
-    runtime_bundle['sha256'] = q.sha(q.encoded(runtime_bundle))
-    runtime = q.encoded(dict(version=1, source=q.NATIVE_SOURCE, runtime=runtime_bundle, helpers={}))
+    # Actual retained release.package uses ASCII JSON, including escaped source
+    # text. A UTF-8 canonical re-encoding would alter its historical digest.
+    runtime_bundle = dict(revision=q.NATIVE_SOURCE,
+                          files={'oracle_autopilot/synthetic.py': '# Пример\n'})
+    native_encoded = lambda value: json.dumps(value, sort_keys=True,
+        separators=(',', ':'), ensure_ascii=runtime_ascii).encode()
+    runtime_bundle['sha256'] = q.sha(native_encoded(runtime_bundle))
+    runtime = native_encoded(dict(version=1, source=q.NATIVE_SOURCE, runtime=runtime_bundle, helpers={}))
     view, policy_pin, plan_pin = retained_fixture(runtime)
     before = deepcopy(view.files)
     inventory, proposed = q.r._retained_issuer_inputs(view, policy_pin, 0, q.NATIVE_SOURCE, q.sha(runtime))
@@ -229,6 +234,18 @@ class ReferenceTests(unittest.TestCase):
 
 
 class CallbackBoundaryTests(unittest.TestCase):
+    def test_retained_runtime_ascii_source_encoding_is_preserved_through_full_flow(self):
+        with synthetic_flow() as f:
+            self.assertIn(b'\\u041f', f.runtime)
+            self.assertNotEqual(f.runtime, q.encoded(q.r.parse(f.runtime)))
+            with self.assertRaises(q.Refusal): q._parse(f.runtime, limit=3*1024*1024)
+            self.assertEqual(f.observe()['state'], 'OBSERVED_CURRENT')
+        with synthetic_flow(runtime_ascii=False) as f:
+            value = f.observe()
+            self.assertEqual((value['state'], value['reason']), ('UNKNOWN', 'PACKAGES'))
+            self.assertNotIn('locks-enter', f.events)
+            self.assertEqual(f.view.files, f.original)
+
     def test_current_success_keeps_original_bytes_and_every_authority_flag_false(self):
         with synthetic_flow() as f:
             value = f.observe()
