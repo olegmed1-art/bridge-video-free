@@ -10,6 +10,10 @@ queries and independent `/proc` snapshots must agree with the exact prospective
 unit profile. Disk bytes, loaded commands, reload state, drop-ins, process
 UID/GID, actual NoNewPrivs, executable, argv, cwd, cgroup, boot/start and process
 INVOCATION_ID are checked. Loaded NNP=yes cannot substitute for actual NNP=1.
+Systemctl can omit empty array properties even with `--all`. Their absence
+cannot establish an empty value: a separate bounded D-Bus read must attest the
+seven exact typed empty arrays. Missing scalar or malformed array evidence
+remains a refusal.
 Existing installation, source, STOP, deadline, child ancestry and purpose checks
 remain required. PID1 execution delegation is a separate authority boundary.
 

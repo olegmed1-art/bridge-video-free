@@ -76,6 +76,18 @@ _DURATIONS = frozenset(('RestartUSec', 'TimeoutStopUSec', 'StartLimitIntervalUSe
 _PROC = Path('/proc')
 _SHOW_LIMIT = 65536
 _SHOW_SECONDS = 10
+_EMPTY_ARRAYS = (
+    ('EnvironmentFiles', 'a(sb)'),
+    ('ExecCondition', 'a(sasbttttuii)'), ('ExecStartPre', 'a(sasbttttuii)'),
+    ('ExecStartPost', 'a(sasbttttuii)'), ('ExecReload', 'a(sasbttttuii)'),
+    ('ExecStop', 'a(sasbttttuii)'), ('ExecStopPost', 'a(sasbttttuii)'),
+)
+_SYSTEMCTL = ('/usr/bin/systemctl', '--no-pager', 'show', '--all', UNIT,
+              '--property='+','.join(SHOW_PROPERTIES))
+_BUSCTL = ('/usr/bin/busctl', '--system', '--json=short', 'get-property',
+           'org.freedesktop.systemd1',
+           '/org/freedesktop/systemd1/unit/bridge_2dlight_2dnative_2dsupervisor_2eservice',
+           'org.freedesktop.systemd1.Service', *(name for name, _ in _EMPTY_ARRAYS))
 
 
 class Refusal(RuntimeError):
@@ -282,11 +294,9 @@ def _protected_unit(expected):
         os.close(fd)
 
 
-def _show():
-    """Only systemctl show; bound pipe bytes as they arrive, plus elapsed time."""
-    command = ['/usr/bin/systemctl', '--no-pager', 'show', '--all', UNIT,
-               '--property='+','.join(SHOW_PROPERTIES)]
-    deadline = time.monotonic()+_SHOW_SECONDS
+def _read_command(command, *, deadline, limit):
+    """Bound one of the two fixed read commands, including its arriving bytes."""
+    require(time.monotonic() < deadline, 'NATIVE_UNIT_SHOW_TIMEOUT')
     process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'TZ': 'UTC', 'SYSTEMD_COLORS': '0'})
     try:
@@ -300,13 +310,13 @@ def _show():
                 if not selector.select(remaining):
                     continue
                 try:
-                    chunk = os.read(process.stdout.fileno(), _SHOW_LIMIT+1-len(result))
+                    chunk = os.read(process.stdout.fileno(), limit+1-len(result))
                 except BlockingIOError:
                     continue
                 if not chunk:
                     break
                 result.extend(chunk)
-                require(len(result) <= _SHOW_LIMIT, 'NATIVE_UNIT_SHOW_LIMIT')
+                require(len(result) <= limit, 'NATIVE_UNIT_SHOW_LIMIT')
         remaining = deadline-time.monotonic()
         require(remaining > 0, 'NATIVE_UNIT_SHOW_TIMEOUT')
         require(process.wait(timeout=remaining) == 0, 'NATIVE_UNIT_SHOW')
@@ -316,6 +326,49 @@ def _show():
             process.kill()
             process.wait(timeout=2)
         process.stdout.close()
+
+
+def _attest_empty_arrays(raw):
+    """Typed D-Bus evidence only; absence in systemctl output is not emptiness."""
+    require(type(raw) is bytes and 0 < len(raw) <= 4096 and raw.endswith(b'\n')
+            and all(byte == 10 or 32 <= byte <= 126 for byte in raw), 'NATIVE_UNIT_ARRAY_ATTESTATION')
+    rows = raw.splitlines()
+    require(len(rows) == len(_EMPTY_ARRAYS), 'NATIVE_UNIT_ARRAY_ATTESTATION')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, 'NATIVE_UNIT_ARRAY_ATTESTATION')
+            result[key] = value
+        return result
+    try:
+        for row, (_, signature) in zip(rows, _EMPTY_ARRAYS):
+            value = json.loads(row, object_pairs_hook=unique,
+                parse_constant=lambda _: require(False, 'NATIVE_UNIT_ARRAY_ATTESTATION'))
+            require(type(value) is dict and set(value) == {'type', 'data'}
+                    and type(value['type']) is str and value['type'] == signature
+                    and type(value['data']) is list and value['data'] == [], 'NATIVE_UNIT_ARRAY_ATTESTATION')
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise Refusal('NATIVE_UNIT_ARRAY_ATTESTATION') from None
+
+
+def _show():
+    """Attest seven known empty arrays, then complete only those missing lines."""
+    deadline = time.monotonic()+_SHOW_SECONDS
+    raw = _read_command(_SYSTEMCTL, deadline=deadline, limit=_SHOW_LIMIT)
+    _attest_empty_arrays(_read_command(_BUSCTL, deadline=deadline, limit=4096))
+    require(type(raw) is bytes and 0 < len(raw) <= _SHOW_LIMIT and raw.endswith(b'\n'), 'NATIVE_UNIT_READBACK')
+    selected = {name.encode() for name, _ in _EMPTY_ARRAYS}
+    seen = set()
+    for line in raw.splitlines():
+        key, _, value = line.partition(b'=')
+        if key in selected:
+            require(value == b'', 'NATIVE_UNIT_ARRAY_ATTESTATION')
+        seen.add(key)
+    completed = raw+b''.join(name.encode()+b'=\n' for name, _ in _EMPTY_ARRAYS if name.encode() not in seen)
+    require(len(completed) <= _SHOW_LIMIT, 'NATIVE_UNIT_READBACK')
+    parse_show(completed)  # Includes unknown/duplicate keys and every non-attested property.
+    require(time.monotonic() < deadline, 'NATIVE_UNIT_SHOW_TIMEOUT')
+    return completed
 
 
 def _proc_read(directory, name, limit):

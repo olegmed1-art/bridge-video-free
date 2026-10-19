@@ -164,7 +164,7 @@ jobs:
               'tests.test_light_native_readiness']
           result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromNames(names))
           assert not result.skipped, result.skipped
-          assert result.testsRun >= 79
+          assert result.testsRun >= 107
           raise SystemExit(not result.wasSuccessful())
           PY
       - name: Verify actual loaded unit and independent process identity

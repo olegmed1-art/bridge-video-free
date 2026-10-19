@@ -6,6 +6,7 @@ systemd fixture is a separate caller/integration obligation.
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, replace
 import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -13,7 +14,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from ops import light_native_service_unit as u
 
@@ -53,6 +54,44 @@ def show_fixture():
 def show_raw(value=None):
     value = show_fixture() if value is None else value
     return ''.join(key+'='+value[key]+'\n' for key in sorted(value)).encode('ascii')
+
+
+# Independent literals from the observed systemd255 omission/query shape.
+OMITTED_ARRAY_PROPERTIES = ('EnvironmentFiles', 'ExecCondition', 'ExecStartPre',
+    'ExecStartPost', 'ExecReload', 'ExecStop', 'ExecStopPost')
+EMPTY_ARRAY_LINES = (b'{"type":"a(sb)","data":[]}\n'+
+                     b'{"type":"a(sasbttttuii)","data":[]}\n'*6)
+BUSCTL_COMMAND = ('/usr/bin/busctl', '--system', '--json=short', 'get-property',
+    'org.freedesktop.systemd1',
+    '/org/freedesktop/systemd1/unit/bridge_2dlight_2dnative_2dsupervisor_2eservice',
+    'org.freedesktop.systemd1.Service', 'EnvironmentFiles', 'ExecCondition', 'ExecStartPre',
+    'ExecStartPost', 'ExecReload', 'ExecStop', 'ExecStopPost')
+
+
+def omitted_show():
+    value = show_fixture()
+    for key in OMITTED_ARRAY_PROPERTIES: del value[key]
+    return show_raw(value)
+
+
+@contextmanager
+def command_read_ports(outputs, codes=None):
+    """Keep actual bounded reader; substitute pipe/process readiness only."""
+    codes = [0]*len(outputs) if codes is None else codes
+    processes = []
+    for index, code in enumerate(codes):
+        process = Mock(); process.stdout.fileno.return_value = 27+index
+        process.wait.return_value = code; process.poll.return_value = code
+        processes.append(process)
+    selector = Mock(); selector.__enter__ = Mock(return_value=selector)
+    selector.__exit__ = Mock(return_value=False); selector.select.return_value = [(None, 1)]
+    chunks = [chunk for output in outputs for chunk in (output, b'')]
+    with patch.object(u.subprocess, 'Popen', side_effect=processes) as launch, \
+         patch.object(u.selectors, 'DefaultSelector', return_value=selector), \
+         patch.object(u.os, 'set_blocking') as nonblocking, \
+         patch.object(u.os, 'read', side_effect=chunks), \
+         patch.object(u, '_read_command', wraps=u._read_command) as reader:
+        yield SimpleNamespace(launch=launch, processes=processes, nonblocking=nonblocking, reader=reader)
 
 
 def validate(*, before=None, after=None, first=None, last=None, unit=None, python=None):
@@ -211,39 +250,111 @@ class CollectorContract(unittest.TestCase):
                 with self.assertRaises(u.Refusal): u._process(2345)
                 self.assertFalse(files.descriptors)
 
-    def test_show_command_output_budget_and_nonzero_exit_are_enforced(self):
-        for output, code, reason in ((show_raw(), 0, None), (b'x'*65537, 0, 'NATIVE_UNIT_SHOW_LIMIT'),
-                                     (show_raw(), 1, 'NATIVE_UNIT_SHOW')):
-            process = Mock(); process.stdout.fileno.return_value = 27
-            process.wait.return_value = code; process.poll.return_value = code
-            selector = Mock(); selector.__enter__ = Mock(return_value=selector)
-            selector.__exit__ = Mock(return_value=False); selector.select.return_value = [(None, 1)]
-            with self.subTest(code=code, length=len(output)), \
-                 patch.object(u.subprocess, 'Popen', return_value=process) as launch, \
-                 patch.object(u.selectors, 'DefaultSelector', return_value=selector), \
-                 patch.object(u.os, 'set_blocking') as nonblocking, \
-                 patch.object(u.os, 'read', side_effect=[output, b'']):
-                if reason:
-                    with self.assertRaisesRegex(u.Refusal, '^'+reason+'$'): u._show()
-                else: self.assertEqual(u._show(), output)
-                command = launch.call_args.args[0]
-                self.assertEqual(command, ['/usr/bin/systemctl', '--no-pager', 'show', '--all', u.UNIT,
-                                          '--property='+','.join(u.SHOW_PROPERTIES)])
-                self.assertEqual(launch.call_args.kwargs['stdin'], u.subprocess.DEVNULL)
-                self.assertEqual(launch.call_args.kwargs['stderr'], u.subprocess.DEVNULL)
-                self.assertEqual(launch.call_args.kwargs['env']['LC_ALL'], 'C')
-                nonblocking.assert_called_once_with(27, False)
+    def test_fixed_show_and_busctl_commands_reuse_bounded_reader_and_one_deadline(self):
+        with command_read_ports([show_raw(), EMPTY_ARRAY_LINES]) as ports:
+            self.assertEqual(u._show(), show_raw())
+            self.assertEqual([entry.args[0] for entry in ports.launch.call_args_list], [
+                ('/usr/bin/systemctl', '--no-pager', 'show', '--all', u.UNIT,
+                 '--property='+','.join(u.SHOW_PROPERTIES)), BUSCTL_COMMAND])
+            self.assertEqual([entry.kwargs['limit'] for entry in ports.reader.call_args_list], [65536, 4096])
+            self.assertEqual(ports.reader.call_args_list[0].kwargs['deadline'],
+                             ports.reader.call_args_list[1].kwargs['deadline'])
+            self.assertEqual(ports.nonblocking.call_args_list, [call(27, False), call(28, False)])
+            for entry, process in zip(ports.launch.call_args_list, ports.processes):
+                self.assertEqual(entry.kwargs['stdin'], u.subprocess.DEVNULL)
+                self.assertEqual(entry.kwargs['stderr'], u.subprocess.DEVNULL)
+                self.assertEqual(entry.kwargs['env']['LC_ALL'], 'C')
                 process.stdout.close.assert_called_once()
+
+    def test_both_command_output_budgets_and_exit_codes_are_enforced(self):
+        cases = (([b'x'*65537], [0], 'NATIVE_UNIT_SHOW_LIMIT'),
+                 ([show_raw()], [1], 'NATIVE_UNIT_SHOW'),
+                 ([show_raw(), b'x'*4097], [0, 0], 'NATIVE_UNIT_SHOW_LIMIT'),
+                 ([show_raw(), EMPTY_ARRAY_LINES], [0, 1], 'NATIVE_UNIT_SHOW'))
+        for outputs, codes, reason in cases:
+            with self.subTest(lengths=[len(value) for value in outputs], codes=codes), \
+                 command_read_ports(outputs, codes):
+                with self.assertRaisesRegex(u.Refusal, '^'+reason+'$'): u._show()
 
     def test_show_timeout_kills_only_its_own_read_process(self):
         process = Mock(); process.stdout.fileno.return_value = 27; process.poll.return_value = None
         selector = Mock(); selector.__enter__ = Mock(return_value=selector); selector.__exit__ = Mock(return_value=False)
         with patch.object(u.subprocess, 'Popen', return_value=process), \
              patch.object(u.selectors, 'DefaultSelector', return_value=selector), \
-             patch.object(u.os, 'set_blocking'), patch.object(u.time, 'monotonic', side_effect=[0, 11]):
+             patch.object(u.os, 'set_blocking'), patch.object(u.time, 'monotonic', side_effect=[0, 0, 11]):
             with self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_SHOW_TIMEOUT$'): u._show()
             process.kill.assert_called_once_with()
             process.wait.assert_called_once_with(timeout=2)
+
+    def test_genuine_seven_property_omission_needs_typed_evidence(self):
+        omitted = omitted_show()
+        with self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_READBACK$'): u.parse_show(omitted)
+        with command_read_ports([omitted, EMPTY_ARRAY_LINES]):
+            augmented = u._show()
+        self.assertEqual(u.parse_show(augmented), u.parse_show(show_raw()))
+        self.assertEqual(augmented[len(omitted):], b''.join(key.encode()+b'=\n' for key in OMITTED_ARRAY_PROPERTIES))
+
+    def test_typed_array_evidence_rejects_missing_duplicate_extra_wrong_or_nonempty_json(self):
+        rows = EMPTY_ARRAY_LINES.splitlines(keepends=True)
+        malformed = [b'', b'not-json\n', b'\xff\n', EMPTY_ARRAY_LINES[:-1],
+            EMPTY_ARRAY_LINES.replace(b'\n', b'\r\n'), b''.join(rows[:6]),
+            EMPTY_ARRAY_LINES+rows[-1], rows[1]+rows[0]+b''.join(rows[2:]),
+            b'{"type":"a(sb)","data":[],"data":[]}\n'+b''.join(rows[1:]),
+            b'{"type":"a(sb)","data":[],"\\u0064ata":[]}\n'+b''.join(rows[1:]),
+            b'{"type":"a(sb)","data":[],"extra":0}\n'+b''.join(rows[1:]),
+            b'{"type":"a(sb)"}\n'+b''.join(rows[1:]),
+            b'{"data":[]}\n'+b''.join(rows[1:]),
+            b'{"type":"a(sb)","data":NaN}\n'+b''.join(rows[1:]),
+            b'{"type":"a(sb)","data":'+b'['*1100+b']'*1100+b'}\n'+b''.join(rows[1:]),
+            b'[]\n'+b''.join(rows[1:])]
+        for index in range(7):
+            for change in ({'type': 'as'}, {'data': [['/tmp/command', False]]},
+                           {'data': False}, {'data': None}, {'data': {}}, {'data': 0}):
+                value = json.loads(rows[index]); value.update(change)
+                altered = rows[:]; altered[index] = json.dumps(value).encode()+b'\n'
+                malformed.append(b''.join(altered))
+        for index, evidence in enumerate(malformed):
+            with self.subTest(index=index), command_read_ports([omitted_show(), evidence]):
+                with self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_ARRAY_ATTESTATION$'): u._show()
+
+    def test_only_attested_missing_keys_are_completed_and_conflicts_refuse(self):
+        variants = []
+        missing_user = show_fixture(); del missing_user['User']
+        variants.extend((show_raw(missing_user), show_raw()+b'User=root\n', show_raw()+b'UnknownKey=\n'))
+        for key in OMITTED_ARRAY_PROPERTIES:
+            changed = show_fixture(); changed[key] = '/tmp/nonempty'
+            variants.append(show_raw(changed))
+        for index, raw in enumerate(variants):
+            with self.subTest(index=index), command_read_ports([raw, EMPTY_ARRAY_LINES]):
+                with self.assertRaises(u.Refusal): u._show()
+
+    def test_total_readback_limit_after_attested_augmentation_is_enforced(self):
+        raw = omitted_show()+b'X='+(b'x'*(65536-len(omitted_show())-3))+b'\n'
+        self.assertEqual(len(raw), 65536)
+        with command_read_ports([raw, EMPTY_ARRAY_LINES]):
+            with self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_READBACK$'): u._show()
+
+    def test_shared_deadline_cannot_expire_before_or_after_busctl(self):
+        for moments, launches in (([0]*5+[11], 1), ([0]*9+[11], 2)):
+            with self.subTest(launches=launches), command_read_ports([show_raw(), EMPTY_ARRAY_LINES]) as ports, \
+                 patch.object(u.time, 'monotonic', side_effect=moments):
+                with self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_SHOW_TIMEOUT$'): u._show()
+                self.assertEqual(ports.launch.call_count, launches)
+
+    def test_each_of_the_two_collector_observations_attests_arrays_independently(self):
+        wrong = EMPTY_ARRAY_LINES.replace(b'"data":[]', b'"data":[0]', 1)
+        for bad_observation in (0, 1):
+            replies = [omitted_show(), EMPTY_ARRAY_LINES, omitted_show(), EMPTY_ARRAY_LINES]
+            replies[bad_observation*2+1] = wrong
+            with self.subTest(bad_observation=bad_observation), \
+                 patch.object(u.sys, 'platform', 'linux'), patch.object(u.os, 'geteuid', return_value=0, create=True), \
+                 patch.object(u, '_protected_unit', return_value=u.render()), \
+                 patch.object(u, '_process', return_value=process_fixture()), \
+                 command_read_ports(replies) as ports:
+                with self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_ARRAY_ATTESTATION$'):
+                    u.collect_loaded(2345, expected_python_sha256='a'*64,
+                                     expected_unit_sha256=hashlib.sha256(u.render()).hexdigest())
+                self.assertEqual(ports.launch.call_count, 2*(bad_observation+1))
 
 
 @unittest.skipUnless(sys.platform == 'linux' and hasattr(os, 'geteuid') and os.geteuid() == 0,
