@@ -1,8 +1,12 @@
 """Adversarial, database-free checks of the one-job isolation boundary."""
 from copy import deepcopy
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from tools.canon_0402_ci import ADMIN_DSN, DSN, validate_environment, validate_topology
+from tools.canon_0402_ci import (ADMIN_DSN, DSN, NEW_RUSSIAN, OLD_RUSSIAN,
+                               rejected_trial, source_drift_trial,
+                               validate_environment, validate_topology)
 
 
 def environment():
@@ -84,6 +88,34 @@ class IsolationTests(unittest.TestCase):
         previous = deepcopy((value, net))
         validate_topology("28.0.0", value, net, {})
         self.assertEqual((value, net), previous)
+
+
+class RejectionTests(unittest.TestCase):
+    def test_function_statement_terminated_before_migration_do(self):
+        # Match pg_get_functiondef's unterminated result, including its newline.
+        definition = "CREATE FUNCTION f() RETURNS text LANGUAGE sql AS $function$\nSELECT '" + OLD_RUSSIAN * 4 + "';\n$function$\n"
+        migration = "BEGIN;\nDO $$ BEGIN NULL; END $$;\nCOMMIT;\n"
+        result = source_drift_trial(migration, definition)
+        self.assertIn("$function$;\nDO $$", result)
+        self.assertEqual(result.count(OLD_RUSSIAN), 3)
+        self.assertEqual(result.count(NEW_RUSSIAN), 1)
+        self.assertEqual(result, source_drift_trial(migration, definition.rstrip() + ";\n"))
+
+    def test_unexpected_syntax_error_still_checks_committed_state(self):
+        original = {"body_sha": "before", "migration": None}
+        failure = SimpleNamespace(returncode=3, stderr='ERROR:  42601: syntax error at or near "DO"')
+        with patch("tools.canon_0402_ci.command", return_value=failure), \
+             patch("tools.canon_0402_ci.snapshot", return_value=original) as readback:
+            with self.assertRaisesRegex(RuntimeError, "expected=SOURCE_DRIFT exit=3 sqlstate=42601"):
+                rejected_trial("public test SQL", "SOURCE_DRIFT", original)
+            readback.assert_called_once_with()
+
+    def test_detects_committed_change_even_when_error_is_unexpected(self):
+        failure = SimpleNamespace(returncode=3, stderr="unexpected error")
+        with patch("tools.canon_0402_ci.command", return_value=failure), \
+             patch("tools.canon_0402_ci.snapshot", return_value={"body_sha": "changed"}):
+            with self.assertRaisesRegex(RuntimeError, "FAILED_MIGRATION_CHANGED_COMMITTED_STATE"):
+                rejected_trial("public test SQL", "SOURCE_DRIFT", {"body_sha": "before"})
 
 
 if __name__ == "__main__":

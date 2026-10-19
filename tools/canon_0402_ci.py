@@ -176,10 +176,34 @@ def migrate(directory=None):
     command(["bash", "database/scripts/migrate.sh"], env=env, timeout=240)
 
 
+def emit_snapshot(phase, state):
+    evidence = {key: value for key, value in state.items() if key != "definition"}
+    evidence["definition_sha256"] = hashlib.sha256(state["definition"].encode()).hexdigest()
+    print(json.dumps({"status": "CI_0402_READBACK", "phase": phase,
+                      "snapshot": evidence}, sort_keys=True), flush=True)
+
+
 def rejected_trial(script, marker, original):
-    result = command(["psql", DSN, "-X", "-v", "ON_ERROR_STOP=1"], text=script, check=False)
-    require(result.returncode != 0 and marker in result.stderr, "EXPECTED_MIGRATION_REJECTION_MISSING")
+    result = command(["psql", DSN, "-X", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose"],
+                     text=script, check=False)
+    # Check committed state even when psql reports an unexpected failure.
     require(snapshot() == original, "FAILED_MIGRATION_CHANGED_COMMITTED_STATE")
+    sqlstate = re.search(r"(?m)^ERROR:\s+([0-9A-Z]{5}):", result.stderr)
+    require(result.returncode != 0 and marker in result.stderr,
+            "EXPECTED_MIGRATION_REJECTION_MISSING: expected=" + marker
+            + " exit=" + str(result.returncode)
+            + " sqlstate=" + (sqlstate.group(1) if sqlstate else "not_reported"))
+    print(json.dumps({"status": "CI_0402_REJECTION_PASS", "marker": marker,
+                      "committed_state_unchanged": True}, sort_keys=True))
+
+
+def source_drift_trial(migration_sql, definition):
+    require(definition.count(OLD_RUSSIAN) == 4, "RUSSIAN_GUARD_PREIMAGE_DRIFT")
+    drift = definition.replace(OLD_RUSSIAN, NEW_RUSSIAN, 1).rstrip()
+    # pg_get_functiondef returns a complete statement without its terminator.
+    if not drift.endswith(";"):
+        drift += ";"
+    return migration_sql.replace("BEGIN;\n", "BEGIN;\n" + drift + "\n", 1)
 
 
 def rehearse():
@@ -206,11 +230,10 @@ def rehearse():
     require(before["body_sha"] == BEFORE_SHA and before["migration"] is None, "EXACT_0329_BASELINE_REQUIRED")
     require(before["login_roles"] == ["bridge_ci_owner", "postgres"], "UNEXPECTED_LOGIN_ROLE")
     require(before["source_rows"] == before["candidate_rows"] == 0, "CANON_FIXTURE_ALREADY_PRESENT")
+    emit_snapshot("baseline", before)
     rejected_trial(source.replace("BEGIN;\n", "BEGIN;\nUPDATE schema_migration SET migration_key='ci_hidden_0329' WHERE migration_key='" + BASE_KEY + "';\n", 1),
                    "VIDEO_CANON_FIREWALL_REQUIRES_0329", before)
-    require(before["definition"].count(OLD_RUSSIAN) == 4, "RUSSIAN_GUARD_PREIMAGE_DRIFT")
-    drift = before["definition"].replace(OLD_RUSSIAN, NEW_RUSSIAN, 1)
-    rejected_trial(source.replace("BEGIN;\n", "BEGIN;\n" + drift + "\n", 1),
+    rejected_trial(source_drift_trial(source, before["definition"]),
                    "VIDEO_CANON_FIREWALL_SOURCE_DRIFT", before)
     rejected_trial(source.replace("COMMIT;\n", "DO $$ BEGIN RAISE EXCEPTION 'CI_0402_FORCED_ROLLBACK'; END $$;\nCOMMIT;\n", 1),
                    "CI_0402_FORCED_ROLLBACK", before)
@@ -219,15 +242,19 @@ def rehearse():
     require(after["body_sha"] == AFTER_SHA and after["migration"] == {"checksum": MIGRATION_SHA}, "0402_READBACK_MISMATCH")
     unchanged = set(before) - {"body_sha", "definition", "migration"}
     require(all(before[k] == after[k] for k in unchanged), "0402_CHANGED_IDENTITY_ACL_OR_DATA")
+    emit_snapshot("0402_committed", after)
     # Test-only committed preimage restoration + postimage restoration. Do not
     # edit migration history; production rollback needs its own forward migration.
     with psycopg.connect(DSN) as conn:
         conn.execute(before["definition"])
     restored = snapshot()
     require(restored["body_sha"] == BEFORE_SHA and all(restored[k] == after[k] for k in unchanged), "PREIMAGE_RESTORE_FAILED")
+    emit_snapshot("preimage_restored", restored)
     with psycopg.connect(DSN) as conn:
         conn.execute(after["definition"])
-    require(snapshot() == after, "POSTIMAGE_RESTORE_FAILED")
+    final = snapshot()
+    require(final == after, "POSTIMAGE_RESTORE_FAILED")
+    emit_snapshot("postimage_restored", final)
     print(json.dumps({"status": "CI_0402_DDL_PASS", "migration_sha256": MIGRATION_SHA,
         "before_body_sha256": BEFORE_SHA, "after_body_sha256": AFTER_SHA,
         "rollback_rejection_cases": 3, "committed_function_restore_roundtrip": True,
