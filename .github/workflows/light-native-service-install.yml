@@ -7,8 +7,21 @@ on:
       - 'ops/light_native_service_bootstrap.py'
       - 'ops/light_native_service_history.py'
       - 'ops/light_native_service_install*.py'
+      - 'ops/light_native_service_authority.py'
+      - 'ops/light_native_service_supervisor.py'
+      - 'ops/light_native_service_unit.py'
+      - 'ops/light_native_lane_controller.py'
+      - 'ops/light_native_lane_cycle.py'
+      - 'ops/light_native_lane_issuer.py'
+      - 'ops/light_native_lane_execution.py'
+      - 'ops/native_maintenance_run_guard.py'
+      - 'ops/native_maintenance_budgets.py'
+      - 'ops/native_maintenance_lifetime.py'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'ops/oracle_known_hosts_from_scan.sh'
       - 'tests/test_light_native_service_history.py'
       - 'tests/test_light_native_service_install.py'
+      - 'docs/operations/native-dormant-install-i2-20261019.md'
   workflow_dispatch:
     inputs:
       expected_main_sha:

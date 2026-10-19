@@ -1,6 +1,8 @@
 """Qualified Git source selection and real isolated Linux history transactions."""
 import base64
+import ast
 import copy
+import fnmatch
 import importlib.util
 import os
 from pathlib import Path
@@ -26,6 +28,23 @@ def artifact(source='a'*40, content=b'# reviewed source\n'):
 
 
 class PackageContracts(unittest.TestCase):
+    def test_workflow_covers_complete_loaded_and_delivered_source_closure(self):
+        raw = (ROOT/'.github/workflows/light-native-service-install.yml').read_bytes()
+        section = raw.decode().split('    paths:\n', 1)[1].split('  workflow_dispatch:', 1)[0]
+        patterns = [ast.literal_eval(line.strip()[2:]) for line in section.splitlines()
+                    if line.strip().startswith('- ')]
+        required = (*h.FILES, 'ops/light_native_service_install_runner.py',
+                    'ops/oracle_known_hosts_from_scan.sh', 'tests/test_light_native_service_history.py',
+                    'tests/test_light_native_service_install.py',
+                    'docs/operations/native-dormant-install-i2-20261019.md',
+                    '.github/workflows/light-native-service-install.yml')
+        for path in required:
+            self.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns), path)
+        code = ast.parse((ROOT/'ops/light_native_service_install.py').read_bytes())
+        pin = next(node.value.value for node in code.body if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == 'WORKFLOW_SHA256' for target in node.targets))
+        self.assertEqual(pin, h.sha(raw))
+
     def test_exact_qualified_digest_required(self):
         raw, accepted = artifact()
         self.assertEqual(h.package(raw, accepted)[0], 'a'*40)

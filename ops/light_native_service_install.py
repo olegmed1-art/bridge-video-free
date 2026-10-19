@@ -31,7 +31,7 @@ UNIT_LOOKUP = tuple(Path(p) for p in ('/etc/systemd/system.control', '/run/syste
     '/run/systemd/generator', '/usr/local/lib/systemd/system', '/usr/lib/systemd/system',
     '/lib/systemd/system', '/run/systemd/generator.late'))
 WORKFLOW = '.github/workflows/light-native-service-install.yml'
-WORKFLOW_SHA256 = '347f1dfad81263c67f6168a7b16c9bbbdb3cfd969abf477f1e85725599d3e9fb'
+WORKFLOW_SHA256 = '4116cd7f334156f119f7592d598bf8a7fb15195539bf2e75d0227cf64b60958b'
 ASSETS = {
     'launcher.py': 'ops/light_native_service_bootstrap.py',
     'light_native_service_authority.py': 'ops/light_native_service_authority.py',
