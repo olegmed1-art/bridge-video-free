@@ -84,6 +84,16 @@ def rejected(call, refusal, reason=None):
 def mark(name): print(json.dumps(dict(case=name,result='PASS',real_systemd=True)),flush=True)
 
 
+def isolated_change(actual, baseline, key, expected, case):
+    changed=sorted(name for name in baseline if actual[name]!=baseline[name])
+    valid=set(actual)==set(baseline) and changed==[key] and actual[key]==expected
+    if not valid:
+        print(json.dumps(dict(audit='HOST_FIXTURE_ISOLATION_REFUSED',case=case,
+            changed_properties=changed,expected_value_matched=actual[key]==expected,
+            need_daemon_reload=actual['NeedDaemonReload'],drop_in_empty=actual['DropInPaths']=='')),flush=True)
+    need(valid,case+'_NEGATIVE_NOT_ISOLATED')
+
+
 def cleanup():
     row=ROOT.stat(follow_symlinks=False)
     need(ROOT.resolve()==ROOT and not ROOT.is_symlink() and
@@ -135,20 +145,28 @@ def exercise(repo):
     mark('foreign-process')
     rejected(lambda: unit.collect_loaded(pid,expected_python_sha256='0'*64,expected_unit_sha256=sha(raw)),unit.Refusal)
     mark('wrong-python-pin')
+    # Creating a drop-in did not prove a stale loaded state in the first run.
+    # Change only the known fragment mtime, keeping its accepted bytes.
+    baseline=unit.parse_show(unit._show())
+    prior_mtime=UNIT_FILE.stat().st_mtime_ns
+    deadline=time.monotonic()+2
+    while time.time_ns()//1_000_000_000 <= prior_mtime//1_000_000_000:
+        need(time.monotonic()<deadline,'MTIME_BOUND')
+        time.sleep(.02)
+    os.utime(UNIT_FILE,None,follow_symlinks=False)
+    need(UNIT_FILE.stat().st_mtime_ns>prior_mtime and UNIT_FILE.read_bytes()==raw,'STALE_BYTES_CHANGED')
+    stale=unit.parse_show(unit._show())
+    isolated_change(stale,baseline,'NeedDaemonReload',True,'STALE')
+    rejected(collect,unit.Refusal,'NATIVE_UNIT_PROFILE');mark('stale-reload')
+    command('/usr/bin/systemctl','daemon-reload');collect()
     DROP.mkdir(mode=0o755)
     drop=DROP/'99-host-fixture.conf'
-    for case,body,reload in (
-        ('stale-reload',b'[Service]\nNice=9\n',False),
-        ('loaded-drop-in',b'[Service]\n# Deliberately changes no property.\n',True),
-    ):
-        create(drop,body,0o644)
-        if reload: command('/usr/bin/systemctl','daemon-reload')
-        actual=show('DropInPaths','NeedDaemonReload')
-        need(actual==dict(DropInPaths=str(drop) if reload else '',NeedDaemonReload='no' if reload else 'yes'),'NEGATIVE_NOT_ISOLATED')
-        rejected(collect,unit.Refusal);mark(case)
-        drop.unlink();command('/usr/bin/systemctl','daemon-reload')
-        collect()
-    DROP.rmdir()
+    create(drop,b'[Service]\nNice=10\n',0o644)
+    command('/usr/bin/systemctl','daemon-reload')
+    actual=unit.parse_show(unit._show())
+    isolated_change(actual,baseline,'DropInPaths',str(drop),'DROP')
+    rejected(collect,unit.Refusal,'NATIVE_UNIT_PROFILE');mark('loaded-drop-in')
+    drop.unlink();DROP.rmdir();command('/usr/bin/systemctl','daemon-reload');collect()
     # A reload can advertise NNP=yes while the old process still has NNP=0.
     replace(UNIT_FILE,raw.replace(b'NoNewPrivileges=yes\n',b'NoNewPrivileges=no\n'),0o644)
     command('/usr/bin/systemctl','daemon-reload');command('/usr/bin/systemctl','restart',UNIT)
