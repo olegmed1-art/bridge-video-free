@@ -2,7 +2,7 @@
 
 Governance: ASSURED; different-model I2 acceptance required. This receipt covers
 only the immutable stopped installation/absence rollback described below.
-Status: DORMANT SOURCE REQUALIFICATION PENDING; installation NOT PERFORMED;
+Status: DORMANT SOURCE QUALIFIED; installation NOT PERFORMED;
 end-to-end acceptance NOT ESTABLISHED. A historical or conditional review is not
 permission to dispatch a new target. Independently accept the exact merged Git
 source and package SHA before preparing any finite action.
@@ -95,6 +95,8 @@ contact Oracle, DB, provider or IBM. The implementing/root agent reported readin
 the CI results above from actual job logs; this reviewer did not independently
 inspect those logs. Source review and operational evidence are distinct.
 
+Historical6d-reviewed pins (superseded installer/test pins are identified below):
+
 | Reviewed file | SHA256 |
 | --- | --- |
 | ops/light_native_service_history.py | df1f61218679bfe1f249aab89ee86c1ac10e1321303e9fe1eca0160702268ec3 |
@@ -116,8 +118,16 @@ After the source acceptance above, automated review found a stale run/main
 observation before rollback renames. The correction authenticates authority
 again immediately before each separate move, then repeats local source checks.
 Cancellation after the first move retains the partial outcome for reconciliation.
-The previous accepted pins remain historical; changed installer/test bytes need
-fresh I2 and Linux qualification before merge or any dispatch.
+The previous accepted pins remain historical. The same independent gpt-5.6-sol/
+high reviewer freshly traced the changed boundaries and accepted installer
+SHA256c797b54e9572011e73480e60201cf0713a62a82e041448277433865909c62004
+and install-testSHA256c224fc58dea06e19e3b113ca07f21af5100201f9f829ad9c2a2e761c0df8e848;
+the other seven reviewed pins remain exact. The fresh review did not execute CI
+or contact any host. Root read the actual7e75cc250c0f1f62c9574f466e225f373ecf5602
+CI run39335070923/job118342392317 logs:34 Linux-root tests PASS/0 SKIP in1.338s,
+including all three new cancellation/main-drift/source-mutation counterexamples
+and the same isolated real PID1 load/absence rollback. The install job was SKIP.
+This requalifies source only; software merge and a live owner window are distinct.
 
 The source/runtime kernels, `_descendant` checks and existing workload authority
 are unchanged. Real DB producer/lease fencing, complete provider inventory,
