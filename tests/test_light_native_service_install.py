@@ -15,6 +15,7 @@ if os.name != 'posix':
 from ops import light_native_service_history as h
 from ops import light_native_service_install as install
 
+REAL_COMMAND, REAL_OBSERVED = install.command, install.observed
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -102,7 +103,7 @@ class LinuxInstallationContracts(unittest.TestCase):
         self.unit_file = self.scope/'supervisor.service'
         self.registry = self.scope/'registry'
         for port, changes in ((install, dict(ROOT=self.root, HISTORY=self.history, UNIT_FILE=self.unit_file,
-                                    HOST=os.uname().nodename)),
+                                    HOST=os.uname().nodename, UNIT_LOOKUP=(self.scope/'lookup',))),
                               (install.unit, dict(ROOT=self.root, UNIT_FILE=self.unit_file)),
                               (h, dict(ROOT=self.registry, RELEASES=self.registry/'releases',
                                        HISTORY=self.registry/'history'))):
@@ -116,6 +117,9 @@ class LinuxInstallationContracts(unittest.TestCase):
         active = patch.object(install, 'command', side_effect=lambda *argv: self.commands.append(argv) or b'')
         active.start()
         self.addCleanup(active.stop)
+        active = patch.object(install, 'consumer_identity', return_value={'fixture': 'synthetic active consumer'})
+        active.start()
+        self.addCleanup(active.stop)
         self.raw = package()
         self.guard = install.InstallationRunBinding('a'*40, 1, 1, object())
         active = patch.object(self.guard, 'assert_current')
@@ -123,9 +127,7 @@ class LinuxInstallationContracts(unittest.TestCase):
         self.addCleanup(active.stop)
 
     def observed(self):
-        return dict(LoadState='loaded' if self.unit_file.exists() else 'not-found', ActiveState='inactive',
-                    SubState='dead', MainPID='0', UnitFileState='disabled' if self.unit_file.exists() else '',
-                    FragmentPath=str(self.unit_file) if self.unit_file.exists() else '')
+        return install.unit_state(present=self.unit_file.exists())
 
     def run_install(self):
         wire, pin = payload(self.raw)
@@ -201,6 +203,60 @@ class LinuxInstallationContracts(unittest.TestCase):
         with install.operation_lock(), self.assertRaises(BlockingIOError):
             self.run_install()
         self.assertFalse(self.root.exists())
+
+    def test_preexisting_dropin_refuses_before_any_target_creation(self):
+        directory = self.scope/'lookup'/(install.UNIT+'.d')
+        directory.mkdir(parents=True, mode=0o700)
+        (directory/'unexpected.conf').write_bytes(b'[Service]\nExecStart=unexpected\n')
+        with self.assertRaises(h.Refusal):
+            self.run_install()
+        self.assertFalse(self.root.exists())
+        self.assertFalse(self.unit_file.exists())
+        self.assertEqual({p.name for p in self.history.iterdir()}, {'operation.lock'})
+
+    def test_guard_api_gap_unit_replacement_is_detected_before_rename(self):
+        result = self.run_install()
+        calls = []
+        def interleave():
+            calls.append(1)
+            if len(calls) == 4:  # operate, initial, before intent, before last filesystem checks
+                self.unit_file.write_bytes(b'privileged concurrent replacement\n')
+        with patch.object(self.guard, 'assert_current', side_effect=interleave), self.assertRaises(h.Refusal):
+            self.rollback(result)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(self.unit_file.read_bytes(), b'privileged concurrent replacement\n')
+        self.assertFalse((self.history/result['history_sha256']/'retired-unit.service').exists())
+        self.assertTrue(self.root.exists())
+
+    def test_insufficient_completion_reserve_never_creates_unit(self):
+        self.guard.deadline = install.time.monotonic()+89
+        with self.assertRaises(h.Refusal):
+            self.run_install()
+        self.assertFalse(self.unit_file.exists())
+        self.assertFalse(self.root.exists())
+
+    @unittest.skipUnless(os.environ.get('GITHUB_ACTIONS') == 'true', 'Actual hosted CI PID1 only')
+    def test_actual_pid1_load_and_restore_absence_without_start(self):
+        # This exercises the real systemd command/parser with an isolated name.
+        # GHA/host and filesystem path ports remain synthetic; never a production proof.
+        import uuid
+        name = 'bridge-dormant-contract-'+uuid.uuid4().hex+'.service'
+        path = Path('/etc/systemd/system')/name
+        with patch.multiple(install, UNIT=name, UNIT_FILE=path), \
+             patch.multiple(install.unit, UNIT=name, UNIT_FILE=path), \
+             patch.object(install, 'command', side_effect=REAL_COMMAND), \
+             patch.object(install, 'observed', side_effect=REAL_OBSERVED):
+            try:
+                result = self.run_install()
+                self.assertEqual(REAL_OBSERVED(), install.unit_state(present=True))
+                self.rollback(result)
+                self.assertEqual(REAL_OBSERVED(), install.unit_state(present=False))
+            finally:
+                if path.exists():
+                    self.assertEqual(REAL_OBSERVED(), install.unit_state(present=True))
+                    self.assertEqual(path.read_bytes(), install.unit.render())
+                    path.unlink()  # Only this test's unique, never-started CI unit.
+                    REAL_COMMAND('/usr/bin/systemctl', 'daemon-reload')
 
     def test_bootstrap_real_isolated_process_and_preimport_tamper_refusal(self):
         result = self.run_install()

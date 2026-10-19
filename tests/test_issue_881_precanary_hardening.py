@@ -1746,7 +1746,13 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 78
+    assert len(shared_workflows) == 79
+    assert '.github/workflows/light-native-service-install.yml' in shared_workflows
+    from ops.light_native_service_history import FILES as DORMANT_FILES
+    for dependency in (*DORMANT_FILES, 'ops/light_native_service_install_runner.py',
+                       'tests/test_light_native_service_history.py', 'tests/test_light_native_service_install.py',
+                       'docs/operations/native-dormant-install-i2-20261019.md'):
+        assert f"'{dependency}'" in runner
     assert '.github/workflows/light-native-retirement-observe.yml' in shared_workflows
     for dependency in ('ops/light_native_retirement_observe_runner.py',
                        'ops/light_native_retirement_live.py', 'ops/light_native_retirement.py',
