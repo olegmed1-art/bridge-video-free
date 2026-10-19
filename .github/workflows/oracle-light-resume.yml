@@ -2,7 +2,7 @@ name: Oracle Light post-terminal resume
 
 on:
   pull_request:
-    paths: ['.github/workflows/oracle-light-resume.yml', 'ops/oracle_light_resume.py', 'tests/test_light_resume.py', 'ops/oracle_light_resume_probe.py', 'ops/autopilot/broker-release.json']
+    paths: ['.github/workflows/oracle-light-resume.yml', 'ops/oracle_light_resume.py', 'tests/test_light_resume.py', 'tests/test_light_resume_db_contract.py', 'tests/fixtures/light_resume_db_contract_0373.json', 'ops/oracle_light_resume_probe.py', 'ops/autopilot/broker-release.json']
   workflow_dispatch:
     inputs:
       operation:
@@ -33,7 +33,7 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin 5eb0e1bb2c2932bd8d02ff187b9cf24f6bc09c7c
           python -m pip install pytest "psycopg[binary]>=3.2,<4"
-          python -m pytest -q tests/test_light_resume.py tests/test_light_stopped_hold_upgrade.py tests/test_light_recovery_probe.py tests/test_light_broker_1703_release.py
+          python -m pytest -q tests/test_light_resume_db_contract.py tests/test_light_resume.py tests/test_light_stopped_hold_upgrade.py tests/test_light_recovery_probe.py tests/test_light_broker_1703_release.py
       - name: Validate shell syntax
         run: |
           ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-resume.yml
