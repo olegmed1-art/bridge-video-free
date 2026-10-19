@@ -2,7 +2,7 @@
 
 Governance: ASSURED; different-model I2 acceptance required. This receipt covers
 only the immutable stopped installation/absence rollback described below.
-Status at this draft: SOURCE REVIEW PENDING; installation NOT PERFORMED;
+Status: DORMANT SOURCE QUALIFIED; installation NOT PERFORMED;
 end-to-end acceptance NOT ESTABLISHED. A historical or conditional review is not
 permission to dispatch a new target. Independently accept the exact merged Git
 source and package SHA before preparing any finite action.
@@ -74,8 +74,42 @@ PR: https://github.com/olegmed1-art/bridge-video-free/pull/2200
   an Oracle installation or full workload/production proof.
 - The42aef84 attempt correctly failed because sudo removed the implicit CI
   marker and the PID1 case skipped. It is not accepted evidence for that case.
-- Final source closure/qualification documentation trigger and pin regression,
-  final different-model source acceptance and final-head CI remain pending.
+- Frozen source6d0642c724bc3bd7fd6d18b5aef499e7d6607eb1,
+  treef42dd939dadbc89bb0cd78009aaaaa130efb81b1: final Linux run39333498065,
+  contract job118337175469, 31 PASS/0 SKIP in1.233s, including the actual isolated
+  never-started PID1 unit load/rollback and complete CI-trigger/pin regression.
+  Production install job118337232285 SKIP. This does not qualify production.
+
+## Independent source acceptance
+
+On2026-10-19 the existing reviewer task `/root/review2193_i2_record`, launched as
+gpt-5.6-sol with high reasoning independently of the GPT-6 implementation, read
+and independently rehashed the frozen6d0642 source. It reported no remaining
+blocking source finding for this narrow dormant installation/absence rollback.
+It traced package/bootstrap closure, history-before-effect/partial barriers,
+original run/job clocks, strict inactive and consumer readback, rollback inode
+and parent-descriptor checks, and both workflow trigger and production-fence
+closure. The initial three source findings and CI/provenance integration findings
+were corrected before this acceptance. The reviewer did not execute tests/CI or
+contact Oracle, DB, provider or IBM. CI results above were read from actual job
+logs separately; source review and operational evidence are distinct.
+
+| Reviewed file | SHA256 |
+| --- | --- |
+| ops/light_native_service_history.py | df1f61218679bfe1f249aab89ee86c1ac10e1321303e9fe1eca0160702268ec3 |
+| ops/light_native_service_bootstrap.py | c6b6416973cf9ccb3d98aded3253b07aca92876ccf9ac8e184ec3522b53ef5e8 |
+| ops/light_native_service_install.py | edf42ec7df79352b7cc9028d3c9af1689038aeabce930f457b29cff3c621ca8f |
+| ops/light_native_service_install_runner.py | 6dfcdd6ebed65eadfce902fda319a8fc17755eb8b8cf0d7026895850db57085e |
+| tests/test_light_native_service_history.py | c05aa60f4ac898f5ede325ebb117d2548325e2ca2551e41dd421b4171df3f69c |
+| tests/test_light_native_service_install.py | 9c5ef4ef83e7007f32761e9fcbebeac7c2e72e363bc48ae75f4f06ea5b32a7fe |
+| .github/workflows/light-native-service-install.yml | 4116cd7f334156f119f7592d598bf8a7fb15195539bf2e75d0227cf64b60958b |
+| ops/issue_881_external_precanary_workflow.sh | fdf74409a4ead715cd3ad6a58c99695dcc691799fd4397ac50719657016b7928 |
+| tests/test_issue_881_precanary_hardening.py | 5f4c612567081253d93b1169f5b72ed01a67ec0e77c050114f15dfd69099203f |
+
+Appending this receipt changes Git source/package/action hashes without changing
+these executable/source bytes. A final doc/hash fidelity check and exact merged
+package acceptance are still required before dispatch. This acceptance cannot
+authorize installation of a future changed code package by reusing this text.
 
 The source/runtime kernels, `_descendant` checks and existing workload authority
 are unchanged. Real DB producer/lease fencing, complete provider inventory,
