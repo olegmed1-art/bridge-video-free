@@ -69,3 +69,34 @@ review artifact. This is a new contemporaneous review record. It is not evidence
 that publicly existed at the earlier merge, and the newer HOST PID1 tests do
 not close the older review claims. A change to the pinned kernel or its
 authority boundaries requires a fresh assessment of this result's applicability.
+
+## Separate source review of the PR2193 claim fixes
+
+The same independently launched model subsequently reviewed the frozen codec
+and workflow-selector fixes. It found no source defect in that narrow scope.
+It did not run tests, CI or Git for this second review, and does not independently
+attest root's reported test execution or the comparison against the base Git
+tree. CI and root's exact-base comparison are separate evidence.
+
+Independently measured reviewed source hashes:
+
+| Artifact | SHA-256 |
+|---|---|
+| ops/light_native_lane_execution.py | `b458ec59ee57576460d3e86e6894740a55b795341d387d46c8c605e686a6e237` |
+| ops/light_native_lane_controller.py | `038d30633c9acb8629f99b957e9eb613583ca8a729ac96412476c4f840e41f6a` |
+| ops/light_native_lane_issuer.py | `43550749d5e98742ae983435edf06d55801b35e85540698f18a6459b78f68dd3` |
+| tests/test_light_native_plan_codec.py | `c05bc1f19cc64f7717805942956f1574c0bc37a9efb136a79bd0b58ed57a454d` |
+| .github/workflows/native-host-preflight.yml | `bb20351c66e1050fcb9fd9d43fb98466f6dd77a30be34193a0c0583a95394f2b` |
+| tests/test_native_host_preflight_scope.py | `ba293f5acca50c83bca6ba600a91f8f91b24a30dbb7344c50dc10313bc8f0144` |
+
+The review checked the dedicated historical ASCII Plan decoder, fixed refusal
+boundary, unchanged generic UTF-8 codec, accepted-hash verification before Plan
+decoding, unchanged Plan bytes into full intake.Plan/Agreement validation, and
+the targeted actual-code test harnesses. It also checked trigger/selector
+coverage of all 14 source paths derived from the loader calls and the portable
+codec job's separation from legacy, transition and HOST proofs.
+
+This is I2 source review of those exact fixes, not production, installation,
+database, provider, admission or PID1 acceptance. The AST harnesses use synthetic
+package and observation ports. Their scope is the pure codecs, validators and
+selector paths they actually execute.
