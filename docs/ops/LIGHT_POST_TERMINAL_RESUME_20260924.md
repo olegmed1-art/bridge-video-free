@@ -34,8 +34,32 @@ unit and ordered environment files, broker pins, service identity, route lock in
 and Neon epoch0. The read-only probe executes reviewed administrative source as
 the restricted service UID against installed imports, requiring the original
 canary DONE with attempts1/epoch1, zero cost/leases, no live tasks, zero capacity
-reservations, exact retired-fence digest, manifest receipt and broker health.
+reservations, exact current database contract, manifest receipt and broker health.
 The immutable installed recovery probe is not modified.
+
+### Contract update, 2026-10-19
+
+Migration 0373 supersedes claim digest `44722551...` with `8a194b02...`.
+An independent comparison against its saved definitions confirmed that task and
+planner RPC signatures and existing worker permissions are unchanged. The delta
+adds READ COMMITTED enforcement, mailbox serialization and active queue capacity
+checks; migration 0374 changes health reporting only. Resume now pins the full
+definitions and metadata of both claim functions, the queue-capacity helper,
+capacity-trigger function, active view and enabled unconditional AFTER INSERT
+trigger. Recorded definitions are in
+`tests/fixtures/light_resume_db_contract_0373.json`.
+
+The probe rejects DSN startup/routing overrides before connection so its read-only
+options cannot hide the worker's actual transaction isolation. Catalog output is
+canonicalized with a session-local `search_path=pg_catalog`. No migration-table
+grant, new worker version or database change is required for this source repair.
+
+An empty task queue is insufficient when a planner can claim READY/BLOCKED
+project work. Before activation, fresh independent readback must confirm the
+inventory requirements above and effective protection of any held work. A
+compatibility repair does not authorize changing held work or planner enablement.
+A passing compatibility probe alone is not GO. Keep operational inventory and
+live decision evidence in the authorized private evidence store.
 
 Activation performs another probe and main/configuration CAS under the existing
 route lock before atomically changing only HOLD to ACTIVE in the existing drop-in.
