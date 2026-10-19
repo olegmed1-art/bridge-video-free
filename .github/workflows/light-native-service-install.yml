@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       - name: Linux root history, dormant bootstrap and rollback contracts
         run: |
-          sudo -n /usr/bin/python3 -I -S -B - <<'PY'
+          sudo -n env NATIVE_DORMANT_PID1_CONTRACT=ci /usr/bin/python3 -I -S -B - <<'PY'
           import os, sys, unittest
           sys.path.insert(0, os.getcwd())
           suite = unittest.TestSuite(unittest.defaultTestLoader.discover('tests', pattern=pattern)

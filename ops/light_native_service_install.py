@@ -31,7 +31,7 @@ UNIT_LOOKUP = tuple(Path(p) for p in ('/etc/systemd/system.control', '/run/syste
     '/run/systemd/generator', '/usr/local/lib/systemd/system', '/usr/lib/systemd/system',
     '/lib/systemd/system', '/run/systemd/generator.late'))
 WORKFLOW = '.github/workflows/light-native-service-install.yml'
-WORKFLOW_SHA256 = 'c50e8dd94bef9b6749cd23af1ec47b11d419812411cee3314ccc5a3a3614f7ee'
+WORKFLOW_SHA256 = '347f1dfad81263c67f6168a7b16c9bbbdb3cfd969abf477f1e85725599d3e9fb'
 ASSETS = {
     'launcher.py': 'ops/light_native_service_bootstrap.py',
     'light_native_service_authority.py': 'ops/light_native_service_authority.py',
@@ -122,7 +122,8 @@ def show(name, fields):
 
 def observed():
     return show(UNIT, ('LoadState', 'ActiveState', 'SubState', 'MainPID', 'UnitFileState', 'FragmentPath',
-        'DropInPaths', 'SourcePath', 'Transient', 'NeedDaemonReload'))
+        'DropInPaths', 'SourcePath', 'Transient', 'NeedDaemonReload', 'ExecMainStartTimestampMonotonic',
+        'ExecMainPID', 'InvocationID', 'NRestarts'))
 
 
 def consumer_identity():
@@ -140,7 +141,8 @@ def consumer_identity():
 def unit_state(*, present):
     return dict(LoadState='loaded' if present else 'not-found', ActiveState='inactive', SubState='dead',
         MainPID='0', UnitFileState='disabled' if present else '', FragmentPath=str(UNIT_FILE) if present else '',
-        DropInPaths='', SourcePath='', Transient='no', NeedDaemonReload='no')
+        DropInPaths='', SourcePath='', Transient='no', NeedDaemonReload='no',
+        ExecMainStartTimestampMonotonic='0', ExecMainPID='0', InvocationID='', NRestarts='0')
 
 
 def absent():

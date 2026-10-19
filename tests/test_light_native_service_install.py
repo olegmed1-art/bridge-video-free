@@ -235,7 +235,7 @@ class LinuxInstallationContracts(unittest.TestCase):
         self.assertFalse(self.unit_file.exists())
         self.assertFalse(self.root.exists())
 
-    @unittest.skipUnless(os.environ.get('GITHUB_ACTIONS') == 'true', 'Actual hosted CI PID1 only')
+    @unittest.skipUnless(os.environ.get('NATIVE_DORMANT_PID1_CONTRACT') == 'ci', 'Explicit isolated CI PID1 only')
     def test_actual_pid1_load_and_restore_absence_without_start(self):
         # This exercises the real systemd command/parser with an isolated name.
         # GHA/host and filesystem path ports remain synthetic; never a production proof.
