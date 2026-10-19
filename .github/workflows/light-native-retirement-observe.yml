@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/light-native-retirement-observe.yml'
       - 'ops/light_native_lane_*.py'
+      - 'ops/light_native_issuer_inventory_runner.py'
       - 'ops/light_native_retirement*.py'
       - 'ops/light_native_bounded.py'
       - 'tests/test_light_native_retirement*.py'
@@ -39,7 +40,7 @@ on:
         required: true
         type: string
       retirement_reference_json:
-        description: Public retirement pins and exact finite Agreement only; never private records or free text
+        description: Read-only retirement reference or issuer-input inventory with exact finite Agreement; never private records
         required: true
         type: string
 
@@ -96,7 +97,45 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Select the fixed read-only observation
+        id: observation
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from ops import light_native_retirement as r
+          event=r.parse(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes(),limit=1024*1024)
+          raw=event['inputs']['retirement_reference_json'].encode('utf-8')
+          value=r.parse(raw,limit=8192)
+          inventory=value.get('action')=='inventory-issuer-reference'
+          if inventory:r.issuer_inventory_reference(raw)
+          else:
+              from ops.light_native_retirement_live import read_only_reference
+              read_only_reference(raw)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as stream:
+              stream.write('inventory='+str(inventory).lower()+'\n')
+          PY
+      - name: Inventory retained issuer inputs without database capabilities
+        if: steps.observation.outputs.inventory == 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          git fetch --no-tags origin f82d58efabf21ba62fd242a4fa02a8e7cfda1d23
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          PYTHONPATH=. python ops/light_native_issuer_inventory_runner.py "$work/key" "$work/known_hosts"
       - name: Observe retirement without journal, DB or control writes
+        if: steps.observation.outputs.inventory != 'true'
         env:
           NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
