@@ -111,6 +111,10 @@ def entry(value):
 
 
 def inventory_retained_issuer(view,policy_sha256,index,runtime_source,runtime_sha256):
+    return _retained_issuer_inputs(view,policy_sha256,index,runtime_source,runtime_sha256)[0]
+
+
+def _retained_issuer_inputs(view,policy_sha256,index,runtime_source,runtime_sha256):
     """Observe fixed retained inputs; content pins never confer acceptance.
 
     The authenticated, bounded owner caller supplies a read-only Snapshot and
@@ -205,7 +209,7 @@ def inventory_retained_issuer(view,policy_sha256,index,runtime_source,runtime_sh
         actual_proposal_sha256=None if actual is None else sha(actual),
         history_verified=False,controls_verified=False,incident_closed=False,
         execution_acknowledged=False,new_task_authorized=False)
-    return public_issuer_inventory(result,policy_sha256,index)
+    return public_issuer_inventory(result,policy_sha256,index),proposed_bytes
 
 
 def public_issuer_inventory(value,policy_sha256,index):
