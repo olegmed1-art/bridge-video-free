@@ -72,11 +72,9 @@ jobs:
           grep -F 'gh run download "$GITHUB_RUN_ID"' "$train"
           ! grep -F 'PREPARED_RUN_ID' "$train"
 
-          grep -F 'pull_request_target:' "$prepare"
+          ! grep -Eq '^  (pull_request_target|push|schedule|repository_dispatch):' "$prepare"
           ! grep -Eq '^  pull_request:$' "$prepare"
           grep -F 'PILOT_DRIVE_LOCATOR' "$prepare"
-          grep -F "github.event.pull_request.head.repo.full_name == github.repository" "$prepare"
-          grep -F "github.event.pull_request.user.login == 'olegmed1-art'" "$prepare"
           grep -F 'github.event.pull_request.base.sha' "$prepare"
           grep -F 'github.event.pull_request.head.sha' "$prepare"
           grep -F 'github.event.pull_request.number' "$prepare"
@@ -103,8 +101,12 @@ jobs:
           ! grep -F 'secrets.' "$attest"
 
           python - <<'PY'
+          import sys
           from pathlib import Path
+          sys.path.insert(0, 'dds_training')
+          from test_architecture_selftest import assert_preparation_quarantine
           text = Path('.github/workflows/dds-main-30k-prepare.yml').read_text(encoding='utf-8')
+          assert_preparation_quarantine(text)
           base_checkout = text.index('Checkout trusted base before Drive credential exposure')
           secret = text.index('secrets.GOOGLE_DRIVE_OAUTH_JSON')
           candidate_checkout = text.index('Checkout exact candidate after Drive secret scope has ended')
@@ -113,7 +115,6 @@ jobs:
           context_upload = text.index('Upload trusted PR attestation context')
           assert base_checkout < secret < candidate_checkout < verify < context < context_upload
           assert 'secrets.GOOGLE_DRIVE_OAUTH_JSON' not in text[candidate_checkout:]
-          assert 'pull_request_target' in text
           assert 'dds-prsafe-drive-attestation-context-v1' in text
           assert 'dds-prsafe-attestation-' in text
           assert 'retention-days: 7' in text
