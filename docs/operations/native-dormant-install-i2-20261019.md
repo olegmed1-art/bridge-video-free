@@ -2,7 +2,7 @@
 
 Governance: ASSURED; different-model I2 acceptance required. This receipt covers
 only the immutable stopped installation/absence rollback described below.
-Status: DORMANT SOURCE QUALIFIED; installation NOT PERFORMED;
+Status: DORMANT SOURCE REQUALIFICATION PENDING; installation NOT PERFORMED;
 end-to-end acceptance NOT ESTABLISHED. A historical or conditional review is not
 permission to dispatch a new target. Independently accept the exact merged Git
 source and package SHA before preparing any finite action.
@@ -111,6 +111,13 @@ Appending this receipt changes Git source/package/action hashes without changing
 these executable/source bytes. A final doc/hash fidelity check and exact merged
 package acceptance are still required before dispatch. This acceptance cannot
 authorize installation of a future changed code package by reusing this text.
+
+After the source acceptance above, automated review found a stale run/main
+observation before rollback renames. The correction authenticates authority
+again immediately before each separate move, then repeats local source checks.
+Cancellation after the first move retains the partial outcome for reconciliation.
+The previous accepted pins remain historical; changed installer/test bytes need
+fresh I2 and Linux qualification before merge or any dispatch.
 
 The source/runtime kernels, `_descendant` checks and existing workload authority
 are unchanged. Real DB producer/lease fencing, complete provider inventory,

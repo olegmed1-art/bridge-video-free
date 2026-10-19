@@ -410,11 +410,14 @@ def _rollback(raw, accepted, package_raw, guard):
     current()
     history.retain(target/'rollback-intent.json', intent)
     current(reserve=90)
-    require({path.name for path in ROOT.iterdir()} == set(initial)
-            and {name: history.signature((ROOT/name).lstat()) for name in initial} == initial
-            and history.read(ROOT/'dormant-installation.json') == record_raw
-            and all(history.sha(history.read(ROOT/name)) == digest for name, digest in expected.items())
-            and history.sha(unit_bytes()) == record['unit_sha256']
+    def root_unchanged():
+        require({path.name for path in ROOT.iterdir()} == set(initial)
+                and {name: history.signature((ROOT/name).lstat()) for name in initial} == initial
+                and history.read(ROOT/'dormant-installation.json') == record_raw
+                and all(history.sha(history.read(ROOT/name)) == digest for name, digest in expected.items()),
+                'NATIVE_INSTALL_DRIFT')
+    root_unchanged()
+    require(history.sha(unit_bytes()) == record['unit_sha256']
             and history.read(target/'manifest.json') == before_raw
             and history.read(target/'complete.json') == complete_raw
             and history.read(target/'installed.json') == installed_raw
@@ -422,15 +425,21 @@ def _rollback(raw, accepted, package_raw, guard):
             and not (target/'retired-root').exists() and not (target/'retired-root').is_symlink()
             and not (target/'retired-unit.service').exists() and not (target/'retired-unit.service').is_symlink(),
             'NATIVE_INSTALL_DRIFT')
+    # The potentially blocking systemctl observation above is not a last-second
+    # run/main check. Observe authenticated authority again, then repeat only
+    # local file checks before the material move; no command/network gap here.
+    current(reserve=90)
+    root_unchanged()
+    require(history.sha(unit_bytes()) == record['unit_sha256']
+            and history.read(target/'manifest.json') == before_raw
+            and history.read(target/'complete.json') == complete_raw
+            and history.read(target/'installed.json') == installed_raw, 'NATIVE_INSTALL_DRIFT')
     move_static(UNIT_FILE, target/'retired-unit.service', unit_initial)
-    # No remote observation between these source checks and each rename. The
-    # operation lock covers cooperative writers; arbitrary hostile root writes
-    # are outside this contract and cannot be atomically fenced by pathname IO.
-    require({path.name for path in ROOT.iterdir()} == set(initial)
-            and {name: history.signature((ROOT/name).lstat()) for name in initial} == initial
-            and all(history.sha(history.read(ROOT/name)) == digest for name, digest in expected.items())
-            and history.read(ROOT/'dormant-installation.json') == record_raw
-            and history.sha(unit_bytes(path=target/'retired-unit.service')) == record['unit_sha256'],
+    # Each rename is a separate material boundary. Cancellation/main drift here
+    # preserves the partial unit move and ROOT in place for reconciliation.
+    current(reserve=90)
+    root_unchanged()
+    require(history.sha(unit_bytes(path=target/'retired-unit.service')) == record['unit_sha256'],
             'NATIVE_INSTALL_DRIFT')
     move_static(ROOT, target/'retired-root', history.signature(ROOT.lstat()))
     current(reserve=90)

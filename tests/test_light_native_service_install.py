@@ -235,6 +235,59 @@ class LinuxInstallationContracts(unittest.TestCase):
         self.assertFalse(self.unit_file.exists())
         self.assertFalse(self.root.exists())
 
+    def test_run_cancellation_during_systemctl_readback_refuses_first_rename(self):
+        result = self.run_install()
+        cancelled, reads = [], []
+        def observe():
+            reads.append(1)
+            if len(reads) == 2:
+                cancelled.append(True)
+            return self.observed()
+        def authority():
+            if cancelled:
+                raise h.Refusal('RUN_NOT_RUNNING')
+        with patch.object(install, 'observed', side_effect=observe), \
+             patch.object(self.guard, 'assert_current', side_effect=authority), self.assertRaises(h.Refusal):
+            self.rollback(result)
+        self.assertEqual(len(reads), 2)
+        self.assertTrue(self.unit_file.exists())
+        self.assertTrue(self.root.exists())
+        self.assertFalse((self.history/result['history_sha256']/'retired-unit.service').exists())
+
+    def test_main_change_after_first_rename_preserves_partial_outcome(self):
+        result = self.run_install()
+        changed = []
+        original = install.move_static
+        def move(*args):
+            original(*args)
+            changed.append(True)
+        def authority():
+            if changed:
+                raise h.Refusal('MAIN_CHANGED')
+        with patch.object(install, 'move_static', side_effect=move), \
+             patch.object(self.guard, 'assert_current', side_effect=authority), self.assertRaises(h.Refusal):
+            self.rollback(result)
+        target = self.history/result['history_sha256']
+        self.assertEqual(len(changed), 1)
+        self.assertFalse(self.unit_file.exists())
+        self.assertTrue((target/'retired-unit.service').exists())
+        self.assertTrue(self.root.exists())
+        self.assertFalse((target/'retired-root').exists())
+        self.assertFalse((target/'rollback-done.json').exists())
+
+    def test_last_api_observation_cannot_invalidate_local_source_check(self):
+        result = self.run_install()
+        calls = []
+        def interleave():
+            calls.append(1)
+            if len(calls) == 5:
+                self.unit_file.write_bytes(b'changed during last API observation\n')
+        with patch.object(self.guard, 'assert_current', side_effect=interleave), self.assertRaises(h.Refusal):
+            self.rollback(result)
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(self.unit_file.exists())
+        self.assertFalse((self.history/result['history_sha256']/'retired-unit.service').exists())
+
     @unittest.skipUnless(os.environ.get('NATIVE_DORMANT_PID1_CONTRACT') == 'ci', 'Explicit isolated CI PID1 only')
     def test_actual_pid1_load_and_restore_absence_without_start(self):
         # This exercises the real systemd command/parser with an isolated name.
