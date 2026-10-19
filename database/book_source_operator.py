@@ -1,9 +1,13 @@
-"""One-shot, fail-closed book source identity registration.
+"""One-shot, fail-closed PDF identity reconciliation for an existing book source.
 
 Run with python -m database.book_source_operator --help. The sole connection
 source is the existing BRIDGE_WORKER_DATABASE_URL. No credentials are created,
 copied or printed. This module never publishes WORLD, activates canon or delivers
 an outbox. Its receipts are operator inputs, not an authenticity mechanism.
+
+The pinned worker supports existing sources only. Missing-source creation is
+unavailable under the current admin-owned school privilege boundary; the
+--register-missing-source option is rejected locally before inputs or connection.
 """
 from __future__ import annotations
 
@@ -189,12 +193,12 @@ def check_identity(connection):
         raise OperatorError("BOOK_SOURCE_OPERATOR_ACTUAL_IDENTITY_MISMATCH")
 
 
-def check_capabilities(connection, *, register_missing_source):
+def check_capabilities(connection):
     """Read effective privileges before identity writes, without changing grants.
 
-    SHARE ROW EXCLUSIVE table locks require table UPDATE; school FOR SHARE
-    additionally needs UPDATE on at least one column when registering a source.
-    Existing-source mode deliberately does not require school write privileges.
+    SHARE ROW EXCLUSIVE table locks require table UPDATE on the identity tables.
+    This existing-source operator neither creates a source nor requests school
+    write privileges; source creation needs a separately reviewed operation.
     """
     with connection.cursor() as cur:
         cur.execute("""
@@ -207,15 +211,11 @@ def check_capabilities(connection, *, register_missing_source):
                 pg_catalog.has_table_privilege(current_user,'public.source','UPDATE'),
                 pg_catalog.has_table_privilege(current_user,'public.asset','UPDATE'),
                 pg_catalog.has_table_privilege(current_user,'public.source_asset','UPDATE'),
-                pg_catalog.has_table_privilege(current_user,'public.source_identity','SELECT'),
-                pg_catalog.has_table_privilege(current_user,'public.source','INSERT'),
-                pg_catalog.has_table_privilege(current_user,'public.school','SELECT'),
-                pg_catalog.has_any_column_privilege(current_user,'public.school','UPDATE')
+                pg_catalog.has_table_privilege(current_user,'public.source_identity','SELECT')
             """)
         actual = cur.fetchone()
-    required = 12 if register_missing_source else 9
-    if (not isinstance(actual, tuple) or len(actual) != 12
-            or any(value is not True for value in actual[:required])):
+    if (not isinstance(actual, tuple) or len(actual) != 9
+            or any(value is not True for value in actual)):
         raise OperatorError("BOOK_SOURCE_OPERATOR_CAPABILITY_MISSING")
 
 
@@ -236,6 +236,10 @@ def _inputs(args):
 
 
 def operate(args, state):
+    # The pinned worker cannot hold the school-state lock needed for creation.
+    # Reject this mode even if a caller supplies broader observed privileges.
+    if args.register_missing_source:
+        raise OperatorError("BOOK_SOURCE_OPERATOR_MISSING_SOURCE_UNAVAILABLE")
     with Deadline(args.timeout_seconds) as deadline:
         bundle, receipt, identity, publication_hash = _inputs(args)
         reject_libpq_environment()
@@ -250,14 +254,14 @@ def operate(args, state):
         ) as connection:
             deadline.connection = connection
             check_identity(connection)
-            check_capabilities(connection, register_missing_source=args.register_missing_source)
+            check_capabilities(connection)
             if connection.info.transaction_status != 0:
                 raise OperatorError("BOOK_SOURCE_OPERATOR_REQUIRES_IDLE_CONNECTION")
 
             def before_commit():
                 deadline.remaining()
                 check_identity(connection)
-                check_capabilities(connection, register_missing_source=args.register_missing_source)
+                check_capabilities(connection)
                 deadline.remaining()
 
             deadline.remaining()
@@ -266,7 +270,7 @@ def operate(args, state):
                 connection, bundle, receipt, school_id=args.school_id,
                 source_id=args.source_id, identity_receipt=identity,
                 dry_run=not args.commit, before_commit=before_commit,
-                register_missing_source=args.register_missing_source,
+                register_missing_source=False,
             )
             state["phase"] = "complete"
     return {
@@ -279,7 +283,7 @@ def operate(args, state):
         "publication_hash": publication_hash,
         "school_id": args.school_id, "source_id": args.source_id,
         "asset_id": identity["asset_id"],
-        "max_new_rows": {"source": int(args.register_missing_source),
+        "max_new_rows": {"source": 0,
                          "asset": 1, "source_asset": 1},
         "timeout_seconds": args.timeout_seconds,
         "new_source_rows": result["new_source_rows"],
@@ -315,9 +319,9 @@ def parser():
                  "target-endpoint-id", "principal"):
         value.add_argument("--" + name, required=True)
     value.add_argument("--commit", action="store_true",
-                       help="explicitly commit identity rows; default is forced rollback")
+                       help="commit PDF identity rows for an existing source; default is forced rollback")
     value.add_argument("--register-missing-source", action="store_true",
-                       help="allow at most one new reviewed source row")
+                       help="unavailable under the current worker privilege model; rejected locally")
     value.add_argument("--timeout-seconds", type=_timeout, default=30)
     return value
 

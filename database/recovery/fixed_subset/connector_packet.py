@@ -8,7 +8,12 @@ import build_recovery as recovery
 ROOT = Path(__file__).resolve().parent
 PINNED = {
     "0059_universal_video_terminal_size_guard": "be1275d293a6aa1a27d5e41b0d2f725179fd3e6b56dd849fe8f4d87c64819a08",
-    "0060_fixed_subset_admission": "27932f2b5f22f383d9f84341c0ae6e88dc346c7940ec92490edc0a3d37358dfe",
+    "0060_fixed_subset_admission": "cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc",
+}
+LEGACY_0060_SHA256 = "c2960f3b78a34985d1afd78930f896f38eebeae2cbd90f83c44a011fe7d779a7"
+INSTALLED_0060_VERSIONS = {
+    LEGACY_0060_SHA256: "legacy-744d068a",
+    PINNED["0060_fixed_subset_admission"]: "new-scoped-claim",
 }
 TEMP_GRANT = "GRANT video_subset_owner TO CURRENT_USER WITH ADMIN FALSE, INHERIT TRUE, SET FALSE GRANTED BY CURRENT_USER"
 TEMP_REVOKE = "REVOKE video_subset_owner FROM CURRENT_USER GRANTED BY CURRENT_USER RESTRICT"
@@ -25,14 +30,16 @@ OWNER_ONLY = ("subset_json", "subset_sha", "subset_shape", "subset_capability", 
               "subset_worker_eligible", "subset_lock_lease")
 
 
-def function_acl_matrix(*, recovered=False):
+def function_acl_matrix(*, recovered=False, scoped_claim=True):
     """Exact direct ACL tuples, including unknown grantees, grantors and GO."""
-    names = sorted(set(FUNCTION_CAPS) | set(OWNER_ONLY))
+    capabilities = {n: r for n, r in FUNCTION_CAPS.items()
+                    if scoped_claim or n != "subset_claim_job"}
+    names = sorted(set(capabilities) | set(OWNER_ONLY))
     if recovered:
         names.remove("claim_job")
     values = ",".join("(" + recovery.quote(n) + ")" for n in names)
     caps = " UNION ALL SELECT p.oid,c.role_name::regrole::oid,p.proowner,'EXECUTE'::text,false FROM owned p JOIN (VALUES " + ",".join(
-        "(" + recovery.quote(n) + "," + recovery.quote(r) + ")" for n, r in FUNCTION_CAPS.items()) + ") c(name,role_name) ON c.name=p.proname"
+        "(" + recovery.quote(n) + "," + recovery.quote(r) + ")" for n, r in capabilities.items()) + ") c(name,role_name) ON c.name=p.proname"
     return f"""(WITH names(name) AS (VALUES {values}), owned AS (
  SELECT p.* FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
  WHERE n.nspname='video_queue' AND p.proowner='video_subset_owner'::regrole),
@@ -48,9 +55,16 @@ def function_acl_matrix(*, recovered=False):
 
 def function_default_acl_safe():
     """No inherited EXECUTE recipient for future queue functions."""
-    return """NOT EXISTS(SELECT FROM pg_default_acl d
+    return """EXISTS(SELECT FROM pg_default_acl d
+      WHERE d.defaclrole='video_subset_owner'::regrole AND d.defaclnamespace=0
+        AND d.defaclobjtype='f' AND NOT EXISTS (
+          SELECT FROM aclexplode(d.defaclacl) a
+          WHERE a.grantee<>d.defaclrole OR a.grantor<>d.defaclrole
+             OR a.privilege_type<>'EXECUTE' OR a.is_grantable))
+    AND NOT EXISTS(SELECT FROM pg_default_acl d
       CROSS JOIN LATERAL aclexplode(d.defaclacl) a
-      WHERE d.defaclrole=session_user::regrole AND d.defaclobjtype='f'
+      WHERE d.defaclrole IN (session_user::regrole,'video_subset_owner'::regrole)
+        AND d.defaclobjtype='f'
         AND (d.defaclnamespace=0 OR d.defaclnamespace='video_queue'::regnamespace)
         AND (a.grantee<>d.defaclrole OR a.grantor<>d.defaclrole
              OR a.privilege_type<>'EXECUTE' OR a.is_grantable))"""
@@ -111,7 +125,8 @@ def bare(statement):
 
 
 def migration_statements(key):
-    raw = (ROOT / "source/database/migrations" / (key + ".sql")).read_bytes()
+    directory = "candidates" if key == "0060_fixed_subset_admission" else "migrations"
+    raw = (ROOT / "source/database" / directory / (key + ".sql")).read_bytes()
     if hashlib.sha256(raw).hexdigest() != PINNED[key]:
         raise ValueError("migration checksum changed")
     text = raw.decode()
@@ -235,10 +250,20 @@ def install_payload():
     return {**{k: v for k, v in recovery.target().items() if k != 'endpoint_id'}, "sql_statements": queries}
 
 
-def verify_payload(receipt):
+def require_current_0060(installed_0060_checksum):
+    """Route by observed ledger bytes; never infer version from receipt shape."""
+    version = INSTALLED_0060_VERSIONS.get(installed_0060_checksum)
+    if version == "legacy-744d068a":
+        raise ValueError("LEGACY_0060_REQUIRES_PINNED_744d068a_VERIFIER_OR_RECOVERY")
+    if version != "new-scoped-claim":
+        raise ValueError("UNRECOGNIZED_0060_HISTORY")
+    return version
+
+
+def verify_payload(receipt, *, installed_0060_checksum):
     """Same transient grant as recovery; no persistent reader/owner membership."""
     # Reuse all recovery admission checks, then stop before the recovery body.
-    candidate = recover_payload(receipt)
+    candidate = recover_payload(receipt, installed_0060_checksum=installed_0060_checksum)
     body = split_sql((ROOT / "recovery" / (recovery.KEY + ".sql")).read_text())
     index = candidate["sql_statements"].index(body[0])
     candidate["sql_statements"] = candidate["sql_statements"][:index] + [TEMP_REVOKE,
@@ -247,7 +272,8 @@ def verify_payload(receipt):
     return candidate
 
 
-def recover_payload(receipt):
+def recover_payload(receipt, *, installed_0060_checksum):
+    require_current_0060(installed_0060_checksum)
     if set(receipt) != {"before_old_data", "data_digest", "catalog_md5", "target", "state"}:
         raise ValueError("invalid receipt shape")
     if receipt["state"] != "INSTALLED_RUNTIME_HOLD" or receipt["target"] != recovery.target()["branch_id"] or not re.fullmatch(r"[0-9a-f]{32}", receipt["catalog_md5"]):
@@ -262,7 +288,7 @@ def recover_payload(receipt):
                          require(f"{catalog_digest()}={recovery.quote(receipt['catalog_md5'])}", "RECOVERY_CATALOG_DRIFT"),
                          TEMP_GRANT,
                          "LOCK TABLE video_queue.subset_approval,video_queue.source_observation,video_queue.subset_admission,video_queue.source_reservation IN ACCESS EXCLUSIVE MODE",
-                         require(function_acl_matrix(), "RECOVERY_EXACT_FUNCTION_ACL"),
+                         require(f"{function_acl_matrix()} AND {function_default_acl_safe()}", "RECOVERY_EXACT_FUNCTION_ACL"),
                          require(inert_subset(), "RECOVERY_RUNTIME_USED"), require(drain(), "RECOVERY_NOT_DRAINED"),
                          require(reservation_map(), "RECOVERY_RESERVATION_DRIFT"),
                          require(f"{recovery.data_digest_sql()}={data}", "RECOVERY_DATA_DRIFT"),
@@ -272,7 +298,7 @@ def recover_payload(receipt):
     queries.append(require(history_matches(PINNED), 'RECOVERY_FULL_HISTORY_DRIFT'))
     queries += split_sql(raw.decode())
     queries += [require(recovery.legacy_catalog_sql(baseline), "RECOVERY_LEGACY_CATALOG_MISMATCH"),
-                require(function_acl_matrix(recovered=True), "RECOVERY_SUBSET_NOT_DISABLED"),
+                require(f"{function_acl_matrix(recovered=True)} AND {function_default_acl_safe()}", "RECOVERY_SUBSET_NOT_DISABLED"),
                 require(f"{recovery.data_digest_sql()}={data}", "RECOVERY_HISTORY_CHANGED"),
                 f"INSERT INTO public.schema_migration(migration_key,checksum) VALUES({recovery.quote(recovery.KEY)},{recovery.quote(expected_hash)})",
                 f"INSERT INTO pg_temp.uv_receipt SELECT jsonb_build_object('state','LEGACY_CAPABILITIES_RECOVERED_SUBSET_DISABLED','data_digest',{recovery.data_digest_sql()},'legacy_catalog_matches',true)",

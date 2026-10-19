@@ -13,6 +13,12 @@ PRIVATE = "SYNTHETIC_PRIVATE_VALUE"
 BAD_TEXT = "postgresql://synthetic:" + PRIVATE + "@example.invalid/db\npassword=" + PRIVATE
 CAPACITY = "autopilot_mailbox_capacity"
 BACKLOG = "autopilot_planner_backlog"
+TRANSPORT = "autopilot_transport_history"
+
+
+def mailbox_dsn():
+    return ("postgresql://autopilot_callback_login:synthetic-" + PRIVATE + "@"
+            + route.SOURCE + "/neondb?sslmode=require&channel_binding=require")
 
 
 class UnprintableError(RuntimeError):
@@ -53,8 +59,8 @@ class DiagnosticContract(unittest.TestCase):
                 code = exc.code
         return code, stdout.getvalue(), stderr.getvalue()
 
-    def assert_stage(self, result, stage):
-        self.assertEqual(result, (1, "", "AUTOPILOT_DATABASE_ROUTING_FAILED stage=" + stage + "\n"))
+    def assert_stage(self, result, stage, detail=""):
+        self.assertEqual(result, (1, "", "AUTOPILOT_DATABASE_ROUTING_FAILED stage=" + stage + detail + "\n"))
 
     def test_argument_and_context_failures_emit_only_fixed_stage(self):
         self.assert_stage(self.cli(BAD_TEXT, BAD_TEXT), "ARGUMENTS")
@@ -75,7 +81,7 @@ class DiagnosticContract(unittest.TestCase):
         self.assertEqual({stage.value for stage in route.RoutingStage}, {
             "ARGUMENTS", "CONTEXT", "SSH_KEY", "SSH_HOST_KEY", "LEASE_START",
             "LEASE_HEADER", "TARGET_SETUP", "CONSUMER", "ROUTE_WAIT",
-            "MAILBOX_CONNECT", "MAILBOX_QUERY", "MAILBOX_RESULT", "UNKNOWN",
+            "MAILBOX_DRIVER", "MAILBOX_DSN", "MAILBOX_CONNECT", "MAILBOX_QUERY", "MAILBOX_RESULT", "UNKNOWN",
         })
         for stage in [*route.RoutingStage, BAD_TEXT, UnprintableError(BAD_TEXT)]:
             with self.subTest(stage_type=type(stage).__name__):
@@ -124,19 +130,25 @@ class DiagnosticContract(unittest.TestCase):
         return conn.cursor.return_value.__enter__.return_value
 
     def test_mailbox_connection_and_query_errors_never_echo_credentials(self):
-        with patch.dict(os.environ, {"DATABASE_URL": BAD_TEXT}):
+        with patch.dict(os.environ, {"DATABASE_URL": mailbox_dsn()}):
             self.connect.side_effect = UnprintableError(BAD_TEXT)
-            self.assert_stage(self.cli("--mailbox-read"), "MAILBOX_CONNECT")
+            self.assert_stage(self.cli("--mailbox-read"), "MAILBOX_CONNECT", " error_type=OTHER sqlstate=NONE")
             cur = self.mailbox_cursor()
             cur.execute.side_effect = UnprintableError(BAD_TEXT)
-            self.assert_stage(self.cli("--mailbox-read"), "MAILBOX_QUERY")
+            self.assert_stage(self.cli("--mailbox-read"), "MAILBOX_QUERY", " error_type=OTHER sqlstate=NONE")
+
+    def test_mailbox_invalid_private_dsn_fails_before_database_call(self):
+        with patch.dict(os.environ, {"DATABASE_URL": BAD_TEXT}):
+            self.assert_stage(self.cli("--mailbox-read"), "MAILBOX_DSN", " error_type=ValueError sqlstate=NONE")
+        self.connect.assert_not_called()
+        self.popen.assert_not_called()
 
     def test_mailbox_result_failure_and_success_protocol_are_preserved(self):
-        with patch.dict(os.environ, {"DATABASE_URL": BAD_TEXT}):
+        with patch.dict(os.environ, {"DATABASE_URL": mailbox_dsn()}):
             cur = self.mailbox_cursor()
             for rows in ([], [(1, 2, 3, BAD_TEXT)], [(1, 2, 3, "bad|value")]):
                 cur.fetchall.return_value = rows
-                self.assert_stage(self.cli("--mailbox-read"), "MAILBOX_RESULT")
+                self.assert_stage(self.cli("--mailbox-read"), "MAILBOX_RESULT", " error_type=OTHER sqlstate=NONE")
             cur.fetchall.return_value = [(881, 81, 100, "PREPARE_ROTATION")]
             self.assertEqual(self.cli("--mailbox-read"), (0, "881|81|100|PREPARE_ROTATION\n", ""))
             self.assertIn("mailbox_rotation_readiness()", cur.execute.call_args.args[0])
@@ -223,10 +235,31 @@ class DiagnosticContract(unittest.TestCase):
         import re
         self.assertEqual(set(re.findall(r"details->'([^']+)'", health.AUTOPILOT_COUNTER_QUERY)), {
             "used_dispatches", "max_dispatches", "remaining", "paused_count", "open_actionable_count",
+            "legacy_mailbox_commands", "warning_threshold",
         })
         self.assertNotRegex(health.AUTOPILOT_COUNTER_QUERY, r"\bdetails\s*[,\n]")
         for field in ("planner_decision", "mailbox_pr", "readiness", "job"):
             self.assertNotIn(field, health.AUTOPILOT_COUNTER_QUERY)
+
+    def test_transport_warning_names_signal_and_bounded_counts(self):
+        code, stdout, stderr = self.health_check([(TRANSPORT, "warning", {
+            "legacy_mailbox_commands": 41, "warning_threshold": 40, "private": BAD_TEXT,
+        })])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("signal=autopilot_transport_history legacy_mailbox_commands=41 warning_threshold=40\n", stdout)
+        self.assertNotIn(PRIVATE, stdout)
+
+    def test_transport_counters_reject_private_and_malformed_values(self):
+        good = {"legacy_mailbox_commands": 40, "warning_threshold": 40}
+        for field in good:
+            for value in (-1, True, 2**31, BAD_TEXT, None):
+                code, stdout, stderr = self.health_check([(TRANSPORT, "warning", {**good, field: value})])
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertIn("RUNTIME_AUTOPILOT_COUNTERS_UNAVAILABLE: signal=" + TRANSPORT, stdout)
+                self.assertNotIn(PRIVATE, stdout)
+        for threshold in (0, 101):
+            self.assertIn("COUNTERS_UNAVAILABLE", health.autopilot_counter_line(
+                TRANSPORT, {**good, "warning_threshold": threshold}))
 
 
     def test_sensitive_nonnumeric_port_fails_without_traceback_or_database_call(self):

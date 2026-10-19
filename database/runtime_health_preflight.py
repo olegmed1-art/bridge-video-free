@@ -75,15 +75,20 @@ AUTOPILOT_COUNTER_QUERY = """
             WHEN 'autopilot_planner_backlog' THEN jsonb_build_object(
                 'paused_count', details->'paused_count',
                 'open_actionable_count', details->'open_actionable_count')
+            WHEN 'autopilot_transport_history' THEN jsonb_build_object(
+                'legacy_mailbox_commands', details->'legacy_mailbox_commands',
+                'warning_threshold', details->'warning_threshold')
         END AS counters
     FROM public.autopilot_operational_health_signal ORDER BY signal_key
 """
 AUTOPILOT_SIGNAL_KEYS = frozenset({
     "autopilot_mailbox_capacity", "autopilot_planner_backlog", "autopilot_mailbox_e2e",
+    "autopilot_transport_history",
 })
 AUTOPILOT_COUNTER_FIELDS = {
     "autopilot_mailbox_capacity": ("used_dispatches", "max_dispatches", "remaining"),
     "autopilot_planner_backlog": ("paused_count", "open_actionable_count"),
+    "autopilot_transport_history": ("legacy_mailbox_commands", "warning_threshold"),
 }
 
 
@@ -103,6 +108,8 @@ def autopilot_counter_line(key, details):
         if used < 0 or not 1 <= maximum <= 100 or remaining != maximum-used:
             return unavailable
     elif any(value < 0 for value in values):
+        return unavailable
+    elif key == "autopilot_transport_history" and not 1 <= values[1] <= 100:
         return unavailable
     return f"RUNTIME_AUTOPILOT_COUNTERS: signal={key} " + " ".join(
         f"{field}={value}" for field, value in zip(fields, values)

@@ -74,10 +74,16 @@ def persist_book_world(connection, bundle: dict, receipt: dict, *, school_id: st
                 row = cur.fetchone()
                 if row is None or str(row[0]) != item_id:
                     raise ValueError("BOOK_WORLD_LEGACY_ID_CONFLICT")
-                cur.execute("SELECT content,provenance,status FROM public.knowledge_version WHERE knowledge_version_id=%s", (version_id,))
+                cur.execute("""SELECT content,provenance,status,knowledge_item_id,version_no,
+                    authority_class,review_status,bidding_system_key,method_version
+                    FROM public.knowledge_version WHERE knowledge_version_id=%s FOR SHARE""", (version_id,))
                 existing = cur.fetchone()
                 if existing:
-                    if existing[0] != content or existing[1] != provenance or existing[2] not in {"staged", "active"}:
+                    expected_metadata = (item_id, 1, "external", "reviewed", "SYSTEM_NEUTRAL", WORLD_SCHEMA)
+                    stored_metadata = (str(existing[3]), *existing[4:])
+                    if (existing[0] != content or existing[1] != provenance
+                            or existing[2] not in {"staged", "active"}
+                            or stored_metadata != expected_metadata):
                         raise ValueError("BOOK_WORLD_VERSION_CONFLICT_OR_RETIRED")
                 else:
                     # No implicit replacement: any earlier version requires a separate reviewed migration.
@@ -213,9 +219,11 @@ def publish_book_world(connection, *, school_id: str, changeset_id: str,
             for version_id, content, provenance, key in records:
                 if digest({"content": content, "provenance": provenance}) != expected_state[str(version_id)]:
                     raise ValueError("BOOK_WORLD_PUBLICATION_STATE_CHANGED")
-                if provenance["version_hash"] != publication_version(
-                        {"stable_key": key, "content": content}, provenance["review_receipt"],
-                        provenance.get("source_identity_review")):
+                version_hash = publication_version(
+                    {"stable_key": key, "content": content}, provenance["review_receipt"],
+                    provenance.get("source_identity_review"))
+                if (key != content["source_object_id"] or provenance["version_hash"] != version_hash
+                        or str(version_id) != world_uuid("version", school_id, key + ":" + version_hash)):
                     raise ValueError("BOOK_WORLD_PUBLICATION_HASH")
             cur.execute("SELECT payload_hash FROM public.domain_event WHERE event_id=%s", (event_id,))
             prior = cur.fetchone()

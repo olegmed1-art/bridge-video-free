@@ -3,6 +3,12 @@ name: Autopilot role dispatch SQL CI
 on:
   pull_request:
     paths:
+      - 'database/migrations/0374_autopilot_queue_health_semantics.sql'
+      - 'database/rollbacks/0374_autopilot_queue_health_semantics.sql'
+      - 'database/rollbacks/0355_autopilot_light_v3_compatibility_fence.sql'
+      - 'database/migrations/0373_autopilot_active_dispatch_capacity.sql'
+      - 'database/rollbacks/0373_autopilot_active_dispatch_capacity.sql'
+      - 'database/tests/373_autopilot_active_dispatch_capacity.sql'
       - 'database/migrations/0372_autopilot_audit_pass_alias.sql'
       - 'database/rollbacks/0372_autopilot_audit_pass_alias.sql'
       - 'database/tests/372_autopilot_audit_pass_alias.sql'
@@ -90,6 +96,12 @@ on:
   push:
     branches: [main]
     paths:
+      - 'database/migrations/0374_autopilot_queue_health_semantics.sql'
+      - 'database/rollbacks/0374_autopilot_queue_health_semantics.sql'
+      - 'database/rollbacks/0355_autopilot_light_v3_compatibility_fence.sql'
+      - 'database/migrations/0373_autopilot_active_dispatch_capacity.sql'
+      - 'database/rollbacks/0373_autopilot_active_dispatch_capacity.sql'
+      - 'database/tests/373_autopilot_active_dispatch_capacity.sql'
       - 'database/migrations/0372_autopilot_audit_pass_alias.sql'
       - 'database/rollbacks/0372_autopilot_audit_pass_alias.sql'
       - 'database/tests/372_autopilot_audit_pass_alias.sql'
@@ -288,6 +300,9 @@ jobs:
           set -euo pipefail
           chmod +x database/scripts/migrate.sh
           database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/373_autopilot_active_dispatch_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0374_autopilot_queue_health_semantics.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0373_autopilot_active_dispatch_capacity.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \

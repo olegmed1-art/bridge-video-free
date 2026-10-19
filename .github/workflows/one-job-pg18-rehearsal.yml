@@ -1,0 +1,65 @@
+name: One-job SQL proposal PG18
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/one-job-pg18-rehearsal.yml'
+      - 'database/fixtures/one_job_pg18_approved_inventory.json'
+      - 'database/migrations/00*.sql'
+      - 'database/migrations/00*/**'
+      - 'database/candidates/0060_*.sql'
+      - 'database/proposals/0061_*.sql'
+      - 'database/proposals/0062_*.sql'
+      - 'tests/manual_one_job_0061_0062_pg18.py'
+      - 'tests/one_job_0060_default_acl_pg18.py'
+      - 'tests/test_one_job_0060_default_acl_local.py'
+      - 'tests/test_one_job_ci_service_guard.py'
+      - 'tests/test_one_job_staging_admission_local.py'
+      - 'universal_video/private_one_job_*.py'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-pg18:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      onejob_postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ONE_JOB_CI_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      ONE_JOB_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install existing rehearsal dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Verify fail-closed CI and inventory guards
+        run: |
+          python -B -m unittest discover -s tests -p test_one_job_0060_default_acl_local.py -v
+          python -B -m unittest tests.test_one_job_ci_service_guard -v
+
+      - name: Rehearse 0060 and proposed 0061/0062 on isolated PG18
+        timeout-minutes: 4
+        run: python -B tests/manual_one_job_0061_0062_pg18.py --ci-service --port 5432

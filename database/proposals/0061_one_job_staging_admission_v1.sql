@@ -103,6 +103,7 @@ DECLARE
     v_scope video_queue.one_job_staging_admission_v1%ROWTYPE;
     v_bound_job jsonb;
     v_last_attempt integer;
+    v_effective_expires_at timestamptz;
 BEGIN
     -- Reuse 0060's authenticated approver capability; never inherit the
     -- queue or public writer role in this approval session.
@@ -129,8 +130,8 @@ BEGIN
        OR v_job.lease_token IS DISTINCT FROM p_lease_token
        OR v_job.lease_owner IS DISTINCT FROM p_worker_key
        OR v_job.attempt_count IS DISTINCT FROM p_attempt_count
-       OR v_job.lease_expires_at <= clock_timestamp()
-       OR p_expires_at > v_job.lease_expires_at THEN
+       OR v_job.lease_expires_at IS NULL
+       OR v_job.lease_expires_at <= clock_timestamp() THEN
         RAISE EXCEPTION 'ONE_JOB_APPROVAL_LEASE_LOST';
     END IF;
     SELECT q_batch.* INTO v_batch FROM video_queue.batch AS q_batch
@@ -141,14 +142,21 @@ BEGIN
         WHERE q_approval.approval_id=v_subset.approval_id FOR SHARE;
     IF v_subset.approval_id IS NULL OR v_approval.approval_id IS NULL
        OR NOT v_approval.runtime_enabled OR v_approval.revoked_at IS NOT NULL
+       OR v_approval.expires_at IS NULL
        OR v_approval.expires_at <= clock_timestamp()
-       OR p_expires_at > v_approval.expires_at
        OR v_batch.result_mode IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'
        OR v_batch.database_persistence_allowed
        OR v_batch.canonical_promotion_allowed
        OR v_subset.contract_sha256 IS DISTINCT FROM v_approval.contract_sha256
        OR v_subset.queue_manifest_sha256 IS DISTINCT FROM v_approval.queue_manifest_sha256 THEN
         RAISE EXCEPTION 'ONE_JOB_APPROVAL_SUBSET_HOLD';
+    END IF;
+    -- The caller requests an upper bound. Never extend the admitted window
+    -- beyond either live authority, but allow a shorter useful window.
+    v_effective_expires_at := least(
+        p_expires_at, v_job.lease_expires_at, v_approval.expires_at);
+    IF v_effective_expires_at <= clock_timestamp() + interval '3 minutes' THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_TIME_BUDGET_LOW';
     END IF;
     PERFORM video_queue.subset_assert_final(v_subset.request_key);
     v_bound_job := (v_subset.binding->'jobs')->(v_job.sequence-1);
@@ -185,7 +193,7 @@ BEGIN
             RAISE EXCEPTION 'ONE_JOB_APPROVAL_REPLAY';
         END IF;
         UPDATE video_queue.one_job_staging_admission_v1 AS q_scope
-           SET expires_at=p_expires_at
+           SET expires_at=v_effective_expires_at
          WHERE q_scope.admission_id=p_admission_id;
     ELSE
         IF EXISTS (SELECT 1 FROM video_queue.one_job_staging_admission_v1 AS q_scope
@@ -199,22 +207,23 @@ BEGIN
         VALUES (p_admission_id,p_job_id,v_job.batch_id,v_subset.approval_id,
                 v_subset.contract_sha256,v_subset.queue_manifest_sha256,
                 p_source_fingerprint,v_job.source_file_id,v_job.stable_job_key,
-                v_batch.algorithm_revision,true,session_user,p_expires_at);
+                v_batch.algorithm_revision,true,session_user,v_effective_expires_at);
     END IF;
     IF EXISTS (SELECT 1 FROM video_queue.one_job_staging_lease_approval_v1 AS q_lease_approval
                WHERE q_lease_approval.lease_approval_id=p_lease_approval_id) THEN
         RAISE EXCEPTION 'ONE_JOB_APPROVAL_REPLAY';
     END IF;
-    IF p_expires_at <= clock_timestamp() OR v_job.lease_expires_at <= clock_timestamp()
+    IF v_effective_expires_at <= clock_timestamp() + interval '3 minutes'
+       OR v_job.lease_expires_at <= clock_timestamp()
        OR v_approval.expires_at <= clock_timestamp() THEN
-        RAISE EXCEPTION 'ONE_JOB_APPROVAL_EXPIRED';
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_TIME_BUDGET_LOW';
     END IF;
     INSERT INTO video_queue.one_job_staging_lease_approval_v1
         (lease_approval_id,admission_id,job_id,lease_token,worker_key,
          attempt_count,source_fingerprint,approval_reference,approved_by,expires_at)
     VALUES (p_lease_approval_id,p_admission_id,p_job_id,p_lease_token,p_worker_key,
             p_attempt_count,p_source_fingerprint,p_approval_reference,session_user,
-            p_expires_at);
+            v_effective_expires_at);
     RETURN p_admission_id;
 END $$;
 

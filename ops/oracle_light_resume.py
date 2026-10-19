@@ -14,6 +14,7 @@ import time
 
 INSTALLED = '5eb0e1bb2c2932bd8d02ff187b9cf24f6bc09c7c'
 BUNDLE_SHA = '3f7736a4fa7a6796eb9fa7be10e1d01e6cd04cb803d426991c942a91f7eb1c07'
+CLAIM_SHA = '8a194b02bee3f4c855dd2771cd12930ff1876b8966810a3356cd7e263ede5e16'
 
 
 def attest(packet):
@@ -97,7 +98,7 @@ def probe(packet, h, release, env):
         and result.get('mailbox_pr') == 1703
         and result.get('worker_id') == 'oracle-autopilot-light-1'
         and result.get('database_user') == 'autopilot_light_worker_login'
-        and result.get('fence_sha256') == '44722551c605e775fefde91ad82f15fd08d713ad8903f65265435ead5567c36e'):
+        and result.get('fence_sha256') == CLAIM_SHA):
         raise RuntimeError('POST_TERMINAL_PROBE_INVALID')
     return result
 

@@ -230,7 +230,7 @@ class BookWorldTests(unittest.TestCase):
                 render_teacher_book(item)
         item = stored_fixture()
         item["content"]["statement"] = "Tampered."
-        with self.assertRaisesRegex(InvalidBookMaterial, "BOOK_WORLD_VERSION_HASH"):
+        with self.assertRaisesRegex(InvalidBookMaterial, "BOOK_WORLD_CLAIM_PROOF_BINDING"):
             render_teacher_book(item)
 
 

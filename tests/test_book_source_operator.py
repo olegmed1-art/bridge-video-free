@@ -47,7 +47,7 @@ class Connection:
         self.statements = []
         self.observations = 0
         self.capability_observations = 0
-        self.capabilities = lambda count: (True,) * 12
+        self.capabilities = lambda count: (True,) * 9
         self.identity = lambda count: (
             "neondb", operator.EXPECTED_PRINCIPAL, operator.EXPECTED_PRINCIPAL,
             True, False, False, False)
@@ -119,11 +119,13 @@ def test_default_dry_run_revalidates_actual_principal_before_commit(invocation, 
     assert "SYNTHETIC_SECRET" not in json.dumps(output)
 
 
-def test_commit_requires_explicit_mode_and_creation_is_separate(invocation, capsys):
-    assert execute(invocation, ["--commit", "--register-missing-source"]) == 0
+def test_explicit_commit_is_limited_to_existing_source(invocation, capsys):
+    assert execute(invocation, ["--commit"]) == 0
     assert invocation.results[0]["dry_run"] is False
-    assert invocation.results[0]["register_missing_source"] is True
-    assert json.loads(capsys.readouterr().out)["committed"] is True
+    assert invocation.results[0]["register_missing_source"] is False
+    output = json.loads(capsys.readouterr().out)
+    assert output["committed"] is True
+    assert output["new_source_rows"] == output["max_new_rows"]["source"] == 0
 
 
 @pytest.mark.parametrize("change", [
@@ -367,7 +369,7 @@ def test_connect_explicitly_binds_port_and_metadata_rejects_other_port(invocatio
 
 @pytest.mark.parametrize("missing", range(9))
 def test_missing_common_capability_fails_before_identity_writes(invocation, capsys, missing):
-    capabilities = [True] * 12
+    capabilities = [True] * 9
     capabilities[missing] = False
     invocation.connection.capabilities = lambda count: tuple(capabilities)
     assert execute(invocation, ["--commit"]) == 1
@@ -376,38 +378,30 @@ def test_missing_common_capability_fails_before_identity_writes(invocation, caps
     assert json.loads(capsys.readouterr().err)["error"] == "BOOK_SOURCE_OPERATOR_CAPABILITY_MISSING"
 
 
-@pytest.mark.parametrize("missing", range(9, 12))
-def test_registration_requires_extra_source_school_capabilities(invocation, capsys, missing):
-    capabilities = [True] * 12
-    capabilities[missing] = False
-    invocation.connection.capabilities = lambda count: tuple(capabilities)
-    assert execute(invocation, ["--register-missing-source", "--commit"]) == 1
+@pytest.mark.parametrize("capabilities", [
+    None, [True] * 9, (True,) * 8, (True,) * 10, (True,) * 8 + (1,),
+])
+def test_invalid_capability_observation_fails_before_writes(
+        invocation, capsys, capabilities):
+    invocation.connection.capabilities = lambda count: capabilities
+    assert execute(invocation, ["--commit"]) == 1
     invocation.writer.assert_not_called()
-    assert all(sql.lstrip().startswith("SELECT") for sql in invocation.connection.statements)
     assert json.loads(capsys.readouterr().err)["error"] == "BOOK_SOURCE_OPERATOR_CAPABILITY_MISSING"
 
 
 def test_existing_source_mode_does_not_require_school_update_or_source_insert(invocation):
-    invocation.connection.capabilities = lambda count: (True,) * 9 + (False,) * 3
+    invocation.connection.capabilities = lambda count: (True,) * 9
     assert execute(invocation) == 0
     assert invocation.connection.capability_observations == 2
     assert invocation.results[0]["register_missing_source"] is False
 
 
 def test_capability_revoked_before_commit_aborts(invocation, capsys):
-    invocation.connection.capabilities = lambda count: ((True,) * 12 if count == 1
-                                                       else (False,) + (True,) * 11)
+    invocation.connection.capabilities = lambda count: ((True,) * 9 if count == 1
+                                                       else (False,) + (True,) * 8)
     assert execute(invocation, ["--commit"]) == 1
     assert invocation.connection.capability_observations == 2
     assert json.loads(capsys.readouterr().err)["error"] == "BOOK_SOURCE_OPERATOR_CAPABILITY_MISSING"
-
-
-def test_registration_capability_sql_checks_any_school_update_column(invocation):
-    assert execute(invocation, ["--register-missing-source"]) == 0
-    checks = [sql for sql in invocation.connection.statements if "has_table_privilege" in sql]
-    assert len(checks) == 2
-    assert all("pg_catalog.has_any_column_privilege(current_user,'public.school','UPDATE')" in sql
-               for sql in checks)
 
 
 def test_native_source_identity_select_is_preflighted(invocation):
@@ -416,3 +410,26 @@ def test_native_source_identity_select_is_preflighted(invocation):
     assert len(checks) == 2
     assert all("pg_catalog.has_table_privilege(current_user,'public.source_identity','SELECT')" in sql
                for sql in checks)
+
+
+@pytest.mark.parametrize("extra", [[], ["--commit"]])
+def test_missing_source_mode_unavailable_before_inputs_or_connection(
+        invocation, monkeypatch, capsys, extra):
+    inputs = Mock(wraps=operator._inputs)
+    monkeypatch.setattr(operator, "_inputs", inputs)
+    assert execute(invocation, ["--register-missing-source", *extra]) == 1
+    inputs.assert_not_called()
+    invocation.connect.assert_not_called()
+    invocation.writer.assert_not_called()
+    output = json.loads(capsys.readouterr().err)
+    assert output["error"] == "BOOK_SOURCE_OPERATOR_MISSING_SOURCE_UNAVAILABLE"
+    assert output["commit_outcome"] == ("not_started" if extra else "not_requested")
+    assert output["automatic_retry"] is False
+
+
+def test_capability_query_is_limited_to_existing_source_privileges(invocation):
+    assert execute(invocation, ["--commit"]) == 0
+    checks = [sql for sql in invocation.connection.statements if "has_table_privilege" in sql]
+    assert len(checks) == 2
+    assert all("public.school" not in sql for sql in checks)
+    assert all("'public.source','INSERT'" not in sql for sql in checks)
