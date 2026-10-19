@@ -11,9 +11,11 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import ibm_recalibration_prepare as adapter
+from stage2b_v24 import rank_opening_leads
 
 
 def write(path, value, *, jsonl=False):
@@ -85,7 +87,7 @@ def rejected(spec, root):
     return report["reason"]
 
 
-def main():
+def fixture_checks():
     cases = 0
     with tempfile.TemporaryDirectory(prefix="dds-adapter-") as temporary:
         root = Path(temporary)
@@ -105,7 +107,27 @@ def main():
         assert report["status"] == "CONSISTENT_AWAITING_EXTERNAL_ADMISSION", report
         assert report["task_count"] == 4 and report["family_count"] == 2
         assert report["external_provenance_verified"] is False and report["dispatch_allowed"] is False
+        assert report["observed_runtime"]["implementation"] == "cpython"
+        assert report["observed_runtime"]["version"][:2] == [3, 14]
+        assert report["bytes_read"] == 2 * sum(item["bytes"] for item in spec["files"].values())
         assert before == {p.name: p.read_bytes() for p in root.iterdir()}
+
+        ranked = rank_opening_leads(
+            [{"card": "HA", "levels": [("family", "opening_lead_nt")]}],
+            family="opening_lead_nt", model={})
+        assert ranked["model_backoff_level"] == "family_prior"
+        prior_data = fixture()
+        prior_lead = next(row["prediction"] for row in prior_data["oof"] if row["task_type"] == "opening_lead")
+        prior_lead.update(card=ranked["card"], model_backoff_level=ranked["model_backoff_level"],
+                          model_evidence_count=ranked["support_count"],
+                          raw_confidence_probability=ranked["raw_confidence_probability"])
+        assert adapter.check_train_artifact(save_bundle(root, prior_data), root)["status"] == "CONSISTENT_AWAITING_EXTERNAL_ADMISSION"
+        for kind, level in (("contract_tricks", "family_prior"), ("opening_lead", "unknown_prior")):
+            changed = fixture()
+            next(row["prediction"] for row in changed["oof"] if row["task_type"] == kind)["model_backoff_level"] = level
+            assert rejected(save_bundle(root, changed), root) == "MODEL_BACKOFF"
+            cases += 1
+        spec = save_bundle(root, fixture())
 
         for key, value in (("approved", True), ("coordinator_receipt", {"approved": True}),
                            ("dispatch_allowed", True), ("resources", {"vcpus": 10})):
@@ -210,6 +232,48 @@ def main():
             assert rejected(spec, root) == "INPUT_CHANGED"
         cases += 1
 
+        # Mutate an earlier input during OOF parsing, after its first reader
+        # finished. Restoring size/mtime must not defeat the final digest pass.
+        for role in ("tasks", "excluded_families", "producer"):
+            for mutation in ("rewrite", "touch", "replace", "delete"):
+                spec = save_bundle(root, fixture())
+                changed_once = False
+                prevented = False
+                retained = []
+                original_retain = adapter.Budget.retain
+                def record_handle(budget, handle, *args):
+                    retained.append(handle)
+                    return original_retain(budget, handle, *args)
+                def late_change(raw):
+                    nonlocal changed_once, prevented
+                    value = original_parse(raw)
+                    if isinstance(value, dict) and "prediction" in value and not changed_once:
+                        changed_once = True
+                        path = root / spec["files"][role]["name"]
+                        before_stat = path.stat()
+                        if mutation == "rewrite":
+                            path.write_bytes(path.read_bytes()[:-1] + b" ")
+                            os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+                        elif mutation == "touch":
+                            os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns + 1_000_000_000))
+                        else:
+                            replacement = root / "replacement.tmp"
+                            if mutation == "replace":
+                                replacement.write_bytes(path.read_bytes())
+                            try:
+                                os.replace(replacement, path) if mutation == "replace" else path.unlink()
+                            except PermissionError:
+                                prevented = True  # Windows can deny deletion of an open input.
+                            if replacement.exists():
+                                replacement.unlink()
+                    return value
+                with patch.object(adapter, "parse_json", side_effect=late_change), \
+                     patch.object(adapter.Budget, "retain", record_handle):
+                    report = adapter.check_train_artifact(spec, root)
+                assert changed_once and retained and all(handle.closed for handle in retained)
+                assert report["status"] == ("CONSISTENT_AWAITING_EXTERNAL_ADMISSION" if prevented else "BLOCKED"), report
+                cases += not prevented
+
         if hasattr(os, "mkfifo"):
             spec = save_bundle(root, fixture())
             (root / "oof.jsonl").unlink()
@@ -235,9 +299,13 @@ def main():
         for args, expected in ((["--plan-only"], "PREPARED_EXECUTION_BLOCKED"),
                                (["--root", str(root)], "CONSISTENT_AWAITING_EXTERNAL_ADMISSION")):
             result = subprocess.run(command + args, capture_output=True, text=True, timeout=10)
-            assert result.returncode == 0, result.stderr
             output = json.loads(result.stdout)
-            assert output["status"] == expected and output["dispatch_allowed"] is False
+            native_supported = sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 14)
+            assert result.returncode == (0 if native_supported else 2), result.stderr
+            assert output["status"] == (expected if native_supported else "BLOCKED")
+            if not native_supported:
+                assert output["reason"] == "RUNTIME_MISMATCH"
+            assert output["dispatch_allowed"] is False
         write(root / "spec.json", dict(spec, approved=True))
         result = subprocess.run(command + ["--plan-only"], capture_output=True, text=True, timeout=10)
         assert result.returncode == 2 and json.loads(result.stdout)["dispatch_allowed"] is False
@@ -248,7 +316,30 @@ def main():
     imports |= {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
     assert not imports & {"subprocess", "socket", "sqlite3", "tarfile", "zipfile", "requests", "ibm_trial_executor", "dds"}
     assert "recalibrate_oof_rows" not in source and not hasattr(adapter, "dispatch")
+    return cases
+
+
+def main():
+    native_runtime = adapter.runtime_identity()
+    cases = 0
+    for implementation, version in (("cpython", (3, 12, 14)), ("cpython", (3, 13, 0)),
+                                     ("cpython", (3, 15, 0)), ("pypy", (3, 14, 0))):
+        observed = SimpleNamespace(implementation=SimpleNamespace(name=implementation), version_info=version)
+        with patch.object(adapter, "sys", observed), \
+             patch.object(Path, "open", side_effect=AssertionError("input read before runtime gate")), \
+             patch.object(adapter.os, "open", side_effect=AssertionError("input opened before runtime gate")):
+            report = adapter.check_train_artifact({}, Path("unavailable"))
+            assert report["status"] == "BLOCKED" and report["reason"] == "RUNTIME_MISMATCH"
+            assert report["observed_runtime"] == {"implementation": implementation, "version": list(version)}
+            cases += 1
+    simulated = native_runtime["implementation"] != "cpython" or native_runtime["version"][:2] != [3, 14]
+    if simulated:
+        with patch.object(adapter, "runtime_identity", return_value={"implementation": "cpython", "version": [3, 14, 0]}):
+            cases += fixture_checks()
+    else:
+        cases += fixture_checks()
     print(json.dumps({"ok": True, "negative_cases": cases, "synthetic_train_rows": 4,
+                      "actual_runtime": native_runtime, "functional_runtime_simulated": simulated,
                       "dispatch_allowed": False, "fit_performed": False, "dds_called": False}, indent=2))
 
 
