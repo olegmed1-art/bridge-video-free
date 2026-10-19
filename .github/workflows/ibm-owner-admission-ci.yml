@@ -1,0 +1,27 @@
+name: IBM owner admission offline contracts
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-owner-admission-ci.yml'
+      - '.github/workflows/ibm-diagnostic-trial.yml'
+      - 'ops/ibm_diagnostic_v9/owner_admission.py'
+      - 'ops/ibm_diagnostic_v9/owner_setup.py'
+      - 'ops/ibm_oracle_admission_readback.py'
+      - 'tests/test_ibm_owner_admission*.py'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Receipt durability and exit before ARM
+        run: |
+          set -eu
+          python3 -B -m unittest -v tests.test_ibm_owner_admission tests.test_ibm_owner_admission_driver
