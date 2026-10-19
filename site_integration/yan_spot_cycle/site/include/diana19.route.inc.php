@@ -4,9 +4,9 @@ function bridge_diana_route($route, $installedDispatch = null) {
     $suffix = substr($route, strlen('practice/diana19'));
     $method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
     $get = $suffix === '' || $suffix === '/' || $suffix === '/catalog' ||
-        preg_match('~^/lesson/diana19-q-00[123]$~D', $suffix) ||
+        preg_match('~^/lesson/diana19-(?:q-00[123]|visible-exercise-00[12])$~D', $suffix) ||
         in_array($suffix, array('/assets/styles.css', '/assets/diana19.css', '/assets/diana19.js'), true);
-    $post = preg_match('~^/answer/diana19-q-00[123]$~D', $suffix);
+    $post = preg_match('~^/answer/diana19-(?:q-00[123]|visible-exercise-00[12])$~D', $suffix);
     if (!$get && !$post) { http_response_code(404); return; }
     if ($method !== ($post ? 'POST' : 'GET')) { http_response_code(405); return; }
     $body = $post ? file_get_contents(PHP_SAPI === 'cli' ? 'php://stdin' : 'php://input', false, null, 0, 20001) : '';

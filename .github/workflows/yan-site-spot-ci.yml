@@ -10,8 +10,12 @@ on:
       - 'bridge_school_api/school_spot_repository.py'
       - 'bridge_school_api/local_single_user_lesson.py'
       - 'bridge_school_api/diana19_staging.py'
+      - 'bridge_school_api/diana19_visible_stages.py'
+      - 'bridge_school_api/anonymous_practice_adapter.py'
       - 'bridge_school_api/static/diana19/**'
       - 'tests/test_diana19_staging.py'
+      - 'tests/test_diana19_visible_stages.py'
+      - 'tests/test_anonymous_practice_adapter.py'
       - 'tests/test_local_single_user_binding.py'
       - 'tests/test_school_spot_lesson.py'
       - '.github/workflows/yan-site-spot-ci.yml'
@@ -35,7 +39,7 @@ jobs:
           python-version: '3.12'
       - name: Install existing backend test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-api.txt 'pytest==9.1.1' 'httpx==0.28.1'
-      - name: Check only the application adapter PHP
+      - name: Check only the application adapter and native-session fixture PHP
         run: |
           php -l site_integration/yan_spot_cycle/site/include/diana19.application.inc.php
           php -l site_integration/yan_spot_cycle/site/include/diana19.application-bindings.inc.php
@@ -43,21 +47,23 @@ jobs:
           php -l site_integration/yan_spot_cycle/site/page/diana19.fragment.inc.php
           php -l site_integration/yan_spot_cycle/tests/application_bootstrap_fixture.inc.php
           php -l site_integration/yan_spot_cycle/tests/application_unbound_driver.php
-      - name: Check exact application source patch and fragment boundary
+          php -l site_integration/yan_spot_cycle/tests/anonymous_session_bootstrap_fixture.inc.php
+      - name: Check staged persistence and explicit admission only
         run: >-
           python -m pytest -q -p no:cacheprovider
           site_integration/yan_spot_cycle/tests/test_application_candidate.py
-      - name: Verify application adapter lifecycle and one answer path on contract fixture
+          tests/test_diana19_visible_stages.py
+          tests/test_anonymous_practice_adapter.py
+      - name: Verify native PHP sessions, separate owners and staged answers over HTTP
         run: >-
           timeout --signal=TERM --kill-after=10s 180s
-          python -m site_integration.yan_spot_cycle.tests.verify_diana19_http
-          --application-adapter
-          --output deliverables/diana19-application-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Retain application contract fixture evidence
+          python -m site_integration.yan_spot_cycle.tests.verify_native_session_http
+          --output deliverables/diana19-native-session-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Retain neutral native-session HTTP evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: diana19-application-contract-${{ github.run_id }}-${{ github.run_attempt }}
-          path: deliverables/diana19-application-${{ github.run_id }}-${{ github.run_attempt }}/artifact/
+          name: diana19-native-session-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deliverables/diana19-native-session-${{ github.run_id }}-${{ github.run_attempt }}/artifact/
           if-no-files-found: error
           retention-days: 1
           compression-level: 9

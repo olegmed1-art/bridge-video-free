@@ -140,7 +140,8 @@ def create_local_app(private_dir: Path) -> FastAPI:
     app.state.school_spot_binding_resolver = LocalSingleUserResolver(private_dir)
     app.state.local_context_resolver = app.state.school_spot_binding_resolver
     app.include_router(router)
-    if (Path(private_dir)/'diana19-binding.json').is_file():
+    if any((Path(private_dir)/name).is_file() for name in (
+            'diana19-binding.json', 'diana19-visible-binding.json')):
         from .diana19_staging import DianaStagingService, router as diana_router
         owner_id = app.state.local_context_resolver.context['owner']['provider_subject']
         app.state.diana19_service = DianaStagingService.from_private(Path(private_dir), owner_id)

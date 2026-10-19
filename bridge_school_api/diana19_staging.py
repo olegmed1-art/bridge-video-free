@@ -159,6 +159,11 @@ class DianaJournal:
         finally:
             db.close()
 
+    def check_context(self):
+        """Verify existing journal source/owner header without reading answers."""
+        db = self._connect()
+        db.close()
+
     def save(self, lesson_id, question_sha, message):
         if (type(message) is not dict or set(message) != {'request_id', 'question_sha256', 'answer'}
                 or message['question_sha256'] != question_sha or type(message['answer']) is not str
@@ -189,6 +194,18 @@ class DianaStagingService:
 
     @classmethod
     def from_private(cls, private: Path, owner_id: str):
+        private = Path(private).resolve()
+        base = cls._from_three_lesson_private(private, owner_id) if (
+            private/'diana19-binding.json').is_file() else None
+        if (private/'diana19-visible-binding.json').is_file():
+            from .diana19_visible_stages import VisibleStageService
+            return VisibleStageService.from_private(private, owner_id, base)
+        if base is None:
+            raise ValueError('existing accepted lesson binding required')
+        return base
+
+    @classmethod
+    def _from_three_lesson_private(cls, private: Path, owner_id: str):
         binding = json.loads((private/'diana19-binding.json').read_bytes())
         if (binding.get('schema') != 'local-diana19-staging-binding-v1'
                 or binding.get('scope') != 'LOCAL_SINGLE_USER' or binding.get('owner_id') != owner_id

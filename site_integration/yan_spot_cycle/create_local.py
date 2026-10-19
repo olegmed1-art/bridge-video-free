@@ -8,7 +8,8 @@ from .build_candidate import build
 
 
 def create(root: Path, frontend_origin='http://127.0.0.1:8090',
-           backend_origin='http://127.0.0.1:8091', lesson_archive: Path | None = None):
+           backend_origin='http://127.0.0.1:8091', lesson_archive: Path | None = None,
+           visible_exercises: Path | None = None):
     root = Path(root).resolve()
     if root.exists():
         raise FileExistsError('local lesson root must be new')
@@ -20,6 +21,11 @@ def create(root: Path, frontend_origin='http://127.0.0.1:8090',
         from bridge_school_api.local_single_user_lesson import read_context
         owner = read_context(root/'private')['owner']['provider_subject']
         result['diana19'] = install_bundle(root/'private', lesson_archive, owner)
+    if visible_exercises is not None:
+        from .install_visible import install_visible
+        from bridge_school_api.local_single_user_lesson import read_context
+        owner = read_context(root/'private')['owner']['provider_subject']
+        result['visible_exercises'] = install_visible(root/'private', visible_exercises, owner)
     result['frontend_origin'] = frontend_origin
     result['backend_origin'] = backend_origin
     result['root'] = str(root)
@@ -32,5 +38,7 @@ if __name__ == '__main__':
     parser.add_argument('--frontend-origin', default='http://127.0.0.1:8090')
     parser.add_argument('--backend-origin', default='http://127.0.0.1:8091')
     parser.add_argument('--lesson-archive', type=Path)
+    parser.add_argument('--visible-exercises', type=Path)
     args = parser.parse_args()
-    print(json.dumps(create(args.output, args.frontend_origin, args.backend_origin, args.lesson_archive)))
+    print(json.dumps(create(args.output, args.frontend_origin, args.backend_origin,
+                            args.lesson_archive, args.visible_exercises)))
