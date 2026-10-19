@@ -88,12 +88,14 @@ def parse_json(raw: bytes):
 
 
 def runtime_identity():
-    return {"implementation": sys.implementation.name, "version": list(sys.version_info[:3])}
+    return {"implementation": sys.implementation.name, "version": list(sys.version_info[:3]),
+            "releaselevel": sys.version_info[3], "serial": sys.version_info[4]}
 
 
 def verify_runtime():
     runtime = runtime_identity()
-    need(runtime["implementation"] == "cpython" and runtime["version"][:2] == [3, 14],
+    need(runtime["implementation"] == "cpython" and runtime["version"][:2] == [3, 14]
+         and runtime["releaselevel"] == "final" and runtime["serial"] == 0,
          "RUNTIME_MISMATCH")
     return runtime
 
@@ -211,6 +213,40 @@ def no_links(path: Path):
     return info
 
 
+def open_input(path: Path):
+    """Read-only descriptor; Windows denies writers/deletion until close."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                           wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        create.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, OPEN_REPARSE_POINT.
+        # Incompatible existing write handles/mappings fail the open as well.
+        handle = create(str(path), 0x80000000, 0x1, None, 3, 0x00200000, None)
+        if handle == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            fd = msvcrt.open_osfhandle(handle, flags)
+        except BaseException:
+            kernel.CloseHandle(handle)
+            raise
+    else:
+        fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def verified_records(root: Path, item: dict, budget: Budget, *, jsonl: bool):
     """One descriptor for bounded reading and hashing; no extraction or writes."""
     root = root.absolute()
@@ -220,9 +256,7 @@ def verified_records(root: Path, item: dict, budget: Budget, *, jsonl: bool):
     before = no_links(path)
     need(stat.S_ISREG(before.st_mode), "REGULAR_FILE_REQUIRED")
     need(before.st_size == item["bytes"], "FILE_SIZE")
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, flags)
-    handle = os.fdopen(fd, "rb")
+    handle = open_input(path)
     budget.retain(handle, root, path, before, dict(item))
     # The enclosing inspection owns descriptor closure after its final
     # bundle check, including all early rejection paths.
