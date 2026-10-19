@@ -294,6 +294,13 @@
       "description": "End-to-end Stage 2B OOF candidate preparation on synthetic immutable TRAIN facts without DDS or holdout access."
     },
     {
+      "id": "ibm-recalibration-prepare",
+      "path": "ibm_recalibration_prepare_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Offline IBM request preparation and bounded TRAIN-only OOF facts inspection; forged admissions, provenance leakage and unsafe files fail closed; no fit, DDS or dispatch."
+    },
+    {
       "id": "stage2b-v25-core",
       "path": "stage2b_v25_selftest.py",
       "suite": "fast",
@@ -539,6 +546,9 @@
       ],
       "oracle_main30k_reconcile.py": [
         "oracle-main30k-reconcile"
+      ],
+      "ibm_recalibration_prepare.py": [
+        "ibm-recalibration-prepare"
       ]
     },
     "runtime_coverage": {
