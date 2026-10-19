@@ -13,8 +13,9 @@ import os
 from pathlib import Path
 import re
 import stat
-import subprocess
+import sys
 import time
+import types
 
 ROOT = Path('/var/lib/bridge-light-native-service')
 UNIT = 'bridge-light-native-supervisor.service'
@@ -101,6 +102,7 @@ class Manifest:
     python_sha256: str
     authority_sha256: str
     supervisor_sha256: str
+    service_unit_sha256: str
     launcher_sha256: str
     argv: tuple
     not_before: str
@@ -110,7 +112,7 @@ class Manifest:
     def load(cls, raw):
         value = parse(raw, 16384)
         exact(value, (f.name for f in fields(cls)))
-        require(type(value['version']) is int and value['version'] == 1
+        require(type(value['version']) is int and value['version'] == 2
                 and value['kind'] == 'LIGHT_NATIVE_READ_ONLY_SERVICE'
                 and digest(value['source'], 40)
                 and all(digest(value[k]) for k in value if k.endswith('_sha256')),
@@ -307,27 +309,51 @@ class ProcessIdentity:
     invocation_id: str
 
 
+_UNIT_HELPERS = {}
+
+
+def _unit_helper(manifest):
+    """Execute only same-directory protected bytes after their manifest pin passes.
+
+    A pre-imported ops helper is not provenance. The private module is built
+    from these exact bytes, not found through sys.path/import hooks or trusted
+    because a loaded systemd property happens to match.
+    """
+    expected = manifest.service_unit_sha256
+    require(digest(expected), 'NATIVE_SERVICE_UNIT_HELPER')
+    path = Path(__file__).with_name('light_native_service_unit.py')
+    raw = protected_read(path, expected, mode=0o600, limit=65536)
+    require(sha(raw) == expected, 'NATIVE_SERVICE_UNIT_HELPER')
+    key = (str(path), expected)
+    if key not in _UNIT_HELPERS:
+        name = '_bridge_native_unit_'+sha(str(path).encode()+raw)
+        module = types.ModuleType(name)
+        module.__file__ = str(path)
+        sys.modules[name] = module
+        try:
+            exec(compile(raw, str(path), 'exec'), module.__dict__)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise Refusal('NATIVE_SERVICE_UNIT_HELPER') from None
+        _UNIT_HELPERS[key] = module
+    return _UNIT_HELPERS[key]
+
+
 def host_identity(pid, manifest):
-    row = proc_identity(pid)
-    result = subprocess.run(['/usr/bin/systemctl', 'show', '--all', UNIT,
-                             '--property=MainPID,ActiveState,SubState,InvocationID,FragmentPath'],
-                            capture_output=True, timeout=10, check=False,
-                            env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
-    require(result.returncode == 0 and len(result.stdout) <= 16384, 'NATIVE_SERVICE_UNIT')
-    values = {}
-    for line in result.stdout.decode('ascii').splitlines():
-        key, sep, value = line.partition('=')
-        require(sep and key not in values, 'NATIVE_SERVICE_UNIT')
-        values[key] = value
-    exact(values, ('MainPID', 'ActiveState', 'SubState', 'InvocationID', 'FragmentPath'))
-    unit_file = Path('/etc/systemd/system') / UNIT
-    require(values['MainPID'] == str(pid) and values['ActiveState'] == 'active'
-            and values['SubState'] == 'running' and digest(values['InvocationID'], 32)
-            and values['FragmentPath'] == str(unit_file)
-            and row['argv'] == manifest.argv and row['exe_sha256'] == manifest.python_sha256
-            and row['cgroup'] == '0::/system.slice/'+UNIT, 'NATIVE_SERVICE_PROCESS_BINDING')
-    protected_read(unit_file, manifest.unit_sha256, mode=0o644, limit=65536)
-    return ProcessIdentity(**row, invocation_id=values['InvocationID'])
+    try:
+        require(type(manifest.version) is int and manifest.version == 2,
+                'NATIVE_SERVICE_MANIFEST')
+        helper = _unit_helper(manifest)
+        require(helper.ROOT == ROOT and helper.UNIT == UNIT and helper.ARGV == manifest.argv,
+                'NATIVE_SERVICE_UNIT_HELPER')
+        binding = helper.collect_loaded(pid, expected_python_sha256=manifest.python_sha256,
+                                         expected_unit_sha256=manifest.unit_sha256)
+        require(binding.unit_sha256 == manifest.unit_sha256, 'NATIVE_SERVICE_UNIT')
+        row = binding.process
+        return ProcessIdentity(row.pid, row.start_ticks, row.boot_id, row.exe_sha256,
+                               row.argv, row.cgroup, row.invocation_id)
+    except Exception:
+        raise Refusal('NATIVE_SERVICE_UNIT') from None
 
 
 @dataclass(frozen=True)
@@ -559,6 +585,8 @@ class HostAuthority:
         protected_read(Path(__file__), self.manifest.authority_sha256, mode=0o600)
         protected_read(Path(__file__).with_name('light_native_service_supervisor.py'),
                        self.manifest.supervisor_sha256, mode=0o600)
+        protected_read(Path(__file__).with_name('light_native_service_unit.py'),
+                       self.manifest.service_unit_sha256, mode=0o600)
         protected_read(self.root/'launcher.py', self.manifest.launcher_sha256, mode=0o600)
         if self.child is not None:
             raw = self.child.wire()
