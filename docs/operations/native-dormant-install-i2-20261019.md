@@ -91,8 +91,9 @@ original run/job clocks, strict inactive and consumer readback, rollback inode
 and parent-descriptor checks, and both workflow trigger and production-fence
 closure. The initial three source findings and CI/provenance integration findings
 were corrected before this acceptance. The reviewer did not execute tests/CI or
-contact Oracle, DB, provider or IBM. CI results above were read from actual job
-logs separately; source review and operational evidence are distinct.
+contact Oracle, DB, provider or IBM. The implementing/root agent reported reading
+the CI results above from actual job logs; this reviewer did not independently
+inspect those logs. Source review and operational evidence are distinct.
 
 | Reviewed file | SHA256 |
 | --- | --- |
