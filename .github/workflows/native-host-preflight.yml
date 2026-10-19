@@ -13,6 +13,7 @@ on:
       - 'ops/light_native_lane_run_guard.py'
       - 'ops/light_native_lane_controller.py'
       - 'ops/light_native_lane_execution.py'
+      - 'ops/light_native_lane_install.py'
       - 'ops/light_native_lane_issuer.py'
       - 'ops/light_native_lane_cycle.py'
       - 'ops/light_native_retirement_live.py'
@@ -22,6 +23,7 @@ on:
       - 'ops/native_maintenance_workflow_pause.py'
       - 'ops/native_permission_hold_guard.py'
       - 'ops/oracle_light_active_hold_attest.py'
+      - 'ops/oracle_light_runtime_hold_install.py'
       - 'oracle_autopilot/light_native_adapter.py'
       - 'database/native_cli_permission_engine.py'
       - 'database/light_native_pilot_intake.py'
@@ -29,6 +31,8 @@ on:
       - 'ops/light_native_service_authority.py'
       - 'ops/light_native_service_supervisor.py'
       - 'ops/light_native_service_unit.py'
+      - 'ops/light_native_service_plan.py'
+      - 'ops/light_native_service_switch.py'
       - 'ops/light_native_readiness.py'
       - 'ops/light_native_readiness_observe.sql'
       - 'tests/test_light_native_continuity.py'
@@ -42,8 +46,10 @@ on:
       - 'tests/test_light_native_service_unit.py'
       - 'tests/test_light_native_readiness.py'
       - 'tests/test_light_native_plan_codec.py'
+      - 'tests/test_light_native_execution_session.py'
       - 'tests/test_native_host_preflight_scope.py'
       - 'tests/fixtures/light_native_host_boundary_systemd.py'
+      - 'tests/fixtures/light_native_execution_session_systemd.py'
 
 permissions:
   contents: read
@@ -57,6 +63,7 @@ jobs:
       transition: ${{ steps.select.outputs.transition }}
       host: ${{ steps.select.outputs.host }}
       codec: ${{ steps.select.outputs.codec }}
+      session: ${{ steps.select.outputs.session }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -112,7 +119,14 @@ jobs:
               'database/native_cli_permission_engine.py', 'database/light_native_pilot_intake.py',
               'tests/test_light_native_service_authority.py', 'tests/test_light_native_plan_codec.py',
               'tests/test_native_host_preflight_scope.py', workflow])
-          result = dict(legacy=legacy, transition=transition, host=host, codec=codec)
+          session = matches(['ops/light_native_lane_execution.py', 'ops/light_native_lane_controller.py',
+              'ops/light_native_lane_install.py', 'ops/light_native_pilot_release.py',
+              'ops/light_native_service_plan.py', 'ops/light_native_service_switch.py',
+              'ops/light_native_service_unit.py', 'ops/native_maintenance_bundle.py',
+              'ops/oracle_light_active_hold_attest.py', 'ops/oracle_light_runtime_hold_install.py',
+              'tests/test_light_native_execution_session.py',
+              'tests/fixtures/light_native_execution_session_systemd.py', workflow])
+          result = dict(legacy=legacy, transition=transition, host=host, codec=codec, session=session)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(''.join(name+'='+str(value).lower()+'\n' for name, value in result.items()))
           print(json.dumps(dict(audit='AFFECTED_NATIVE_PROOFS', **result), sort_keys=True))
@@ -135,9 +149,34 @@ jobs:
               'tests.test_light_native_plan_codec', 'tests.test_native_host_preflight_scope']
           result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromNames(names))
           assert not result.skipped, result.skipped
-          assert result.testsRun >= 22
+          assert result.testsRun >= 25
           raise SystemExit(not result.wasSuccessful())
           PY
+  execution-session-boundary:
+    needs: scope
+    if: needs.scope.outputs.session == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify original execution deadline and first-invocation barriers
+        run: |
+          /usr/bin/python3 -I -S -B - <<'PY'
+          import pathlib, sys, unittest
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.defaultTestLoader.loadTestsFromName('tests.test_light_native_execution_session'))
+          assert not result.skipped, result.skipped
+          assert result.testsRun >= 23
+          raise SystemExit(not result.wasSuccessful())
+          PY
+      - name: Rehearse execution identity on disposable real PID1 only
+        run: |
+          sudo -n --preserve-env=GITHUB_ACTIONS,GITHUB_REPOSITORY /usr/bin/python3 -I -S -B \
+            tests/fixtures/light_native_execution_session_systemd.py ci \
+            "$GITHUB_WORKSPACE" "$GITHUB_SHA"
   linux-root-contract:
     needs: scope
     if: needs.scope.outputs.legacy == 'true'

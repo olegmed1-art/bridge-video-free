@@ -50,6 +50,40 @@ def loaded_codec_sources():
     return sorted({node.args[0].value for node in (*calls, *selected)})
 
 
+def loaded_session_sources():
+    """Derive the real fixture's top-level ops imports without executing them."""
+    test_tree = ast.parse((ROOT/'tests/test_light_native_execution_session.py').read_bytes())
+    calls = [node for node in ast.walk(test_tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == 'actual']
+    if not calls or any(not node.args or not isinstance(node.args[0], ast.Constant)
+                        or type(node.args[0].value) is not str for node in calls):
+        raise AssertionError('Every loaded session source must be identifiable')
+    pending = [node.args[0].value for node in calls]
+    result = set()
+    while pending:
+        name = pending.pop()
+        if name in result:
+            continue
+        result.add(name)
+        if len(result) > 128:
+            raise AssertionError('Bounded session import graph required')
+        for node in ast.parse((ROOT/name).read_bytes()).body:
+            if isinstance(node, ast.Import):
+                paths = [alias.name.replace('.', '/')+'.py' for alias in node.names
+                         if alias.name.startswith('ops.')]
+            elif isinstance(node, ast.ImportFrom) and node.module == 'ops':
+                paths = ['ops/'+alias.name+'.py' for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith('ops.'):
+                paths = [node.module.replace('.', '/')+'.py']
+            else:
+                paths = []
+            for path in paths:
+                if not (ROOT/path).is_file():
+                    raise AssertionError('Identifiable session import required: '+path)
+                pending.append(path)
+    return sorted(result)
+
+
 def select(changed, *, base_text=None, head_text=None):
     text = workflow_text() if head_text is None else head_text
     base_text = text if base_text is None else base_text
@@ -83,8 +117,9 @@ def select(changed, *, base_text=None, head_text=None):
 
 
 class ScopeContracts(unittest.TestCase):
-    def assert_codec_only(self, changed):
-        self.assertEqual(select(changed), dict(legacy=False, transition=False, host=False, codec=True))
+    def assert_codec_only(self, changed, *, session=False):
+        self.assertEqual(select(changed),
+                         dict(legacy=False, transition=False, host=False, codec=True, session=session))
 
     def test_every_actual_loaded_codec_source_triggers_workflow(self):
         patterns = trigger_paths(workflow_text())
@@ -96,7 +131,8 @@ class ScopeContracts(unittest.TestCase):
         for name in loaded_codec_sources():
             with self.subTest(source=name):
                 self.assertEqual(select([name]), dict(legacy=name=='ops/light_native_retirement.py',
-                    transition=False, host=False, codec=True))
+                    transition=False, host=False, codec=True,
+                    session=name in loaded_session_sources()))
 
     def test_codec_consumers_and_tests_trigger_and_select_their_contract(self):
         patterns = trigger_paths(workflow_text())
@@ -106,22 +142,23 @@ class ScopeContracts(unittest.TestCase):
                 self.assertTrue(any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns), name)
                 self.assert_codec_only([name])
 
-    def test_unchanged_workflow_job_bodies_select_only_portable_scope_proof(self):
-        self.assert_codec_only([WORKFLOW])
+    def test_unchanged_old_job_bodies_select_portable_and_session_proofs(self):
+        self.assert_codec_only([WORKFLOW], session=True)
 
     def test_actual_host_and_transition_sources_keep_their_separate_proofs(self):
         for name in ('ops/light_native_service_unit.py', 'ops/light_native_readiness.py'):
             with self.subTest(source=name):
-                self.assertEqual(select([name]), dict(legacy=False, transition=False, host=True, codec=False))
+                self.assertEqual(select([name]), dict(legacy=False, transition=False, host=True,
+                    codec=False, session=name=='ops/light_native_service_unit.py'))
         self.assertEqual(select(['ops/light_native_legacy_transition.py']),
-                         dict(legacy=True, transition=True, host=True, codec=False))
+                         dict(legacy=True, transition=True, host=True, codec=False, session=False))
 
     def test_old_executable_job_changes_still_select_affected_proofs(self):
         text = workflow_text()
         for name, marker, expected in (
-            ('root', 'assert result.testsRun >= 150', dict(legacy=True, transition=False, host=False, codec=True)),
-            ('transition', 'ci "$GITHUB_WORKSPACE" "$GITHUB_SHA"', dict(legacy=False, transition=True, host=False, codec=True)),
-            ('host', 'assert result.testsRun >= 107', dict(legacy=False, transition=False, host=True, codec=True)),
+            ('root', 'assert result.testsRun >= 150', dict(legacy=True, transition=False, host=False, codec=True, session=True)),
+            ('transition', 'ci "$GITHUB_WORKSPACE" "$GITHUB_SHA"', dict(legacy=False, transition=True, host=False, codec=True, session=True)),
+            ('host', 'assert result.testsRun >= 107', dict(legacy=False, transition=False, host=True, codec=True, session=True)),
         ):
             self.assertEqual(text.count(marker), 1)
             with self.subTest(job=name):
@@ -129,7 +166,36 @@ class ScopeContracts(unittest.TestCase):
 
     def test_unrelated_changes_do_not_request_native_proofs(self):
         self.assertEqual(select(['docs/unrelated.md']),
-                         dict(legacy=False, transition=False, host=False, codec=False))
+                         dict(legacy=False, transition=False, host=False, codec=False, session=False))
+
+    def test_execution_session_sources_and_fixture_select_their_proof(self):
+        patterns = trigger_paths(workflow_text())
+        for name, codec, host in (
+            ('ops/light_native_lane_execution.py', True, False),
+            ('ops/light_native_lane_controller.py', True, False),
+            ('ops/light_native_service_unit.py', False, True),
+            ('tests/test_light_native_execution_session.py', False, False),
+            ('tests/fixtures/light_native_execution_session_systemd.py', False, False),
+        ):
+            with self.subTest(source=name):
+                self.assertTrue(any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns), name)
+                self.assertEqual(select([name]), dict(legacy=False, transition=False, host=host,
+                                                      codec=codec, session=True))
+
+    def test_actual_session_import_closure_triggers_its_proof(self):
+        patterns = trigger_paths(workflow_text())
+        for name in loaded_session_sources():
+            with self.subTest(source=name):
+                self.assertTrue(any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns), name)
+                self.assertTrue(select([name])['session'], name)
+
+    def test_execution_job_change_selects_it_without_repeating_old_proofs(self):
+        text = workflow_text()
+        marker = 'assert result.testsRun >= 23\n'
+        self.assertEqual(text.count(marker), 1)
+        self.assertEqual(select([WORKFLOW], base_text=text,
+                                head_text=text.replace(marker, marker.rstrip()+' changed\n', 1)),
+                         dict(legacy=False, transition=False, host=False, codec=True, session=True))
 
 
 if __name__ == '__main__':
