@@ -45,10 +45,10 @@ context cannot originate this request. HostAuthority's descendant requirement
 is unchanged. A future permanent-host ISSUE adapter needs its own accepted
 manifest/context/intent delegation and separate transient execution authority.
 
-The selective workflow separates portable codec/selector checks from the new
-execution-session proof. Its disposable PID1 fixture uses synthetic request and
-policy data, no credentials, database or provider, and ownership-checked cleanup.
-Its actual local systemd/process observations do not establish a production
+The selective workflow separates portable codec/selector checks from the
+execution-session fixture. It is designed to use synthetic request and policy
+data, no credentials, database or provider, and ownership-checked cleanup.
+When run, its local systemd/process observations do not establish a production
 installation or full database/provider drain. Unchanged historical transition
 and HOST proofs are not repeated merely because this proof is added.
 

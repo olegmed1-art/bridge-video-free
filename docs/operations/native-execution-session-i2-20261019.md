@@ -54,8 +54,9 @@ The reviewer did not run existing suites, PID1/systemd services, GitHub Actions,
 database, provider, host, IBM or deployment operations. This acceptance does
 not establish installation, actual GHA authentication, full local/remote drain,
 production admission, production restore or HOST delegation. The adapted legacy
-pytest fixtures use explicitly synthetic session/clock ports; the new actual
-session contracts and disposable PID1 fixture are separate evidence.
+pytest fixtures use explicitly synthetic session/clock ports. The implementation's
+session contracts are separate checks; the disposable PID1 fixture is outside
+this review and its actual run remains pending.
 
 See [finite execution session](native-execution-session.md) for the operational
 boundary and remaining production obligations. A changed pinned source requires
