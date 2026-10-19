@@ -63,7 +63,7 @@ def validate(raw, accepted, controller, runtime, guard):
         raw_plan = base64.b64decode(entry['plan_base64'], validate=True)
         require(len(raw_plan) <= 16384 and owner.sha(raw_plan) == entry['accepted_plan_sha256'],
                 'LANE_ISSUER_SCOPE')
-        plan = owner.parse(raw_plan)
+        plan = owner.parse_plan(raw_plan)
         # Full Plan and zero-budget validation is repeated inside the driver child.
         require(type(plan) is dict and plan.get('source') == owner.install.RETAINED_SOURCE
                 and type(plan.get('work_key')) is str and type(plan.get('target_pr')) is int,
