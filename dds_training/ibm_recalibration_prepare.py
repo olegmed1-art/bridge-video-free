@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import time
 
 from stage2b_v24 import OPENING_LEAD_OUTCOME_POLICY, opening_lead_loss
@@ -86,6 +87,17 @@ def parse_json(raw: bytes):
         raise Blocked("INVALID_JSON") from None
 
 
+def runtime_identity():
+    return {"implementation": sys.implementation.name, "version": list(sys.version_info[:3])}
+
+
+def verify_runtime():
+    runtime = runtime_identity()
+    need(runtime["implementation"] == "cpython" and runtime["version"][:2] == [3, 14],
+         "RUNTIME_MISMATCH")
+    return runtime
+
+
 def prepare_plan(spec: dict) -> dict:
     """Validate an input specification; no I/O and no authority from JSON."""
     exact(spec, {"schema", "operation", "scope", "source_sha", "runtime_profile",
@@ -136,13 +148,52 @@ class Budget:
     def __init__(self):
         self.started = self.last = time.monotonic()
         self.bytes = 0
+        self.inputs = []
 
     def check(self, count=0):
         now = time.monotonic()
         need(math.isfinite(now) and self.last <= now < self.started + CHECK_SECONDS, "CHECK_DEADLINE")
         self.last = now
         self.bytes += count
-        need(self.bytes <= MAX_BYTES, "TOTAL_BYTES")
+        # Input bindings remain capped at MAX_BYTES; each is read twice.
+        need(self.bytes <= 2 * MAX_BYTES, "TOTAL_BYTES")
+
+    def retain(self, handle, root, path, before, item):
+        self.inputs.append((handle, root, path, before, item))
+
+    def validate_bundle(self):
+        # Keep the original descriptors and rehash them after all semantic
+        # checks. Metadata alone misses same-size edits with restored mtime.
+        for handle, root, path, before, item in self.inputs:
+            self.check()
+            self.validate_identity(handle, root, path, before)
+            fd = handle.fileno()
+            os.lseek(fd, 0, os.SEEK_SET)
+            sha, total = hashlib.sha256(), 0
+            while True:
+                self.check()
+                raw = os.read(fd, min(1024 * 1024, item["bytes"] - total + 1))
+                if not raw:
+                    break
+                self.check(len(raw))
+                total += len(raw)
+                need(total <= item["bytes"], "INPUT_CHANGED")
+                sha.update(raw)
+            need(total == item["bytes"] and sha.hexdigest() == item["sha256"], "INPUT_CHANGED")
+        for handle, root, path, before, _ in self.inputs:
+            self.check()
+            self.validate_identity(handle, root, path, before)
+
+    @staticmethod
+    def validate_identity(handle, root, path, before):
+        for parent in (*reversed(root.parents), root):
+            need(stat.S_ISDIR(no_links(parent).st_mode), "INPUT_ROOT")
+        need(metadata(os.fstat(handle.fileno())) == metadata(before)
+             and metadata(no_links(path)) == metadata(before), "INPUT_CHANGED")
+
+    def close(self):
+        for handle, *_ in self.inputs:
+            handle.close()
 
 
 def metadata(info):
@@ -171,24 +222,27 @@ def verified_records(root: Path, item: dict, budget: Budget, *, jsonl: bool):
     need(before.st_size == item["bytes"], "FILE_SIZE")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
-    with os.fdopen(fd, "rb") as handle:
-        need(metadata(os.fstat(handle.fileno())) == metadata(before), "INPUT_CHANGED")
-        sha = hashlib.sha256()
-        total = 0
-        limit = MAX_LINE if jsonl else MAX_METADATA
-        while True:
-            budget.check()
-            raw = handle.readline(limit + 1) if jsonl else handle.read(limit + 1)
-            if not raw:
-                break
-            budget.check(len(raw))
-            total += len(raw)
-            need(len(raw) <= limit and total <= item["bytes"], "RECORD_LIMIT")
-            sha.update(raw)
-            yield parse_json(raw)
-        need(total == item["bytes"] and sha.hexdigest() == item["sha256"], "FILE_DIGEST")
-        need(metadata(os.fstat(handle.fileno())) == metadata(before)
-             and metadata(no_links(path)) == metadata(before), "INPUT_CHANGED")
+    handle = os.fdopen(fd, "rb")
+    budget.retain(handle, root, path, before, dict(item))
+    # The enclosing inspection owns descriptor closure after its final
+    # bundle check, including all early rejection paths.
+    need(metadata(os.fstat(handle.fileno())) == metadata(before), "INPUT_CHANGED")
+    sha = hashlib.sha256()
+    total = 0
+    limit = MAX_LINE if jsonl else MAX_METADATA
+    while True:
+        budget.check()
+        raw = handle.readline(limit + 1) if jsonl else handle.read(limit + 1)
+        if not raw:
+            break
+        budget.check(len(raw))
+        total += len(raw)
+        need(len(raw) <= limit and total <= item["bytes"], "RECORD_LIMIT")
+        sha.update(raw)
+        yield parse_json(raw)
+    need(total == item["bytes"] and sha.hexdigest() == item["sha256"], "FILE_DIGEST")
+    need(metadata(os.fstat(handle.fileno())) == metadata(before)
+         and metadata(no_links(path)) == metadata(before), "INPUT_CHANGED")
 
 
 def one_record(root, item, budget):
@@ -209,8 +263,11 @@ def check_train_artifact(spec: dict, local_root: Path) -> dict:
     """Return compact consistency evidence. Does not fit or authorize execution."""
     evidence = {"schema": "dds-ibm-train-inspection-v1", "status": "BLOCKED",
                 "dispatch_allowed": False, "fit_performed": False, "solver_run": False,
-                "external_provenance_verified": False, "holdout_sources_requested": False}
+                "external_provenance_verified": False, "holdout_sources_requested": False,
+                "observed_runtime": runtime_identity()}
+    budget = None
     try:
+        verify_runtime()
         plan = prepare_plan(spec)
         evidence["spec_sha256"] = plan["spec_sha256"]
         budget = Budget()
@@ -291,7 +348,10 @@ def check_train_artifact(spec: dict, local_root: Path) -> dict:
                     need(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1, "CONFIDENCE_PROBABILITY")
                 if "predictor_version" in prediction:
                     need(identity(prediction["predictor_version"]), "PREDICTOR_VERSION")
-                need(prediction.get("model_backoff_level") in {"baseline", "family", "broad", "coarse", "exact"}, "MODEL_BACKOFF")
+                backoff_levels = {"baseline", "family", "broad", "coarse", "exact"}
+                if lead:
+                    backoff_levels.add("family_prior")
+                need(prediction.get("model_backoff_level") in backoff_levels, "MODEL_BACKOFF")
                 for field in ("residual_variance", "correction"):
                     value = prediction.get(field, 0)
                     need(type(value) in (int, float) and math.isfinite(value)
@@ -308,6 +368,7 @@ def check_train_artifact(spec: dict, local_root: Path) -> dict:
                          and integer(result.get("dds_tricks"), 0, 13), "DDS_TRICKS")
                 seen.add(tid)
         need(seen == set(tasks), "OOF_TASK_SET")
+        budget.validate_bundle()
         evidence.update(status="CONSISTENT_AWAITING_EXTERNAL_ADMISSION", reason="EXECUTION_WINDOW_CLOSED",
                         task_count=len(seen), family_count=len(families), fold_count=len(lineage),
                         bytes_read=budget.bytes, facts_sha256=files["oof"]["sha256"],
@@ -316,6 +377,9 @@ def check_train_artifact(spec: dict, local_root: Path) -> dict:
         evidence["reason"] = str(exc)
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
         evidence["reason"] = "INVALID_OR_UNAVAILABLE_INPUT"
+    finally:
+        if budget is not None:
+            budget.close()
     return evidence
 
 
@@ -326,6 +390,7 @@ def main():
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
     try:
+        runtime = verify_runtime()
         info = no_links(args.spec)
         need(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_LINE, "SPEC_LIMIT")
         fd = os.open(args.spec, os.O_RDONLY | getattr(os, "O_BINARY", 0)
@@ -338,12 +403,16 @@ def main():
         need(len(raw) <= MAX_LINE, "SPEC_LIMIT")
         spec = parse_json(raw)
         if args.plan_only:
-            report = dict(prepare_plan(spec), status="PREPARED_EXECUTION_BLOCKED")
+            report = dict(prepare_plan(spec), status="PREPARED_EXECUTION_BLOCKED", observed_runtime=runtime)
         else:
             need(args.root is not None, "INPUT_ROOT_REQUIRED")
             report = check_train_artifact(spec, args.root)
+    except Blocked as exc:
+        report = {"status": "BLOCKED", "reason": str(exc), "dispatch_allowed": False,
+                  "observed_runtime": runtime_identity()}
     except (OSError, ValueError):
-        report = {"status": "BLOCKED", "reason": "SPEC_UNAVAILABLE", "dispatch_allowed": False}
+        report = {"status": "BLOCKED", "reason": "SPEC_UNAVAILABLE", "dispatch_allowed": False,
+                  "observed_runtime": runtime_identity()}
     print(json.dumps(report, sort_keys=True))
     raise SystemExit(0 if report["status"] in {"CONSISTENT_AWAITING_EXTERNAL_ADMISSION", "PREPARED_EXECUTION_BLOCKED"} else 2)
 
