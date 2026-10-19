@@ -161,7 +161,9 @@ class InventoryLiveIntegrationTests(unittest.TestCase):
             if self.source_checks==2:
                 path=next(self.root.glob('*/before.json'));path.write_bytes(b'changed')
         self.replace(self.owner.release.staging,'require_current_main',drift)
-        self.assertEqual(self.observe()['reason'],'LANE_RETIREMENT_DRIFT')
+        # A pinned reread rejects changed content before metadata comparison.
+        self.assertEqual(self.observe()['reason'],'LANE_RETIREMENT_NOT_ACCEPTED')
+        self.assertEqual(self.source_checks,2)
 
     def test_bounded_unknown_propagates_without_inventing_observation(self):
         def unknown(operation):raise RuntimeError('LANE_RETIREMENT_UNKNOWN')
