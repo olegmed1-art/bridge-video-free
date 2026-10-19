@@ -81,6 +81,7 @@ class Fixture:
                                  pilot_properties=lambda *args,**kwargs:{})))
         self.e._boot_id=lambda:self.boot
         self.e._session_read=self.read
+        self.e._session_exists=lambda path:path in self.files
         self.value=dict(version=3,source=SOURCE,controller_source='d'*40,seconds=120,
             expires_at=1800000120,sequence=0,prior=asdict(self.prior),protected={},protected_sha256='e'*64,
             cursor_sha256='f'*64,dispatch_id='synthetic-dispatch',original=self.original,
@@ -202,9 +203,60 @@ class ExecutionSessionContracts(unittest.TestCase):
     def test_partial_intent_or_orphan_first_is_a_replay_barrier(self):
         for name in ('session-intent.json','session-first.json'):
             f=Fixture();f.files[f.directory/name]=b'{'  # durable partial attempt
+            before=deepcopy(f.files)
             with self.subTest(name=name),self.assertRaises((RuntimeError,FileExistsError)):
                 f.enter()
-            self.assertEqual(f.files[f.directory/name],b'{')
+            self.assertEqual(f.files,before)
+            self.assertEqual(f.writes,[])
+
+    def test_activating_readiness_is_readonly_until_genuine_ready_identity(self):
+        for substate in ('start','start-post'):
+            f=Fixture();pending=deepcopy(f.loaded)
+            pending.update(ActiveState='activating',SubState=substate,ActiveEnterTimestampMonotonic='0')
+            f.show_rows=[pending]
+            end=f.value['clock']['monotonic_end_ns'];waits=[]
+            def sleep(seconds):
+                self.assertNotIn(f.directory/'session-intent.json',f.files)
+                self.assertNotIn(f.directory/'session-first.json',f.files)
+                self.assertLessEqual(seconds,0.05)
+                waits.append(seconds);f.mono+=50_000_000;f.wall+=50_000_000
+            f.clock.sleep=sleep
+            with self.subTest(substate=substate):
+                session=f.enter()
+                self.assertEqual(len(waits),1)
+                self.assertEqual(session.monotonic_end_ns,end)
+                self.assertEqual(session.identity['loaded']['ActiveState'],'active')
+                self.assertEqual(f.writes,['session-intent.json','session-first.json'])
+
+    def test_readiness_timeout_drift_and_late_first_record_never_write_intent(self):
+        for fault in ('timeout','input','wall','mono','boot','state','foreign','orphan'):
+            f=Fixture();f.loaded.update(ActiveState='activating',SubState='start-post',ActiveEnterTimestampMonotonic='0')
+            if fault=='state':f.loaded.update(ActiveState='failed',SubState='failed')
+            if fault=='foreign':f.loaded['MainPID']='999'
+            ticks=[]
+            def sleep(seconds):
+                self.assertLess(f.mono,104*NANO)
+                ticks.append(seconds);f.mono+=NANO//4;f.wall+=NANO//4
+                if fault=='input':f.files[f.directory/'supervisor.py']=b'changed while activating'
+                if fault=='wall':f.wall=1800000000*NANO-1
+                if fault=='mono':f.mono=100*NANO
+                if fault=='boot':f.boot='f'*8+'-1234-1234-1234-123456789abc'
+                if fault=='orphan':
+                    f.files[f.directory/'session-first.json']=b'preserve orphan'
+                    f.loaded.update(ActiveState='active',SubState='running',ActiveEnterTimestampMonotonic='100500000')
+            f.clock.sleep=sleep
+            with self.subTest(fault=fault),self.assertRaises(RuntimeError):f.enter()
+            self.assertNotIn(f.directory/'session-intent.json',f.files)
+            self.assertEqual(f.writes,[])
+            if fault=='orphan':self.assertEqual(f.files[f.directory/'session-first.json'],b'preserve orphan')
+            if fault=='timeout':self.assertLessEqual(len(ticks),12)
+
+    def test_live_start_zero_accounting_is_not_a_first_process_binding(self):
+        f=Fixture()
+        f.loaded['ExecStart']=f.loaded['ExecStart'].replace(
+            '[Mon 2026-10-19 12:00:00 UTC]','[n/a]').replace('pid=4242','pid=0')
+        with self.assertRaisesRegex(RuntimeError,'SESSION_UNIT'):f.enter()
+        self.assertEqual(f.writes,[])
 
     def test_lost_write_ack_retains_barrier_and_cannot_retry(self):
         for name in ('session-intent.json','session-first.json'):

@@ -1,8 +1,10 @@
 # Independent review of the finite execution session
 
-2026-10-19 UTC. Governance: ASSURED. Completed assurance: I2 for the frozen
-source and synthetic-port scope below. Actual PID1/CI and production acceptance
-are separate evidence.
+2026-10-19 UTC. Governance: ASSURED. The first section records the initial I2
+assessment of the frozen source below. Automated review subsequently exposed
+four defects, independently reproduced by the reviewer. That initial assessment
+is withdrawn as final approval; it remains historical evidence. Actual PID1/CI
+and production acceptance are separate evidence.
 
 Reviewer task `/root/review2193_i2_record` was launched with model `gpt-5.6-sol`,
 reasoning `high`, without inherited conversation; the author/root executor is
@@ -61,3 +63,80 @@ this review and its actual run remains pending.
 See [finite execution session](native-execution-session.md) for the operational
 boundary and remaining production obligations. A changed pinned source requires
 a fresh assessment of this review's applicability.
+
+## PR2199 review follow-up
+
+Automated review [5577854829](https://github.com/olegmed1-art/bridge-video-free/pull/2199#pullrequestreview-5577854829)
+examined head `80cae0765de71ed6f1cb5d4544d2e0fefd1bb4b2`. The different-model
+reviewer independently confirmed all four claims; the first assessment above
+did not catch them and is not approval of this revision.
+
+| Claim | Historical reproduction | Corrected boundary |
+|---|---|---|
+| Orphan first record silently gains an intent | FileExistsError after creating intent; first bytes unchanged | Either existing file blocks before readiness and again before exclusive intent creation |
+| Type=exec startup race consumes intent | activating/start refuses after creating intent | Read-only readiness before intent, at most three seconds and the original end; fresh clocks and protected inputs throughout |
+| Unavailable ExecStart PID/start accepted | Session accepted MainPID 4242 while ExecStart reported PID zero | Positive expected ExecStart PID and available timestamp; zero form reserved for unrun ExecStopPost |
+| Deferred guard dependencies omitted from CI | Recursive closure 36; trigger missed 18, session selector missed 26 | Recursive ast.walk includes function-local imports; all 36 trigger/select session proof |
+
+The historical source counterexample body and outputs are retained without a
+rerun in [review2199 counterexamples](../../tests/fixtures/light_native_execution_session_review2199_counterexamples.py),
+SHA-256 `b0cb22e77dbdc5a46c4f26e81eab5067c06a38ea15640b52d954f706d12058fe`.
+Those three bodies are verbatim; the separately labelled selector extractor is
+a subsequent, unexecuted reconstruction of the recorded method. Historical
+reproduction requires the frozen 80ca checkout. That manual artifact does not
+enforce source pins and is not a CI proof.
+
+The corrected source requires identical full active identity before and after
+intent, then exclusively creates first binding. A crash before intent means no
+session was accepted; a crash after intent retains its reconciliation barrier.
+No preflight reads credentials, imports the database driver or admits effects.
+The disposable PID1 fixture now calls enter immediately. An explicitly CI-only
+ExecStartPost gate checks actual activating/no-intent state, both released and
+unreleased; an orphan-first case preserves bytes and full ns metadata. Its 11
+guard AST nodes match the production source. It defines 8 groups / 14 isolated
+units; local syntax/AST checks do not establish a Linux/PID1 run.
+
+Four existing compatibility fixtures were corrected separately: an exact
+pre-session helper-set name digest replaces a new/old hybrid; packed import
+tests require the current 36 helpers; sequence tests explicitly use synthetic
+v3 session and origin-clock ports. No product validator was relaxed. Local
+26 session tests and 11 selector tests passed without skips. The existing
+Linux recovery/driver cases require CI; their earlier failures are not closed
+by these portable checks.
+
+| Updated artifact | SHA-256 |
+|---|---|
+| ops/light_native_lane_execution.py | `930780e00a43454ae3df41a57d7aad77a708909788aa8c05989d643b0f8668e7` |
+| tests/test_light_native_execution_session.py | `b1e04e5b5c39d68287c322e4b7bbd2d0d17d36025bd750ac8e5a5e2ed23cb6af` |
+| tests/fixtures/light_native_execution_session_systemd.py | `6e307b473fae28b93919d854239ee0d2070c0461dbd6f648645fef5257feaacd` |
+| .github/workflows/native-host-preflight.yml | `41616d470ace805be92b4fbd0b5ace65b5f68e092be1148365809e1c91f51a89` |
+| tests/test_native_host_preflight_scope.py | `292336379dd3e76a7cecd8e507f773525c990ab4b30d6a630a726f3229da76ad` |
+
+Controller, process collector and HostAuthority pins above are unchanged.
+The same different-model reviewer independently measured all six updated and
+controller pins, traced the corrected boundary, and accepted this revision for
+source/synthetic-port and selector scope, with no unresolved source finding in
+that scope. It executed these additional focused checks without existing suites:
+
+| Fresh counterexample | Observed outcome |
+|---|---|
+| Orphan first record | REENTRY; writes empty; orphan preserved |
+| Pending activation reaches its bound | READINESS; writes empty |
+| Protected input drifts while pending | Refusal; writes empty |
+| Pending becomes active | Accepted after one 0.05 s wait; original end unchanged |
+| ExecStart PID zero and unavailable start | SESSION_UNIT; writes empty |
+| Timer identity drifts after intent | INPUT_CHANGED; only intent retained |
+| Recursive source selector closure | 36 paths; zero trigger or session omissions |
+
+These table labels abbreviate the full LANE_EXEC_SESSION error codes. The exact
+already-executed script was saved without rerun as
+[final review counterexamples](../../tests/fixtures/light_native_execution_session_review2199_final_counterexamples.py),
+SHA-256 `a123dbca6820bc1ec115043fcf1b6f4e9dd7ffe63af65f4606a91562710befbc`.
+The additional importlib escape scan found only private-wheel imports of
+psycopg, psycopg_binary and typing_extensions, not another repository source.
+
+The reviewer also checked the unchanged guard AST and startup fixture design.
+This I2 acceptance does not establish a new actual Linux/PID1 run, actual GHA
+authentication, production host/delegation, database/provider, workload/admission,
+production cleanup/restore, installation or service acceptance. CI remains a
+separate requirement. No IBM or service operation was performed by the reviewer.

@@ -36,7 +36,10 @@ def retained(tmp_path,monkeypatch,request_bytes):
     previous=dict(sequence=2,plan_sha256=prior_plan,terminal_sha256=r.sha(r.encoded(terminal)))
     policy['predecessor']=previous
     historical=owner.parse(t.controller)
-    historical['helpers']={k:v for k,v in historical['helpers'].items() if k not in owner.RETIREMENT_HELPERS}
+    historical['helpers']={k:v for k,v in historical['helpers'].items()
+                           if k not in owner.RETIREMENT_HELPERS|{'ops/light_native_service_unit.py'}}
+    # Exact pre-session/pre-retirement helper names from baseline 6c4b8387.
+    assert owner.sha(owner.encoded(sorted(historical['helpers']))) == 'c1712eef5c3da93de4d8192dda45d10aa91dab827f21a54bb58009ae3b25a9ec'
     historical['helpers']['ops/light_native_lane_controller.py']='# synthetic large helper\n'+'#'*280000
     package=owner.encoded(historical);policy['accepted_controller_sha256']=r.sha(package)
     digest=r.sha(r.encoded(policy));outer=issuer.derive(policy,digest,0,previous,t.now)

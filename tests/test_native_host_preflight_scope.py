@@ -2,6 +2,7 @@
 import ast
 from contextlib import contextmanager, redirect_stdout
 import fnmatch
+from functools import cache
 import io
 import json
 import os
@@ -50,8 +51,9 @@ def loaded_codec_sources():
     return sorted({node.args[0].value for node in (*calls, *selected)})
 
 
+@cache
 def loaded_session_sources():
-    """Derive the real fixture's top-level ops imports without executing them."""
+    """Derive all ops imports, including deferred imports, without executing them."""
     test_tree = ast.parse((ROOT/'tests/test_light_native_execution_session.py').read_bytes())
     calls = [node for node in ast.walk(test_tree) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Name) and node.func.id == 'actual']
@@ -67,7 +69,7 @@ def loaded_session_sources():
         result.add(name)
         if len(result) > 128:
             raise AssertionError('Bounded session import graph required')
-        for node in ast.parse((ROOT/name).read_bytes()).body:
+        for node in ast.walk(ast.parse((ROOT/name).read_bytes())):
             if isinstance(node, ast.Import):
                 paths = [alias.name.replace('.', '/')+'.py' for alias in node.names
                          if alias.name.startswith('ops.')]
@@ -140,7 +142,7 @@ class ScopeContracts(unittest.TestCase):
                      'tests/test_native_host_preflight_scope.py'):
             with self.subTest(source=name):
                 self.assertTrue(any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns), name)
-                self.assert_codec_only([name])
+                self.assert_codec_only([name], session=name in loaded_session_sources())
 
     def test_unchanged_old_job_bodies_select_portable_and_session_proofs(self):
         self.assert_codec_only([WORKFLOW], session=True)
@@ -189,9 +191,25 @@ class ScopeContracts(unittest.TestCase):
                 self.assertTrue(any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns), name)
                 self.assertTrue(select([name])['session'], name)
 
+    def test_deferred_authentication_and_deadline_imports_select_session_proof(self):
+        execution = ast.parse((ROOT/'ops/light_native_lane_execution.py').read_bytes())
+        deferred = [node for function in execution.body
+                    if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    for node in ast.walk(function)
+                    if isinstance(node, ast.ImportFrom)
+                    and node.module == 'ops.light_native_lane_run_guard']
+        self.assertTrue(deferred, 'Concrete binding import must be checked inside its function')
+        sources = loaded_session_sources()
+        for name in ('ops/light_native_lane_run_guard.py', 'ops/native_maintenance_run_guard.py'):
+            with self.subTest(source=name):
+                self.assertIn(name, sources)
+                self.assertTrue(select([name])['session'], name)
+
     def test_execution_job_change_selects_it_without_repeating_old_proofs(self):
         text = workflow_text()
-        marker = 'assert result.testsRun >= 23\n'
+        marker = ("loadTestsFromName('tests.test_light_native_execution_session'))\n"
+                  '          assert not result.skipped, result.skipped\n'
+                  '          assert result.testsRun >= 26\n')
         self.assertEqual(text.count(marker), 1)
         self.assertEqual(select([WORKFLOW], base_text=text,
                                 head_text=text.replace(marker, marker.rstrip()+' changed\n', 1)),

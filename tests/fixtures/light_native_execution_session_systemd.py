@@ -5,6 +5,11 @@ The actual collector, /proc reader, session algorithms and timer checks remain
 unchanged. Requests, prior HOLD data and upstream run authority are explicitly
 synthetic; no GitHub authentication, legacy attestation, production restore,
 database, provider or workload execution is claimed or performed.
+
+Two startup cases add a fixed CI-only ExecStartPost gate, and use --no-block
+only to let the parent release that gate. No production source or accepted
+unit profile acquires this property. Every worker enters through the real
+production readiness code, without a fixture wait for ActiveState=active.
 """
 import ast
 import hashlib
@@ -24,7 +29,8 @@ import time
 PREFIX = 'bridge-native-execution-session-fixture-'
 PURPOSE = b'CI_ONLY_EXECUTION_SESSION_NO_WORK_AUTHORITY\n'
 CASES = ('first', 'restart', 'foreign', 'python', 'inputs', 'unit', 'expiry', 'uncertain')
-COLLECTORS = ('_execution_identity', '_session_show', '_session_exec', '_supervisor_timer',
+COLLECTORS = ('_execution_identity', '_await_supervisor', '_session_process', '_session_exists',
+              '_session_show', '_session_exec', '_supervisor_timer',
               '_session_read', '_clock_shape', '_boot_id', 'ExecutionSession')
 
 
@@ -64,6 +70,11 @@ def new_file(path, raw, mode=0o600):
         os.fsync(stream.fileno())
 
 
+def metadata(row):
+    return (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid, row.st_nlink,
+            row.st_size, row.st_atime_ns, row.st_mtime_ns, row.st_ctime_ns)
+
+
 def root_file(path, limit=262144):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOATIME)
     try:
@@ -72,10 +83,8 @@ def root_file(path, limit=262144):
              stat.S_IMODE(before.st_mode) == 0o600 and before.st_nlink == 1 and
              0 < before.st_size <= limit, 'PROTECTED_FILE')
         raw = os.read(fd, limit + 1)
-        signature = lambda row: (row.st_dev, row.st_ino, row.st_mode, row.st_uid, row.st_gid,
-            row.st_nlink, row.st_size, row.st_atime_ns, row.st_mtime_ns, row.st_ctime_ns)
-        need(len(raw) == before.st_size and signature(before) == signature(os.fstat(fd)) ==
-             signature(path.stat(follow_symlinks=False)), 'PROTECTED_FILE_CHANGED')
+        need(len(raw) == before.st_size and metadata(before) == metadata(os.fstat(fd)) ==
+             metadata(path.stat(follow_symlinks=False)), 'PROTECTED_FILE_CHANGED')
         return raw
     finally:
         os.close(fd)
@@ -146,8 +155,14 @@ class Layout:
         self.directory = None
         self.digest = None
         self.unit_intended = False
+        self.variant = None
+        self.barrier = None
+        self.barrier_metadata = None
 
     def prepare(self, repo, source, *, variant='normal', window=45):
+        need(variant in ('normal', 'wrong-python', 'partial', 'orphan-first', 'lost-ack', 'timer',
+                         'startup-release', 'startup-timeout'), 'FIXED_VARIANT')
+        self.variant = variant
         need(show(self.unit, ('LoadState',))['LoadState'] == 'not-found', 'PREEXISTING_UNIT')
         self.case.mkdir(mode=0o700)
         for path in (self.execution, self.owner, self.stage):
@@ -221,8 +236,17 @@ class Layout:
             digest=self.digest, original_source_sha256=sha(original), staged_source_sha256=sha(staged),
             collector_ast_unchanged=True, runtime_seconds=30)))
         if variant == 'partial':
-            new_file(self.directory / 'session-intent.json', b'{')
+            self.barrier = self.directory / 'session-intent.json'
+        elif variant == 'orphan-first':
+            self.barrier = self.directory / 'session-first.json'
+        if self.barrier is not None:
+            new_file(self.barrier, b'{')
+            self.barrier_metadata = metadata(self.barrier.stat(follow_symlinks=False))
         return value
+
+    def barrier_unchanged(self):
+        return (self.barrier is not None and sha(root_file(self.barrier)) == sha(b'{') and
+                metadata(self.barrier.stat(follow_symlinks=False)) == self.barrier_metadata)
 
     def launch(self):
         row = show(self.unit, ('LoadState', 'ActiveState'))
@@ -232,7 +256,11 @@ class Layout:
             wait_for(lambda: show(self.unit, ('LoadState',))['LoadState'] == 'not-found', 8)
         self.unit_intended = True
         hook = '/usr/bin/python3 -I -S -B ' + str(self.directory / 'supervisor.py') + ' restore ' + self.digest
+        startup = self.variant in ('startup-release', 'startup-timeout')
+        gate = '/usr/bin/python3 -I -S -B ' + str(self.directory / 'supervisor.py') + ' startup ' + self.digest
+        startup_arguments = ['--no-block', '--property=ExecStartPost=' + gate] if startup else []
         command('/usr/bin/systemd-run', '--quiet', '--unit=' + self.unit, '--service-type=exec',
+            *startup_arguments,
             '--property=User=root', '--property=Group=root', '--property=UMask=0077',
             '--property=NoNewPrivileges=yes', '--property=Restart=no', '--property=KillMode=control-group',
             '--property=TimeoutStopSec=120', '--property=RuntimeMaxSec=30',
@@ -279,7 +307,7 @@ class Layout:
 
 
 def worker(mode, digest, directory):
-    need(mode in ('run', 'restore', 'foreign') and re.fullmatch('[0-9a-f]{64}', digest), 'WORKER_ARGUMENTS')
+    need(mode in ('run', 'restore', 'foreign', 'startup') and re.fullmatch('[0-9a-f]{64}', digest), 'WORKER_ARGUMENTS')
     directory = Path(directory)
     case = directory.parent.parent
     context = json.loads(root_file(case / 'context.json'))
@@ -294,6 +322,22 @@ def worker(mode, digest, directory):
     process = execution.unit_readback._process(os.getpid())
     invocation = process.invocation_id
     need(re.fullmatch('[0-9a-f]{32}', invocation), 'INVOCATION')
+    if mode == 'startup':
+        need(context['variant'] in ('startup-release', 'startup-timeout'), 'CI_STARTUP_GATE_SCOPE')
+        row = execution._session_show(time.monotonic() + 3)
+        need(row['ActiveState'] == 'activating' and row['SubState'] == 'start-post' and
+             row['ControlPID'] == str(os.getpid()) and int(row['MainPID']) > 1 and
+             process.cgroup == '0::/system.slice/' + context['unit'] and
+             process.uid == process.gid == 0 and process.no_new_privs == 1, 'ACTUAL_PID1_START_POST')
+        value, _, _ = execution.request(digest, for_restore=True)
+        new_file(case / ('startup-' + invocation + '.json'), encoded(dict(
+            synthetic_property='CI_ONLY_EXEC_START_POST_GATE', pid=process.pid,
+            main_pid=int(row['MainPID']), invocation_id=invocation, actual_pid1_control=True,
+            observed_monotonic_ns=time.monotonic_ns())))
+        wait_for(lambda: (case / 'startup-release').exists(), 12)
+        need(root_file(case / 'startup-release') == b'RELEASE_CI_START_POST\n' and
+             time.monotonic_ns() < value['clock']['monotonic_end_ns'], 'CI_STARTUP_GATE_RELEASE')
+        return
     if mode == 'restore':
         row = execution._session_show(time.monotonic() + 5)
         need(row['ControlPID'] == str(os.getpid()) and process.cgroup == '0::/system.slice/' + context['unit'] and
@@ -326,17 +370,26 @@ def worker(mode, digest, directory):
         new_file(case / ('foreign-' + str(os.getpid()) + '.json'), encoded(dict(denied=True,
             actual_pid=process.pid, actual_cgroup=process.cgroup, actual_invocation_id=invocation)))
         return
-    wait_for(lambda: execution._session_show(time.monotonic() + 3)['ActiveState'] == 'active', 3)
+    if context['variant'] in ('startup-release', 'startup-timeout'):
+        row = execution._session_show(time.monotonic() + 3)
+        need(row['ActiveState'] == 'activating' and row['SubState'] in ('start', 'start-post') and
+             row['MainPID'] == str(os.getpid()) and not (directory / 'session-intent.json').exists()
+             and not (directory / 'session-first.json').exists(), 'CI_ACTUAL_ACTIVATING_ENTRY')
+        new_file(case / ('attempt-' + invocation + '.json'), encoded(dict(pid=process.pid,
+            invocation_id=invocation, observed_monotonic_ns=time.monotonic_ns(),
+            actual_activating=True, actual_substate=row['SubState'], no_intent=True, original_end_ns=json.loads(
+                root_file(directory / 'request.json'))['clock']['monotonic_end_ns'])))
     try:
         session = execution.ExecutionSession.enter(digest)
     except Exception as error:
         reason = str(error)
         need(isinstance(error, (RuntimeError, FileExistsError)) and
-             (reason.startswith('LANE_') or isinstance(error, FileExistsError)), 'UNEXPECTED_ENTRY_ERROR')
+             (reason.startswith('LANE_') or reason == 'NATIVE_UNIT_SHOW_TIMEOUT' or
+              isinstance(error, FileExistsError)), 'UNEXPECTED_ENTRY_ERROR')
         new_file(case / ('rejected-' + invocation + '.json'), encoded(dict(rejected=True,
             pid=process.pid, invocation_id=invocation, actual_cgroup=process.cgroup,
             reason='CREATE_ONLY_BARRIER' if isinstance(error, FileExistsError) else reason,
-            workload_executed=False)))
+            workload_executed=False, rejected_monotonic_ns=time.monotonic_ns())))
         return
     session.assert_current()
     actual = session.identity
@@ -407,6 +460,26 @@ def mark(case, **evidence):
         production_accepted=False, upstream_run_authenticated=False, workload_executed=False, **evidence)), flush=True)
 
 
+def activating_without_intent(layout):
+    startup = wait_for(lambda: receipt(layout.case, 'startup'))[1]
+    attempt = wait_for(lambda: receipt(layout.case, 'attempt'))[1]
+    need(startup['actual_pid1_control'] and startup['main_pid'] == attempt['pid'] and
+         startup['invocation_id'] == attempt['invocation_id'] and attempt['actual_activating'] and
+         attempt['no_intent'], 'ACTUAL_STARTUP_ATTEMPT')
+    # The fixed post-start process holds actual PID1 state; these observations
+    # never substitute loaded fields or implement a fixture readiness retry.
+    deadline = time.monotonic() + .15
+    while time.monotonic() < deadline:
+        row = show(layout.unit, ('ActiveState', 'SubState', 'MainPID', 'ControlPID', 'InvocationID'))
+        need(row == dict(ActiveState='activating', SubState='start-post', MainPID=str(attempt['pid']),
+             ControlPID=str(startup['pid']), InvocationID=attempt['invocation_id']) and
+             not (layout.directory / 'session-intent.json').exists() and
+             not (layout.directory / 'session-first.json').exists() and
+             not receipt(layout.case, 'rejected'), 'ACTIVATING_WROTE_INTENT_OR_REFUSED_EARLY')
+        time.sleep(.025)
+    return attempt
+
+
 def run(repo, source):
     need(sys.platform == 'linux' and os.geteuid() == 0 and
          Path('/proc/1/comm').read_text().strip() == 'systemd', 'ACTUAL_PID1_REQUIRED')
@@ -426,12 +499,31 @@ def run(repo, source):
             value = layout.prepare(repo, source, **kwargs)
             layout.launch()
             return layout, value
-        first, _ = prepared('first')
+        first, first_value = prepared('first', variant='startup-release')
+        attempt = activating_without_intent(first)
+        new_file(first.case / 'startup-release', b'RELEASE_CI_START_POST\n')
         entered = first.entered()[1]
+        need(attempt['original_end_ns'] == entered['monotonic_end_ns'] ==
+             first_value['clock']['monotonic_end_ns'], 'STARTUP_REBASED_DEADLINE')
         first.trigger('reenter')
         need(first.checked()[1]['accepted'] and sha(root_file(first.directory / 'session-first.json')) == entered['first_sha256'], 'SAME_PID_REENTRY')
         first.stop()
-        mark('first', actual_pid1_timer_bound=True, same_pid_reentry_denied=True)
+        startup_timeout, timeout_value = prepared('first-timeout', variant='startup-timeout')
+        attempt = activating_without_intent(startup_timeout)
+        refused = wait_for(lambda: receipt(startup_timeout.case, 'rejected'), 6)[1]
+        elapsed = refused['rejected_monotonic_ns'] - attempt['observed_monotonic_ns']
+        need(refused['reason'] in ('LANE_EXEC_SESSION_READINESS', 'NATIVE_UNIT_SHOW_TIMEOUT') and
+             refused['rejected_monotonic_ns'] < timeout_value['clock']['monotonic_end_ns'] and
+             2_500_000_000 <= elapsed <= 5 * 10**9 and
+             not (startup_timeout.directory / 'session-intent.json').exists() and
+             not (startup_timeout.directory / 'session-first.json').exists(), 'STARTUP_WAIT_UNBOUNDED_OR_WROTE_INTENT')
+        startup_timeout.stop()
+        need(not (startup_timeout.directory / 'session-intent.json').exists() and
+             not (startup_timeout.directory / 'session-first.json').exists(), 'STARTUP_CLEANUP_CREATED_SESSION')
+        mark('first', actual_pid1_timer_bound=True, same_pid_reentry_denied=True,
+             ci_only_exec_start_post_gate=True, activating_no_intent=True,
+             production_readiness_used=True, never_release_bounded_refusal=True,
+             original_deadline_unchanged=True)
 
         restarted, _ = prepared('restart')
         old = restarted.entered()
@@ -462,7 +554,8 @@ def run(repo, source):
         wrong, _ = prepared('python', variant='wrong-python')
         reject = wait_for(lambda: receipt(wrong.case, 'rejected'))[1]
         need(reject['reason'] == 'LANE_EXEC_SESSION_PROCESS' and
-             (wrong.directory / 'session-intent.json').exists() and not (wrong.directory / 'session-first.json').exists(), 'PYTHON_PIN_NOT_EXERCISED')
+             not (wrong.directory / 'session-intent.json').exists() and
+             not (wrong.directory / 'session-first.json').exists(), 'PYTHON_PIN_NOT_EXERCISED')
         wrong.stop()
         mark('python', actual_python_pin_mismatch_denied=True)
 
@@ -506,12 +599,20 @@ def run(repo, source):
 
         partial, _ = prepared('uncertain-partial', variant='partial')
         wait_for(lambda: receipt(partial.case, 'rejected'))
-        need(root_file(partial.directory / 'session-intent.json') == b'{' and
+        need(partial.barrier_unchanged() and
              not (partial.directory / 'session-first.json').exists(), 'PARTIAL_BARRIER_REPLACED')
         cleanup = wait_for(lambda: receipt(partial.case, 'cleanup'))[1]
         need(cleanup['actual_pid1_control'] and cleanup['restore_request_readable'] and
              cleanup['new_session_denied'], 'PARTIAL_CLEANUP')
         partial.stop()
+        need(partial.barrier_unchanged(), 'PARTIAL_CLEANUP_REPLACED_BARRIER')
+        orphan, _ = prepared('uncertain-orphan', variant='orphan-first')
+        wait_for(lambda: receipt(orphan.case, 'rejected'))
+        need(orphan.barrier_unchanged() and
+             not (orphan.directory / 'session-intent.json').exists(), 'ORPHAN_FIRST_REPLACED')
+        orphan.stop()
+        need(orphan.barrier_unchanged() and
+             not (orphan.directory / 'session-intent.json').exists(), 'ORPHAN_CLEANUP_CREATED_SESSION')
         lost, _ = prepared('uncertain-lost', variant='lost-ack')
         wait_for(lambda: (lost.directory / 'session-first.json').exists())
         cleanup = wait_for(lambda: receipt(lost.case, 'cleanup'))[1]
@@ -524,8 +625,10 @@ def run(repo, source):
         wait_for(lambda: receipt(lost.case, 'rejected'))
         need(root_file(lost.directory / 'session-first.json') == first_bytes, 'LOST_ACK_REBOUND')
         lost.stop()
-        mark('uncertain', partial_and_lost_ack_barriers=True, actual_independent_cleanup=True)
+        mark('uncertain', partial_and_lost_ack_barriers=True, orphan_first_barrier=True,
+             actual_independent_cleanup=True)
         print(json.dumps(dict(audit='EXECUTION_SESSION_SYSTEMD_REHEARSAL', passed=len(CASES),
+            isolated_units=len(layouts), ci_only_exec_start_post_gate=True,
             real_systemd=True, real_proc=True, production_accepted=False, host_delegation=False,
             database_connected=False, provider_connected=False, workload_executed=False,
             production_restore_exercised=False, elapsed_seconds=round(time.monotonic() - started, 1))), flush=True)

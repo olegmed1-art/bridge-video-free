@@ -13,9 +13,15 @@ renews this clock. Requests v1/v2 remain readable for owned cleanup only.
 
 Before loading the database driver, the supervisor enters ExecutionSession.
 It reads protected request, script, owner context and owner execution pointer,
-then creates an intent and first-binding record with exclusive creation. Missing
-or partial completion, a second entry, or another invocation requires explicit
-reconciliation. There is no delete, overwrite, retry or ACK-repair method.
+then performs a read-only readiness check before exclusive journal creation.
+Either existing session file, including an orphan first record, is a barrier;
+it is never repaired. Type=exec activation may take at most three seconds and
+cannot exceed the original deadline. Original clocks and protected inputs stay
+checked while waiting. A timeout before intent means no session was accepted.
+The complete active identity must agree before and after intent creation, before
+the first-binding record is created. Partial completion, a second entry or
+another invocation requires explicit reconciliation. There is no delete,
+overwrite, retry or ACK-repair method.
 
 Two actual PID1 readbacks and independent process snapshots must agree. They
 bind the fixed supervisor unit, its loaded commands, no reload/drop-ins, root
@@ -23,6 +29,10 @@ UID/GID, actual NoNewPrivs, executable hash, argv, cgroup, PID/start, boot and
 invocation. The protected request and first records are checked again before
 effects and during the local loop. A changed input, identity or clock closes
 that session permanently.
+
+The loaded ExecStart command must carry this process's positive PID and a
+start timestamp. Only the not-yet-run ExecStopPost may have PID zero and no
+start timestamp.
 
 The PID1 runtime is bounded against the original monotonic end as well. The
 controller requests a conservative remaining RuntimeMax; the guard requires
@@ -48,6 +58,11 @@ manifest/context/intent delegation and separate transient execution authority.
 The selective workflow separates portable codec/selector checks from the
 execution-session fixture. It is designed to use synthetic request and policy
 data, no credentials, database or provider, and ownership-checked cleanup.
+The selector covers the recursive ops import graph, including deferred imports
+inside functions. One startup fixture uses an explicitly synthetic ExecStartPost
+barrier to hold real PID1 in its activating phase; this property is not added to
+the production unit. Its released and unreleased forms check readiness and
+timeout before any intent, while retaining the actual production guard code.
 When run, its local systemd/process observations do not establish a production
 installation or full database/provider drain. Unchanged historical transition
 and HOST proofs are not repeated merely because this proof is added.

@@ -226,7 +226,7 @@ def _session_exec(raw, arguments, pid):
             and fields['path']==arguments[0] and fields['argv[]']==' '.join(arguments)
             and fields['ignore_errors']=='no' and fields['stop_time']=='[n/a]'
             and fields['code']=='(null)' and fields['status']=='0/0'
-            and (fields['pid']=='0' and fields['start_time']=='[n/a]' or
+            and (pid==0 and arguments[-2]=='restore' and fields['pid']=='0' and fields['start_time']=='[n/a]' or
                  fields['pid']==str(pid) and pid>1 and re.fullmatch(
                     r'\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [A-Za-z0-9_+:/.-]{1,32}\]',
                     fields['start_time'])), 'LANE_EXEC_SESSION_UNIT')
@@ -246,9 +246,22 @@ def _supervisor_timer(row,value):
             'LANE_EXEC_SESSION_TIMER')
 
 
-def _execution_identity(digest,value,directory):
+def _session_process(digest,value,directory,process):
+    arguments=('/usr/bin/python3','-I','-S','-B',str(directory/'supervisor.py'),'run',digest)
+    require(all(type(getattr(process,key)) is int for key in ('pid','uid','gid','no_new_privs','start_ticks'))
+            and process.pid==os.getpid() and process.pid>1 and process.uid==process.gid==0
+            and process.no_new_privs==1 and process.start_ticks>0
+            and process.boot_id==value['clock']['boot_id'] and process.exe_sha256==value['python_sha256']
+            and process.argv==arguments and process.cgroup=='0::/system.slice/'+SUPERVISOR
+            and process.cwd=='/' and re.fullmatch('[0-9a-f]{32}',process.invocation_id),
+            'LANE_EXEC_SESSION_PROCESS')
+    return arguments
+
+
+def _execution_identity(digest,value,directory,*,deadline=None):
     """Fixed transient PID1 readback; systemctl never supplies /proc identity."""
-    deadline=time.monotonic()+10
+    deadline=min(time.monotonic()+10,value['clock']['monotonic_end_ns']/10**9,
+                 float('inf') if deadline is None else deadline)
     before=_session_show(deadline)
     first=unit_readback._process(os.getpid())
     after=_session_show(deadline)
@@ -259,20 +272,57 @@ def _execution_identity(digest,value,directory):
         InvocationID=first.invocation_id,NRestarts='0',Transient='yes',NeedDaemonReload='no',DropInPaths='',
         User='root',Group='root',Restart='no',NoNewPrivileges='yes',KillMode='control-group',
         ControlGroup='/system.slice/'+SUPERVISOR,ControlPID='0')
-    arguments=('/usr/bin/python3','-I','-S','-B',str(directory/'supervisor.py'),'run',digest)
+    arguments=_session_process(digest,value,directory,first)
     require(all(before[key]==item for key,item in expected.items())
             and switch.duration_seconds(before['TimeoutStopUSec'])==120,'LANE_EXEC_SESSION_UNIT')
     _supervisor_timer(before,value)
     _session_exec(before['ExecStart'],arguments,first.pid)
     _session_exec(before['ExecStopPost'],(*arguments[:-2],'restore',digest),0)
-    require(all(type(getattr(first,key)) is int for key in ('pid','uid','gid','no_new_privs','start_ticks'))
-            and first.pid==os.getpid() and first.pid>1 and first.uid==first.gid==0
-            and first.no_new_privs==1 and first.start_ticks>0
-            and first.boot_id==value['clock']['boot_id'] and first.exe_sha256==value['python_sha256']
-            and first.argv==arguments and first.cgroup=='0::/system.slice/'+SUPERVISOR
-            and first.cwd=='/'
-            and re.fullmatch('[0-9a-f]{32}',first.invocation_id), 'LANE_EXEC_SESSION_PROCESS')
     return dict(process=asdict(first),loaded=before)
+
+
+def _session_exists(path):
+    try:path.lstat()
+    except FileNotFoundError:return False
+    return True  # Includes symlinks, partial bytes and an orphan first record.
+
+
+def _await_supervisor(digest,value,directory,*,check_inputs):
+    """Read-only Type=exec readiness, before consuming any first-entry record."""
+    clock=value['clock']
+    deadline_ns=min(time.monotonic_ns()+3*10**9,clock['monotonic_end_ns'])
+    last_wall=clock['wall_ns'];last_monotonic=clock['monotonic_start_ns']
+    while True:
+        check_inputs()
+        wall=time.time_ns();monotonic=time.monotonic_ns()
+        require(_boot_id()==clock['boot_id'] and wall>=last_wall and wall<value['expires_at']*10**9
+                and last_monotonic<=monotonic<deadline_ns,'LANE_EXEC_SESSION_READINESS')
+        last_wall,last_monotonic=wall,monotonic
+        row=_session_show(deadline_ns/10**9)
+        if row['ActiveState']=='active' and row['SubState']=='running':
+            result=_execution_identity(digest,value,directory,deadline=deadline_ns/10**9)
+            check_inputs()
+            require(time.time_ns()>=last_wall and last_monotonic<=time.monotonic_ns()<deadline_ns,
+                    'LANE_EXEC_SESSION_READINESS')
+            return result
+        require(row['ActiveState']=='activating' and row['SubState'] in ('start','start-post'),
+                'LANE_EXEC_SESSION_READINESS')
+        process=unit_readback._process(os.getpid())
+        arguments=_session_process(digest,value,directory,process)
+        expected=dict(LoadState='loaded',MainPID=str(os.getpid()),InvocationID=process.invocation_id,
+            NRestarts='0',Transient='yes',NeedDaemonReload='no',DropInPaths='',User='root',Group='root',
+            Restart='no',NoNewPrivileges='yes',KillMode='control-group',Type='exec',
+            RuntimeRandomizedExtraUSec='0',ControlGroup='/system.slice/'+SUPERVISOR)
+        require(all(row[key]==item for key,item in expected.items())
+                and 30<=switch.duration_seconds(row['RuntimeMaxUSec'])<=value['seconds']
+                and switch.duration_seconds(row['TimeoutStopUSec'])==120,
+                'LANE_EXEC_SESSION_READINESS')
+        _session_exec(row['ExecStart'],arguments,process.pid)
+        _session_exec(row['ExecStopPost'],(*arguments[:-2],'restore',digest),0)
+        check_inputs()
+        remaining=deadline_ns-time.monotonic_ns()
+        require(remaining>0,'LANE_EXEC_SESSION_READINESS')
+        time.sleep(min(0.05,remaining/10**9))
 
 
 class ExecutionSession:
@@ -290,13 +340,24 @@ class ExecutionSession:
         self.last_monotonic_ns=self.clock['monotonic_start_ns']
         self.inputs=self._inputs()
         self._time()
+        paths=(self.directory/'session-intent.json',self.directory/'session-first.json')
+        require(not any(_session_exists(path) for path in paths),'LANE_EXEC_SESSION_REENTRY')
+        def check_inputs():
+            self._time()
+            require(self._inputs()==self.inputs,'LANE_EXEC_SESSION_INPUT_CHANGED')
+            self._time()
+        ready=_await_supervisor(digest,self.value,self.directory,check_inputs=check_inputs)
+        self._time()
+        require(self._inputs()==self.inputs,'LANE_EXEC_SESSION_INPUT_CHANGED')
+        require(not any(_session_exists(path) for path in paths),'LANE_EXEC_SESSION_REENTRY')
         intent=encoded(dict(version=1,kind='LIGHT_LANE_EXECUTION_SESSION_INTENT',request_sha256=digest,
                             inputs_sha256=hashlib.sha256(encoded(self.inputs)).hexdigest()))
         try:install.write_new(self.directory/'session-intent.json',intent,0o600)
         except FileExistsError:raise RuntimeError('LANE_EXEC_SESSION_REENTRY') from None
         self.intent=intent
         self.identity=_execution_identity(digest,self.value,self.directory)
-        require(self._inputs()==self.inputs,'LANE_EXEC_SESSION_INPUT_CHANGED')
+        require(encoded(self.identity)==encoded(ready) and self._inputs()==self.inputs,
+                'LANE_EXEC_SESSION_INPUT_CHANGED')
         self._time()
         self.first=encoded(dict(version=1,kind='LIGHT_LANE_EXECUTION_SESSION_FIRST',request_sha256=digest,
             intent_sha256=hashlib.sha256(intent).hexdigest(),identity=self.identity))

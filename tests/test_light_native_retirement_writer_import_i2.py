@@ -281,7 +281,7 @@ print('ISOLATED_WRITER_BOUNDARY_PASS', mode)
 def test_isolated_packed_writer_import_boundary(tmp_path, mode):
     repository = Path(__file__).resolve().parents[1]
     names = tuple(dict.fromkeys((*owner.release.HELPERS, *owner.EXTRA)))
-    assert len(names) == 35
+    assert len(names) == 36 and 'ops/light_native_service_unit.py' in names
     with tempfile.TemporaryDirectory(prefix='packed-writer-', dir=tmp_path) as directory:
         packed = Path(directory)
         for name in names:
