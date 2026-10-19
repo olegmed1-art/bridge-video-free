@@ -14,6 +14,10 @@ Systemctl can omit empty array properties even with `--all`. Their absence
 cannot establish an empty value: a separate bounded D-Bus read must attest the
 seven exact typed empty arrays. Missing scalar or malformed array evidence
 remains a refusal.
+The loaded command's accounting may reset to PID zero and unavailable timestamps
+after a daemon reload. Only that exact explicit accounting form is accepted;
+the running identity still comes from MainPID, InvocationID and independent
+`/proc` snapshots. Missing or mixed accounting fields remain refusals.
 Existing installation, source, STOP, deadline, child ancestry and purpose checks
 remain required. PID1 execution delegation is a separate authority boundary.
 

@@ -143,6 +143,13 @@ def _exec_start(value):
             and fields['path'] == ARGV[0] and fields['argv[]'] == ' '.join(ARGV)
             and fields['ignore_errors'] == 'no' and fields['stop_time'] == '[n/a]'
             and fields['code'] == '(null)' and fields['status'] == '0/0', 'NATIVE_UNIT_EXEC')
+    pid = _integer(fields['pid'])
+    if pid == 0:
+        # daemon-reload can reset command accounting while the real process
+        # remains alive. Retain this explicit form; it is not process identity.
+        require(fields['start_time'] == '[n/a]', 'NATIVE_UNIT_EXEC')
+        return (ARGV, 0, '[n/a]')
+    require(pid > 1, 'NATIVE_UNIT_EXEC')
     match = re.fullmatch(r'\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) ([A-Za-z0-9_+:/.-]{1,32})\]',
                          fields['start_time'])
     require(match is not None, 'NATIVE_UNIT_EXEC')
@@ -151,8 +158,6 @@ def _exec_start(value):
     except ValueError:
         raise Refusal('NATIVE_UNIT_EXEC') from None
     require(('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[moment.weekday()] == match[1], 'NATIVE_UNIT_EXEC')
-    pid = _integer(fields['pid'])
-    require(pid > 1, 'NATIVE_UNIT_EXEC')
     return (ARGV, pid, fields['start_time'])
 
 
@@ -249,7 +254,9 @@ def validate_loaded(unit_raw, before_raw, after_raw, process_before, process_aft
                 'NATIVE_UNIT_PROCESS')
     require(process_before == process_after and before['MainPID'] == process_before.pid
             and before['InvocationID'] == process_before.invocation_id
-            and before['ExecStart'][:2] == (ARGV, process_before.pid), 'NATIVE_UNIT_PROCESS_CHANGED')
+            and before['ExecStart'][0] == ARGV
+            and (before['ExecStart'][1] == process_before.pid
+                 or before['ExecStart'][1:] == (0, '[n/a]')), 'NATIVE_UNIT_PROCESS_CHANGED')
     canonical = json.dumps(before, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('ascii')
     return LoadedBinding(PROFILE, hashlib.sha256(unit_raw).hexdigest(), hashlib.sha256(canonical).hexdigest(),
                          process_before, before['NRestarts'])

@@ -56,6 +56,16 @@ def show_raw(value=None):
     return ''.join(key+'='+value[key]+'\n' for key in sorted(value)).encode('ascii')
 
 
+def reset_accounting_fixture():
+    value = show_fixture()
+    # Independent literal for the observed systemd255 post-reload form. MainPID
+    # and /proc remain real identity inputs; this command accounting is zero.
+    value['ExecStart'] = ('{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I -S -B '
+        '/var/lib/bridge-light-native-service/launcher.py ; ignore_errors=no ; '
+        'start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }')
+    return value
+
+
 # Independent literals from the observed systemd255 omission/query shape.
 OMITTED_ARRAY_PROPERTIES = ('EnvironmentFiles', 'ExecCondition', 'ExecStartPre',
     'ExecStartPost', 'ExecReload', 'ExecStop', 'ExecStopPost')
@@ -408,6 +418,61 @@ class LinuxCollectorEvidence(unittest.TestCase):
 
 
 class UnitContract(unittest.TestCase):
+    def test_closed_zero_accounting_form_retains_real_process_identity_and_distinct_hash(self):
+        raw = show_raw(reset_accounting_fixture())
+        self.assertEqual(u.parse_show(raw)['ExecStart'], (u.ARGV, 0, '[n/a]'))
+        result = validate(before=raw, after=raw)
+        self.assertEqual(result.process, process_fixture())
+        self.assertGreater(result.process.pid, 1)
+        self.assertEqual(result.process.start_ticks, 10000)
+        self.assertNotEqual(result.loaded_sha256, validate().loaded_sha256)
+
+    def test_zero_accounting_partial_mixed_or_nonexact_fields_refuse(self):
+        reset = reset_accounting_fixture()['ExecStart']
+        variants = (
+            reset.replace('pid=0', 'pid=2345'), reset.replace('pid=0', 'pid=1'),
+            reset.replace('pid=0', 'pid=00'), reset.replace('pid=0', 'pid='),
+            reset.replace('start_time=[n/a]', 'start_time=[Mon 2026-10-19 12:00:00 UTC]'),
+            reset.replace(' ; start_time=[n/a]', ''), reset.replace(' ; pid=0', ''),
+            reset.replace(' ; pid=0', ' ; pid=0 ; pid=0'), reset.replace(' ; pid=0', ' ; extra=0 ; pid=0'),
+            reset.replace('path=/usr/bin/python3', 'path=/bin/sh'),
+            reset.replace('launcher.py ;', 'launcher.py extra ;'),
+            reset.replace('ignore_errors=no', 'ignore_errors=yes'),
+            reset.replace('stop_time=[n/a]', 'stop_time=[Mon 2026-10-19 12:00:00 UTC]'),
+            reset.replace('code=(null)', 'code=exited'), reset.replace('status=0/0', 'status=1/1'))
+        for index, accounting in enumerate(variants):
+            changed = reset_accounting_fixture(); changed['ExecStart'] = accounting
+            with self.subTest(index=index), self.assertRaises(u.Refusal):
+                validate(before=show_raw(changed), after=show_raw(changed))
+
+    def test_zero_accounting_never_allows_foreign_or_zero_mainpid(self):
+        for pid in ('0', '1', '2346'):
+            changed = reset_accounting_fixture(); changed['MainPID'] = pid
+            with self.subTest(pid=pid), self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_PROCESS_CHANGED$'):
+                validate(before=show_raw(changed), after=show_raw(changed))
+        changed = show_fixture(); changed['ExecStart'] = changed['ExecStart'].replace('pid=2345', 'pid=2346')
+        with self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_PROCESS_CHANGED$'):
+            validate(before=show_raw(changed), after=show_raw(changed))
+
+    def test_zero_accounting_preserves_each_independent_process_policy(self):
+        raw = show_raw(reset_accounting_fixture())
+        bad = dict(pid=2346, uid=1000, gid=1000, no_new_privs=0, start_ticks=0,
+            boot_id='not-a-boot-uuid', exe_sha256='b'*64, argv=('/usr/bin/python3', '/tmp/other.py'),
+            cgroup='0::/system.slice/foreign.service', cwd='/tmp', invocation_id='e'*32)
+        for key, value in bad.items():
+            changed = replace(process_fixture(), **{key: value})
+            with self.subTest(key=key), self.assertRaises(u.Refusal):
+                validate(before=raw, after=raw, first=changed, last=changed)
+
+    def test_zero_accounting_and_process_drift_between_observations_still_refuse(self):
+        reset = show_raw(reset_accounting_fixture())
+        for key, value in (('start_ticks', 10001), ('boot_id', 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee')):
+            with self.subTest(key=key), self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_PROCESS_CHANGED$'):
+                validate(before=reset, after=reset, last=replace(process_fixture(), **{key: value}))
+        for before, after in ((show_raw(), reset), (reset, show_raw())):
+            with self.subTest(before_reset=before == reset), self.assertRaisesRegex(u.Refusal, '^NATIVE_UNIT_CHANGED$'):
+                validate(before=before, after=after)
+
     def test_renderer_is_fixed_deterministic_and_explicitly_prospective(self):
         raw = u.render()
         self.assertEqual(raw, u.render())

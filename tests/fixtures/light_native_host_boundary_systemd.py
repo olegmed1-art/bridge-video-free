@@ -159,6 +159,7 @@ def exercise(repo):
     isolated_change(stale,baseline,'NeedDaemonReload',True,'STALE')
     rejected(collect,unit.Refusal,'NATIVE_UNIT_PROFILE');mark('stale-reload')
     command('/usr/bin/systemctl','daemon-reload');collect()
+    baseline=unit.parse_show(unit._show())
     DROP.mkdir(mode=0o755)
     drop=DROP/'99-host-fixture.conf'
     create(drop,b'[Service]\nNice=10\n',0o644)
