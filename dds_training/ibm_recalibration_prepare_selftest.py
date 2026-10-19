@@ -251,21 +251,23 @@ def fixture_checks():
                         changed_once = True
                         path = root / spec["files"][role]["name"]
                         before_stat = path.stat()
-                        if mutation == "rewrite":
-                            path.write_bytes(path.read_bytes()[:-1] + b" ")
-                            os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
-                        elif mutation == "touch":
-                            os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns + 1_000_000_000))
-                        else:
-                            replacement = root / "replacement.tmp"
-                            if mutation == "replace":
-                                replacement.write_bytes(path.read_bytes())
-                            try:
+                        before_bytes = path.read_bytes()
+                        replacement = root / "replacement.tmp"
+                        try:
+                            if mutation == "rewrite":
+                                path.write_bytes(before_bytes[:-1] + b" ")
+                                os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+                            elif mutation == "touch":
+                                os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns + 1_000_000_000))
+                            else:
+                                if mutation == "replace":
+                                    replacement.write_bytes(before_bytes)
                                 os.replace(replacement, path) if mutation == "replace" else path.unlink()
-                            except PermissionError:
-                                prevented = True  # Windows can deny deletion of an open input.
-                            if replacement.exists():
-                                replacement.unlink()
+                        except PermissionError:
+                            assert os.name == "nt" and path.read_bytes() == before_bytes
+                            prevented = True
+                        if replacement.exists():
+                            replacement.unlink()
                     return value
                 with patch.object(adapter, "parse_json", side_effect=late_change), \
                      patch.object(adapter.Budget, "retain", record_handle):
@@ -273,6 +275,53 @@ def fixture_checks():
                 assert changed_once and retained and all(handle.closed for handle in retained)
                 assert report["status"] == ("CONSISTENT_AWAITING_EXTERNAL_ADMISSION" if prevented else "BLOCKED"), report
                 cases += not prevented
+
+        # Attack an earlier file after its second hash, during the next file's
+        # rehash. Windows must prevent the write; POSIX must detect its ctime.
+        for index, role in enumerate(("excluded_families", "tasks", "producer")):
+            spec = save_bundle(root, fixture())
+            retained = []
+            attempted = prevented = False
+            original_read = os.read
+            def record_late_handle(budget, handle, *args):
+                retained.append(handle)
+                return original_retain(budget, handle, *args)
+            def post_hash_write(fd, size):
+                nonlocal attempted, prevented
+                raw = original_read(fd, size)
+                if fd == retained[index + 1].fileno() and not attempted:
+                    attempted = True
+                    path = root / spec["files"][role]["name"]
+                    before_stat, before_bytes = path.stat(), path.read_bytes()
+                    try:
+                        path.write_bytes(before_bytes[:-1] + b" ")
+                        os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+                    except PermissionError:
+                        assert os.name == "nt" and path.read_bytes() == before_bytes
+                        prevented = True
+                return raw
+            with patch.object(adapter.Budget, "retain", record_late_handle), \
+                 patch.object(adapter.os, "read", side_effect=post_hash_write):
+                report = adapter.check_train_artifact(spec, root)
+            assert attempted and all(handle.closed for handle in retained)
+            assert report["status"] == ("CONSISTENT_AWAITING_EXTERNAL_ADMISSION" if prevented else "BLOCKED"), report
+            assert prevented == (os.name == "nt")
+            cases += not prevented
+
+        if os.name == "nt":
+            import mmap
+            for role in ("tasks", "oof", "excluded_families", "producer"):
+                spec = save_bundle(root, fixture())
+                path = root / spec["files"][role]["name"]
+                with path.open("r+b"):
+                    assert rejected(spec, root) == "INVALID_OR_UNAVAILABLE_INPUT"
+                with path.open("r+b") as writer:
+                    mapping = mmap.mmap(writer.fileno(), 0, access=mmap.ACCESS_WRITE)
+                try:
+                    assert rejected(spec, root) == "INVALID_OR_UNAVAILABLE_INPUT"
+                finally:
+                    mapping.close()
+                cases += 2
 
         if hasattr(os, "mkfifo"):
             spec = save_bundle(root, fixture())
@@ -300,7 +349,8 @@ def fixture_checks():
                                (["--root", str(root)], "CONSISTENT_AWAITING_EXTERNAL_ADMISSION")):
             result = subprocess.run(command + args, capture_output=True, text=True, timeout=10)
             output = json.loads(result.stdout)
-            native_supported = sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 14)
+            native_supported = (sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 14)
+                                and sys.version_info[3:] == ("final", 0))
             assert result.returncode == (0 if native_supported else 2), result.stderr
             assert output["status"] == (expected if native_supported else "BLOCKED")
             if not native_supported:
@@ -322,19 +372,24 @@ def fixture_checks():
 def main():
     native_runtime = adapter.runtime_identity()
     cases = 0
-    for implementation, version in (("cpython", (3, 12, 14)), ("cpython", (3, 13, 0)),
-                                     ("cpython", (3, 15, 0)), ("pypy", (3, 14, 0))):
+    for implementation, version in (("cpython", (3, 12, 14, "final", 0)), ("cpython", (3, 13, 0, "final", 0)),
+                                     ("cpython", (3, 15, 0, "final", 0)), ("pypy", (3, 14, 0, "final", 0)),
+                                     ("cpython", (3, 14, 0, "alpha", 1)), ("cpython", (3, 14, 0, "beta", 2)),
+                                     ("cpython", (3, 14, 0, "candidate", 2))):
         observed = SimpleNamespace(implementation=SimpleNamespace(name=implementation), version_info=version)
         with patch.object(adapter, "sys", observed), \
              patch.object(Path, "open", side_effect=AssertionError("input read before runtime gate")), \
              patch.object(adapter.os, "open", side_effect=AssertionError("input opened before runtime gate")):
             report = adapter.check_train_artifact({}, Path("unavailable"))
             assert report["status"] == "BLOCKED" and report["reason"] == "RUNTIME_MISMATCH"
-            assert report["observed_runtime"] == {"implementation": implementation, "version": list(version)}
+            assert report["observed_runtime"] == {"implementation": implementation, "version": list(version[:3]),
+                                                   "releaselevel": version[3], "serial": version[4]}
             cases += 1
-    simulated = native_runtime["implementation"] != "cpython" or native_runtime["version"][:2] != [3, 14]
+    simulated = (native_runtime["implementation"] != "cpython" or native_runtime["version"][:2] != [3, 14]
+                 or native_runtime["releaselevel"] != "final" or native_runtime["serial"] != 0)
     if simulated:
-        with patch.object(adapter, "runtime_identity", return_value={"implementation": "cpython", "version": [3, 14, 0]}):
+        with patch.object(adapter, "runtime_identity", return_value={"implementation": "cpython", "version": [3, 14, 0],
+                                                                   "releaselevel": "final", "serial": 0}):
             cases += fixture_checks()
     else:
         cases += fixture_checks()

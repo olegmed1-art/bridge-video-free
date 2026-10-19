@@ -46,9 +46,11 @@ recalibration новым predictor fit или запуском полного St
 
 Функции: `prepare_plan(spec)` и `check_train_artifact(spec, local_root)`.
 Первая проверяет только конфигурацию и остаётся чистой функцией. Inspector и CLI
-перед чтением входов проверяют фактические CPython / major.minor = 3.14;
+перед чтением входов проверяют фактические stable CPython / major.minor = 3.14
+(`releaselevel=final`, `serial=0`);
 несоответствие даёт `BLOCKED / RUNTIME_MISMATCH`. Квитанция содержит
-`observed_runtime` с реальной implementation и полной версией интерпретатора.
+`observed_runtime` с реальной implementation, major/minor/micro,
+releaselevel и serial. Alpha/beta/RC не получают квитанцию stable runtime.
 CLI выводит только JSON в stdout; файлов результатов и серверных действий нет:
 
 ```text
@@ -96,6 +98,11 @@ prediction SHA-256 `ae946bec73f12bead7ebd6e54947bb6f2d2268798cf08b7b468495f943be
 
 Scanner использует один descriptor для хеширования и чтения каждого входа,
 сохраняет все четыре descriptors открытыми до завершения проверки bundle.
+На Windows `CreateFileW` открывает вход с `FILE_SHARE_READ`: доступные writers
+и writable mappings вызывают отказ открытия, новые запись/удаление запрещены
+до закрытия descriptor, включая интервал после второго хеша. Чтение через другие
+read-only handles разрешено. Native handle передаётся CRT/Python с явным владением
+и закрывается на всех путях. [Контракт Windows sharing](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew).
 После OOF scan повторно проверяет SHA-256 всех четырёх входов, затем их
 identity/размер/mtime и дополнительно ctime на POSIX. Это отклоняет в том числе
 позднюю замену байтов ранее прочитанного файла с восстановлением размера и mtime.
