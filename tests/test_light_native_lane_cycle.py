@@ -252,6 +252,11 @@ def test_new_packages_strict_but_retained_old_helpers_can_be_verified(request_by
     del value['helpers']['ops/light_native_lane_issuer.py']
     raw=owner.encoded(value)
     with pytest.raises(RuntimeError):owner.validate_package(raw,r.prepare['source'],owner.sha(raw))
+    with pytest.raises(RuntimeError):owner.validate_package(raw,r.prepare['source'],owner.sha(raw),allow_legacy=True)
+    # A retained pre-session package also predates the session readback helper.
+    del value['helpers']['ops/light_native_service_unit.py']
+    raw=owner.encoded(value)
+    with pytest.raises(RuntimeError):owner.validate_package(raw,r.prepare['source'],owner.sha(raw))
     owner.validate_package(raw,r.prepare['source'],owner.sha(raw),allow_legacy=True)
     del value['helpers']['ops/light_native_lane_controller.py']
     raw=owner.encoded(value)
