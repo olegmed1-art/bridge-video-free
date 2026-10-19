@@ -35,6 +35,29 @@ def parse(raw):
     return value
 
 
+def parse_plan(raw):
+    """Decode the retained Plan codec without changing its accepted bytes.
+
+    native_cli_permission_engine.encode uses ASCII escaping; lane records and
+    issuer policies use UTF-8. Full Plan scope validation stays in the driver.
+    """
+    require(type(raw) is bytes and 0 < len(raw) <= 16384, 'LANE_EXEC_PLAN')
+    def unique(pairs):
+        value={}
+        for key,item in pairs:
+            require(key not in value, 'LANE_EXEC_PLAN')
+            value[key]=item
+        return value
+    try:
+        value=json.loads(raw,object_pairs_hook=unique,
+                         parse_constant=lambda _:require(False,'LANE_EXEC_PLAN'))
+        require(type(value) is dict and json.dumps(value,sort_keys=True,separators=(',',':'),
+                ensure_ascii=True,allow_nan=False).encode() == raw, 'LANE_EXEC_PLAN')
+        return value
+    except (ValueError,TypeError,UnicodeError,RecursionError):
+        require(False, 'LANE_EXEC_PLAN')
+
+
 def argv(source):
     require(source == install.RETAINED_SOURCE, 'LANE_EXEC_SOURCE')
     return [plan.PYTHON,'-I','-B','-c',install.LAUNCH,str(plan.source_path(source))]

@@ -1,7 +1,11 @@
 # Finite legacy transition and independent cleanup
 
 Status: implementation and rehearsal; no production transition adapter or Native
-admission. Assurance: ASSURED / I2. This component does not resolve the historical
+admission. Governance class: ASSURED. The completed, source-bound kernel I2 review
+and its limits are recorded in the [independent review receipt](native-transition-i2-20261019.md).
+This record was added after PR2193; it does not claim evidence existed at the
+earlier merge. Tests and the PID1 fixture do not independently establish I2.
+This component does not resolve the historical
 incident, replace the original baseline, accept a CurrentAnchor for execution,
 or authorize replay. Existing observation and execution gates retain their scope.
 

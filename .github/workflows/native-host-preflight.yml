@@ -11,6 +11,20 @@ on:
       - 'ops/light_native_reconciliation.py'
       - 'ops/light_native_retirement.py'
       - 'ops/light_native_lane_run_guard.py'
+      - 'ops/light_native_lane_controller.py'
+      - 'ops/light_native_lane_execution.py'
+      - 'ops/light_native_lane_issuer.py'
+      - 'ops/light_native_lane_cycle.py'
+      - 'ops/light_native_retirement_live.py'
+      - 'ops/light_native_pilot_release.py'
+      - 'ops/native_maintenance_bundle.py'
+      - 'ops/native_maintenance_agreement.py'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'ops/native_permission_hold_guard.py'
+      - 'ops/oracle_light_active_hold_attest.py'
+      - 'oracle_autopilot/light_native_adapter.py'
+      - 'database/native_cli_permission_engine.py'
+      - 'database/light_native_pilot_intake.py'
       - '.github/workflows/light-native-retirement-observe.yml'
       - 'ops/light_native_service_authority.py'
       - 'ops/light_native_service_supervisor.py'
@@ -27,6 +41,8 @@ on:
       - 'tests/test_light_native_service_supervisor.py'
       - 'tests/test_light_native_service_unit.py'
       - 'tests/test_light_native_readiness.py'
+      - 'tests/test_light_native_plan_codec.py'
+      - 'tests/test_native_host_preflight_scope.py'
       - 'tests/fixtures/light_native_host_boundary_systemd.py'
 
 permissions:
@@ -40,6 +56,7 @@ jobs:
       legacy: ${{ steps.select.outputs.legacy }}
       transition: ${{ steps.select.outputs.transition }}
       host: ${{ steps.select.outputs.host }}
+      codec: ${{ steps.select.outputs.codec }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -69,6 +86,9 @@ jobs:
               'ops/light_native_lane_run_guard.py', '.github/workflows/light-native-retirement-observe.yml',
               'tests/test_light_native_continuity.py', 'tests/test_light_native_legacy_capture.py',
               'tests/test_light_native_current_*.py', 'tests/test_light_native_reconciliation*.py'])
+          host = matches(['ops/light_native_service_*.py', 'ops/light_native_readiness*',
+              'tests/test_light_native_service_*.py', 'tests/test_light_native_readiness.py',
+              'tests/fixtures/light_native_host_boundary_systemd.py', 'ops/light_native_legacy_transition.py'])
           workflow = '.github/workflows/native-host-preflight.yml'
           if workflow in changed:
               def old_job(ref, name, output):
@@ -81,14 +101,42 @@ jobs:
                   return '\n'.join(line for line in blocks[0].splitlines() if line not in gates).strip()
               legacy = legacy or old_job(base, 'linux-root-contract', 'legacy') != old_job(head, 'linux-root-contract', 'legacy')
               transition = transition or old_job(base, 'disposable-systemd-transition', 'transition') != old_job(head, 'disposable-systemd-transition', 'transition')
-          host = matches(['ops/light_native_service_*.py', 'ops/light_native_readiness*',
-              'tests/test_light_native_service_*.py', 'tests/test_light_native_readiness.py',
-              'tests/fixtures/light_native_host_boundary_systemd.py', '.github/workflows/native-host-preflight.yml',
-              'ops/light_native_legacy_transition.py'])
-          result = dict(legacy=legacy, transition=transition, host=host)
+              host = host or old_job(base, 'host-loaded-boundary', 'host') != old_job(head, 'host-loaded-boundary', 'host')
+          codec = matches(['ops/light_native_lane_controller.py', 'ops/light_native_lane_execution.py',
+              'ops/light_native_lane_issuer.py', 'ops/light_native_lane_cycle.py',
+              'ops/light_native_retirement_live.py', 'ops/light_native_pilot_release.py',
+              'ops/native_maintenance_bundle.py', 'ops/native_maintenance_agreement.py',
+              'ops/native_maintenance_workflow_pause.py', 'ops/native_permission_hold_guard.py',
+              'ops/oracle_light_active_hold_attest.py', 'oracle_autopilot/light_native_adapter.py',
+              'ops/light_native_retirement.py', 'ops/light_native_service_authority.py',
+              'database/native_cli_permission_engine.py', 'database/light_native_pilot_intake.py',
+              'tests/test_light_native_service_authority.py', 'tests/test_light_native_plan_codec.py',
+              'tests/test_native_host_preflight_scope.py', workflow])
+          result = dict(legacy=legacy, transition=transition, host=host, codec=codec)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(''.join(name+'='+str(value).lower()+'\n' for name, value in result.items()))
           print(json.dumps(dict(audit='AFFECTED_NATIVE_PROOFS', **result), sort_keys=True))
+          PY
+  portable-codec-contract:
+    needs: scope
+    if: needs.scope.outputs.codec == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify historical Plan bytes through issuer and downstream consumers
+        run: |
+          /usr/bin/python3 -I -S -B - <<'PY'
+          import pathlib, sys, unittest
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          names = ['tests.test_light_native_service_authority.HistoricalCodecContracts',
+              'tests.test_light_native_plan_codec', 'tests.test_native_host_preflight_scope']
+          result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromNames(names))
+          assert not result.skipped, result.skipped
+          assert result.testsRun >= 22
+          raise SystemExit(not result.wasSuccessful())
           PY
   linux-root-contract:
     needs: scope

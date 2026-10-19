@@ -31,6 +31,7 @@ RETIREMENT_HELPERS={'ops/light_native_retirement.py','ops/light_native_retiremen
 require=release.require
 encoded=execution.encoded
 parse=execution.parse
+parse_plan=execution.parse_plan
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
 
 
