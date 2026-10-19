@@ -55,7 +55,7 @@ jobs:
           receipt = json.loads(path.read_text(encoding="utf-8"))
           assert receipt["mode"] == "READ_ONLY_CANARY"
           assert receipt["external_mutation_allowed"] is False
-          receipt["schema"] = "GLOBAL_SCHOOL_OBSERVER_SHADOW_V1"
+          receipt["schema"] = "GLOBAL_SCHOOL_OBSERVER_SHADOW_V2"
           receipt["mode"] = "SHADOW"
           receipt["notifications_enabled"] = False
           receipt["shadow_run_id"] = os.environ["SHADOW_RUN_ID"]
@@ -70,18 +70,21 @@ jobs:
           from pathlib import Path
 
           receipt = json.loads(Path("observer-shadow.json").read_text(encoding="utf-8"))
-          assert receipt["schema"] == "GLOBAL_SCHOOL_OBSERVER_SHADOW_V1"
+          assert receipt["schema"] == "GLOBAL_SCHOOL_OBSERVER_SHADOW_V2"
           assert receipt["mode"] == "SHADOW"
           assert receipt["external_mutation_allowed"] is False
           assert receipt["notifications_enabled"] is False
-          assert receipt["source_state"]["autopilot_installed_receipt"]
-          assert receipt["source_state"]["pr_1158_merged_at"]
+          assert receipt["source_assessments"]
+          assert receipt["assessment"] in {"ATTENTION_REQUIRED", "NO_FINDINGS_IN_OBSERVED_SCOPE"}
+          assert receipt["notification_preview"]["mode"] == "DRY_RUN"
+          assert receipt["notification_preview"]["delivery_status"] == "NOT_ATTEMPTED"
+          assert receipt["notification_preview"]["formed_count"] == receipt["finding_count"]
           assert receipt["finding_count"] == len(receipt["findings"])
           for finding in receipt["findings"]:
               assert finding["evidence_refs"]
               assert finding["dedupe_key"]
               assert finding["status"] == "OPEN"
-          print("OBSERVER_24H_SHADOW_OBSERVATION_PASS")
+          print("OBSERVER_SHADOW_RECEIPT_VALID; assessment=" + receipt["assessment"])
           PY
 
       - name: Publish shadow receipt to job log only
