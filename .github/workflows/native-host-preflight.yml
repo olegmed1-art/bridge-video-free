@@ -1,0 +1,51 @@
+name: Native host read-only preflight
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-host-preflight.yml'
+      - 'ops/light_native_continuity.py'
+      - 'ops/light_native_legacy_capture.py'
+      - 'ops/light_native_service_authority.py'
+      - 'ops/light_native_service_supervisor.py'
+      - 'tests/test_light_native_continuity.py'
+      - 'tests/test_light_native_legacy_capture.py'
+      - 'tests/test_light_native_service_authority.py'
+      - 'tests/test_light_native_service_supervisor.py'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-root-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Exercise kernel and protected-file contracts without services
+        shell: bash
+        run: |
+          sudo -n /usr/bin/python3 -I -S -B - <<'PY'
+          import os, pathlib, sys, unittest
+          assert sys.platform == 'linux' and os.geteuid() == 0
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          names = [
+              'tests.test_light_native_continuity',
+              'tests.test_light_native_service_authority',
+              'tests.test_light_native_service_supervisor',
+              'tests.test_light_native_legacy_capture',
+          ]
+          suite = unittest.defaultTestLoader.loadTestsFromNames(names)
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          allowed_notrun = {
+              'tests.test_light_native_continuity.ContinuityTests.test_actual_linux_metadata_and_live_acceptance',
+              'tests.test_light_native_legacy_capture.CaptureTests.test_real_linux_capture',
+          }
+          unexpected_skips = [(test.id(), reason) for test, reason in result.skipped
+                              if test.id() not in allowed_notrun]
+          assert not unexpected_skips, unexpected_skips
+          assert result.testsRun >= 84
+          raise SystemExit(not result.wasSuccessful())
+          PY
