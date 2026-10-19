@@ -83,10 +83,11 @@ def make_fixture(count=2):
         authority=dict(owner=a.OWNER, coverage=a.COVERAGE, delegation='FINITE_ISSUER_AGREEMENTS',
                        evidence='Explicit independently accepted finite READ_ONLY catalogue.'))
     raw = a.encoded(policy)
-    manifest = dict(version=1, kind='LIGHT_NATIVE_READ_ONLY_SERVICE', source=policy['source'],
+    manifest = dict(version=2, kind='LIGHT_NATIVE_READ_ONLY_SERVICE', source=policy['source'],
         controller_sha256=a.sha(controller), runtime_sha256=a.sha(runtime), policy_sha256=a.sha(raw),
         unit_sha256=a.sha(b'unit'), python_sha256=a.sha(b'python'),
         authority_sha256=a.sha(b'authority'), supervisor_sha256=a.sha(b'supervisor'),
+        service_unit_sha256=a.sha(b'service-unit'),
         launcher_sha256=a.sha(b'launcher'),
         argv=['/usr/bin/python3', '-I', '-S', '-B', a.ROOT.as_posix()+'/launcher.py'],
         not_before=policy['not_before'], expires_at=policy['expires_at'])
@@ -113,7 +114,8 @@ def loaded_fixture(fixture=None, *, validate_packages=False):
                    root/'policy.json': f.raw, root/'controller.json': f.controller,
                    root/'runtime.json': f.runtime, Path(a.__file__): b'authority',
                    root/'launcher.py': b'launcher',
-                   Path(a.__file__).with_name('light_native_service_supervisor.py'): b'supervisor'}
+                   Path(a.__file__).with_name('light_native_service_supervisor.py'): b'supervisor',
+                   Path(a.__file__).with_name('light_native_service_unit.py'): b'service-unit'}
         def read(path, expected=None, **kwargs):
             if Path(path) not in records:
                 raise FileNotFoundError()
@@ -484,32 +486,67 @@ class AuthorityContracts(unittest.TestCase):
                 a._current_main.side_effect = changed
                 with self.assertRaises(a.Refusal): f.host.assert_current()
 
-    def test_actual_host_port_requires_exact_systemd_proc_and_unit_binding(self):
+    def test_pinned_host_port_runs_collector_with_explicitly_synthetic_read_ports(self):
+        # No actual host proof here: source loader, host_identity, collector and
+        # loaded/process validation run, but the OS read ports are synthetic.
+        from tests.test_light_native_service_unit import synthetic_read_ports
+        from ops import light_native_service_unit as unit
         f = make_fixture()
-        manifest = a.Manifest.load(f.manifest_raw)
-        row = asdict(f.process)
-        del row['invocation_id']
-        row['argv'] = tuple(row['argv'])
-        values = dict(MainPID=str(f.process.pid), ActiveState='active', SubState='running',
-                      InvocationID=f.process.invocation_id,
-                      FragmentPath=str(Path('/etc/systemd/system')/a.UNIT))
-        def response(value):
-            return SimpleNamespace(returncode=0, stdout=''.join(k+'='+v+'\n' for k,v in value.items()).encode())
-        with patch.object(a, 'proc_identity', return_value=row), \
-             patch.object(a, 'protected_read'), patch.object(a.subprocess, 'run', return_value=response(values)) as run:
-            self.assertEqual(a.host_identity(f.process.pid, manifest), f.process)
-            for key, bad in (('MainPID', '999'), ('InvocationID', '0'*32), ('SubState', 'exited'),
-                             ('FragmentPath', '/tmp/other.service')):
-                changed = {**values, key: bad}
-                # A different valid invocation is captured on restart; a guard
-                # comparison, rather than this snapshot reader, rejects drift.
-                if key == 'InvocationID':
-                    run.return_value = response(changed)
-                    self.assertNotEqual(a.host_identity(f.process.pid, manifest), f.process)
-                    continue
-                run.return_value = response(changed)
-                with self.subTest(key=key), self.assertRaises(a.Refusal):
+        raw = Path(a.__file__).with_name('light_native_service_unit.py').read_bytes()
+        manifest = a.Manifest.load(a.encoded({**f.manifest, 'service_unit_sha256': a.sha(raw),
+                                              'unit_sha256': a.sha(unit.render())}))
+        with patch.object(a, 'protected_read', return_value=raw) as reader:
+            helper = a._unit_helper(manifest)
+            with synthetic_read_ports(helper, python_sha256=manifest.python_sha256) as ports:
+                self.assertEqual(a.host_identity(f.process.pid, manifest), f.process)
+                self.assertEqual(ports.show.call_count, 2)
+                self.assertEqual(ports.process.call_count, 2)
+                self.assertEqual(ports.unit.call_count, 2)
+            reader.assert_called_with(Path(a.__file__).with_name('light_native_service_unit.py'),
+                                      manifest.service_unit_sha256, mode=0o600, limit=65536)
+            with synthetic_read_ports(helper, python_sha256=manifest.python_sha256) as ports:
+                ports.show.return_value = ports.show.return_value.replace(b'DropInPaths=\n', b'DropInPaths=/tmp/override\n')
+                with self.assertRaisesRegex(a.Refusal, '^NATIVE_SERVICE_UNIT$'):
                     a.host_identity(f.process.pid, manifest)
+            with synthetic_read_ports(helper, python_sha256=manifest.python_sha256) as ports:
+                ports.process.return_value = replace(ports.process.return_value, no_new_privs=0)
+                with self.assertRaisesRegex(a.Refusal, '^NATIVE_SERVICE_UNIT$'):
+                    a.host_identity(f.process.pid, manifest)
+
+    def test_manifest_v2_requires_helper_pin_and_never_accepts_v1(self):
+        f = make_fixture()
+        self.assertEqual(a.Manifest.load(f.manifest_raw).version, 2)
+        for changes in ({'version': 1}, {'service_unit_sha256': 'a'*63}, {'service_unit_sha256': True}):
+            with self.subTest(changes=changes), self.assertRaises(a.Refusal):
+                a.Manifest.load(a.encoded({**f.manifest, **changes}))
+        value = {**f.manifest}; del value['service_unit_sha256']
+        with self.assertRaises(a.Refusal): a.Manifest.load(a.encoded(value))
+
+    def test_helper_pin_is_checked_before_execution_and_on_cached_reads(self):
+        from ops import light_native_service_unit as unit
+        f = make_fixture()
+        raw = Path(unit.__file__).read_bytes()
+        manifest = a.Manifest.load(a.encoded({**f.manifest, 'service_unit_sha256': a.sha(raw)}))
+        with patch.object(a, 'protected_read', return_value=raw):
+            helper = a._unit_helper(manifest)
+            self.assertEqual(helper.__file__, str(Path(a.__file__).with_name('light_native_service_unit.py')))
+            self.assertIsNot(helper, unit)
+        for wrong in (b'raise AssertionError("unverified")', b''):
+            with patch.object(a, 'protected_read', return_value=wrong), \
+                 patch('builtins.compile') as compiler:
+                with self.assertRaises(a.Refusal): a._unit_helper(manifest)
+                compiler.assert_not_called()
+
+    def test_unrelated_preimported_helper_module_is_never_authority(self):
+        from ops import light_native_service_unit as unit
+        f = make_fixture()
+        raw = Path(unit.__file__).read_bytes()
+        manifest = a.Manifest.load(a.encoded({**f.manifest, 'service_unit_sha256': a.sha(raw)}))
+        impostor = SimpleNamespace(collect_loaded=lambda *args, **kwargs: self.fail('unverified import used'))
+        with patch.dict(sys.modules, {'ops.light_native_service_unit': impostor}), \
+             patch.object(sys.modules['ops'], 'light_native_service_unit', impostor), \
+             patch.object(a, 'protected_read', return_value=raw):
+            self.assertIsNot(a._unit_helper(manifest), impostor)
 
     def test_child_expiry_and_non_descendant_fail_closed(self):
         with loaded_fixture() as f:

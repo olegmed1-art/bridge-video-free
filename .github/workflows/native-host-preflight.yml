@@ -14,6 +14,9 @@ on:
       - '.github/workflows/light-native-retirement-observe.yml'
       - 'ops/light_native_service_authority.py'
       - 'ops/light_native_service_supervisor.py'
+      - 'ops/light_native_service_unit.py'
+      - 'ops/light_native_readiness.py'
+      - 'ops/light_native_readiness_observe.sql'
       - 'tests/test_light_native_continuity.py'
       - 'tests/test_light_native_legacy_capture.py'
       - 'tests/test_light_native_legacy_transition.py'
@@ -22,12 +25,74 @@ on:
       - 'tests/test_light_native_reconciliation*.py'
       - 'tests/test_light_native_service_authority.py'
       - 'tests/test_light_native_service_supervisor.py'
+      - 'tests/test_light_native_service_unit.py'
+      - 'tests/test_light_native_readiness.py'
+      - 'tests/fixtures/light_native_host_boundary_systemd.py'
 
 permissions:
   contents: read
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    outputs:
+      legacy: ${{ steps.select.outputs.legacy }}
+      transition: ${{ steps.select.outputs.transition }}
+      host: ${{ steps.select.outputs.host }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - id: select
+        name: Select only affected proof boundaries
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          /usr/bin/python3 -I -S -B - <<'PY'
+          import fnmatch, json, os, re, subprocess
+          base, head = os.environ['BASE'], os.environ['HEAD']
+          assert all(re.fullmatch('[0-9a-f]{40}', value) for value in (base, head))
+          raw = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', base, head, '--'], timeout=10)
+          assert len(raw) <= 1048576
+          changed = [name.decode('utf-8') for name in raw.split(b'\0') if name]
+          def matches(patterns):
+              return any(fnmatch.fnmatchcase(name, pattern) for name in changed for pattern in patterns)
+          transition = matches(['ops/light_native_legacy_transition.py',
+              'tests/test_light_native_legacy_transition.py',
+              'tests/fixtures/light_native_legacy_transition_systemd.py'])
+          legacy = transition or matches(['ops/light_native_continuity.py',
+              'ops/light_native_legacy_capture.py', 'ops/light_native_current_*.py',
+              'ops/light_native_reconciliation.py', 'ops/light_native_retirement.py',
+              'ops/light_native_lane_run_guard.py', '.github/workflows/light-native-retirement-observe.yml',
+              'tests/test_light_native_continuity.py', 'tests/test_light_native_legacy_capture.py',
+              'tests/test_light_native_current_*.py', 'tests/test_light_native_reconciliation*.py'])
+          workflow = '.github/workflows/native-host-preflight.yml'
+          if workflow in changed:
+              def old_job(ref, name, output):
+                  text = subprocess.check_output(['git', 'show', ref+':'+workflow], timeout=10).decode('utf-8')
+                  assert len(text) <= 262144
+                  blocks = re.findall(r'(?ms)^  '+re.escape(name)+r':\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)', text)
+                  assert len(blocks) == 1
+                  # Adding this exact dependency gate does not change a proof's executable body.
+                  gates = {'    needs: scope', "    if: needs.scope.outputs."+output+" == 'true'"}
+                  return '\n'.join(line for line in blocks[0].splitlines() if line not in gates).strip()
+              legacy = legacy or old_job(base, 'linux-root-contract', 'legacy') != old_job(head, 'linux-root-contract', 'legacy')
+              transition = transition or old_job(base, 'disposable-systemd-transition', 'transition') != old_job(head, 'disposable-systemd-transition', 'transition')
+          host = matches(['ops/light_native_service_*.py', 'ops/light_native_readiness*',
+              'tests/test_light_native_service_*.py', 'tests/test_light_native_readiness.py',
+              'tests/fixtures/light_native_host_boundary_systemd.py', '.github/workflows/native-host-preflight.yml',
+              'ops/light_native_legacy_transition.py'])
+          result = dict(legacy=legacy, transition=transition, host=host)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(''.join(name+'='+str(value).lower()+'\n' for name, value in result.items()))
+          print(json.dumps(dict(audit='AFFECTED_NATIVE_PROOFS', **result), sort_keys=True))
+          PY
   linux-root-contract:
+    needs: scope
+    if: needs.scope.outputs.legacy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -64,6 +129,8 @@ jobs:
           raise SystemExit(not result.wasSuccessful())
           PY
   disposable-systemd-transition:
+    needs: scope
+    if: needs.scope.outputs.transition == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -76,3 +143,31 @@ jobs:
           sudo -n /usr/bin/env GITHUB_ACTIONS="$GITHUB_ACTIONS" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
             /usr/bin/python3 -I -S -B tests/fixtures/light_native_legacy_transition_systemd.py \
             ci "$GITHUB_WORKSPACE" "$GITHUB_SHA"
+  host-loaded-boundary:
+    needs: scope
+    if: needs.scope.outputs.host == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Test changed HOST and read-only readiness contracts
+        run: |
+          sudo -n /usr/bin/python3 -I -S -B - <<'PY'
+          import os, pathlib, sys, unittest
+          assert sys.platform == 'linux' and os.geteuid() == 0
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          names = ['tests.test_light_native_service_unit',
+              'tests.test_light_native_service_authority',
+              'tests.test_light_native_service_supervisor',
+              'tests.test_light_native_readiness']
+          result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromNames(names))
+          assert not result.skipped, result.skipped
+          assert result.testsRun >= 107
+          raise SystemExit(not result.wasSuccessful())
+          PY
+      - name: Verify actual loaded unit and independent process identity
+        run: |
+          sudo -n /usr/bin/env GITHUB_ACTIONS="$GITHUB_ACTIONS" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            /usr/bin/python3 -I -S -B tests/fixtures/light_native_host_boundary_systemd.py "$GITHUB_WORKSPACE"
