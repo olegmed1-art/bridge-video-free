@@ -12,9 +12,14 @@ separable from later evidence gates.
 """
 
 import ast
+import base64
 import json
+import os
 import re
+import tempfile
+import textwrap
 from pathlib import Path
+from unittest.mock import patch
 
 from test_runner import _recursive_files, load_manifest
 
@@ -44,9 +49,7 @@ ARCHIVED_PILOT_WORKFLOWS = {
     "dds-training-pilot-start.yml",
     "dds-training-pilot-finish.yml",
 }
-ALLOWED_PULL_REQUEST_TARGET_WORKFLOWS = {
-    "dds-main-30k-prepare.yml",
-}
+ALLOWED_PULL_REQUEST_TARGET_WORKFLOWS: set[str] = set()
 PINNED_ACTIONS = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
     "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",
@@ -88,6 +91,68 @@ def asserted_trigger_names(header: str) -> set[str]:
             header,
         )
     }
+
+
+def assert_preparation_quarantine(text: str) -> None:
+    assert not asserted_trigger_names(workflow_header(text)), "Automatic preparation trigger"
+    assert re.search(r"(?m)^  workflow_dispatch:\s*$", workflow_header(text))
+    jobs = text.split("\njobs:", 1)[1]
+    assert re.findall(r"(?m)^  ([\w-]+):", jobs) == ["prepare-main"]
+    gate = jobs.split("    runs-on:", 1)[0]
+    assert re.search(r"(?m)^    if: \$\{\{\s*false\s*\}\}\s*$", gate), "Preparation quarantine missing"
+
+
+def check_preparation_quarantine(prep: str, verifier: str) -> None:
+    assert_preparation_quarantine(prep)
+    for mutated in (
+        prep.replace("  workflow_dispatch:", "  pull_request_target:\n  workflow_dispatch:"),
+        prep.replace("if: ${{ false }}", "if: ${{ true }}"),
+        prep.replace("if: ${{ false }}", "if: ${{ inputs.approve }}"),
+        prep.replace("    if: ${{ false }}\n", ""),
+        prep + "\n  unguarded:\n    runs-on: ubuntu-24.04\n",
+    ):
+        try:
+            assert_preparation_quarantine(mutated)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Unsafe preparation mutation escaped quarantine test")
+
+    snippet = verifier.split("# DDS_PREPARATION_ADMISSION_BEGIN", 1)[1].split("# DDS_PREPARATION_ADMISSION_END", 1)[0]
+    code = compile(textwrap.dedent(snippet), "verifier-admission", "exec")
+    legacy = "on:\n  pull_request_target:\njobs:\n  prepare-main:\n    if: ${{ true }}\n"
+    cases = [
+        ({"state": "disabled_manually"}, prep, "preparation_workflow_disabled"),
+        ({"state": "active"}, prep, "preparation_quarantined"),
+        ({"state": "active"}, prep.replace("if: ${{ false }}", "if: ${{ true }}"), "automatic_preparation_not_authorized"),
+        ({}, prep, "admission_state_unavailable"),
+        ({"state": "active"}, "invalid source", "admission_state_unavailable"),
+        ({"state": "active"}, None, "admission_state_unavailable"),
+        ({"state": "active"}, legacy, None),
+    ]
+    for metadata, source, expected in cases:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "dds-prep-workflow.json").write_text(json.dumps(metadata))
+            payload = {} if source is None else {"content": base64.b64encode(source.encode()).decode()}
+            (root / "dds-prep-source.json").write_text(json.dumps(payload))
+            with patch.dict(os.environ, {"RUNNER_TEMP": td, "PR_NUMBER": "1", "HEAD_SHA": "a" * 40}):
+                try:
+                    exec(code, {})
+                except SystemExit as exc:
+                    assert expected is not None and exc.code == 1
+                else:
+                    assert expected is None
+            receipt = root / "dds-prsafe-observable-evidence.json"
+            if expected is not None:
+                evidence = json.loads(receipt.read_text())
+                assert evidence["status"] == "BLOCKED" and evidence["reason"] == expected
+                assert evidence["compute_authorized"] is False and evidence["authority"] == "EVIDENCE_ONLY"
+            else:
+                assert not receipt.exists(), "Admission cannot claim successful preparation"
+    assert verifier.index("DDS_PREPARATION_ADMISSION_END") < verifier.index("for attempt in $(seq 1 60)")
+    upload = verifier.split("- name: Upload independently observable verification evidence", 1)[1]
+    assert "if: always()" in upload
 
 
 def assert_pinned_actions(path: Path) -> None:
@@ -245,12 +310,10 @@ def main() -> None:
             "executable_training": False,
         }
 
-    # Stage-2 preparation may run as a same-repository owner PR/readiness regression
-    # because it never starts the mass evaluator. The Drive secret is exposed only to
-    # trusted base code before the exact candidate commit is checked out. Candidate
-    # code receives no Drive credential. The exact immutable pilot ZIP and its inner
-    # state are verified before the same deterministic 10k->30k preparation checks.
-    assert "pull_request_target:" in prep and "workflow_dispatch:" in prep
+    # Corpus generation and DDS bootstrap need scope/budget authority even without
+    # mass evaluation. Preserve the historical body behind an unconditional deny.
+    verifier = (workflows / "dds-prsafe-drive-observable-verifier.yml").read_text(encoding="utf-8")
+    check_preparation_quarantine(prep, verifier)
     assert "actions: read" not in prep_lower and "contents: read" in prep_lower
     assert "run_stage.py evaluate" not in prep
     assert "--start" not in prep
@@ -259,8 +322,6 @@ def main() -> None:
     assert "tools/restore_drive_split_artifact.py" in prep
     assert "secrets.GOOGLE_DRIVE_OAUTH_JSON" in prep
     assert "PILOT_RUN_ID" not in prep and "gh run download" not in prep
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in prep
-    assert "github.event.pull_request.user.login == 'olegmed1-art'" in prep
     assert prep.index("Checkout trusted base before Drive credential exposure") < prep.index("secrets.GOOGLE_DRIVE_OAUTH_JSON")
     assert prep.index("secrets.GOOGLE_DRIVE_OAUTH_JSON") < prep.index("Checkout exact candidate after Drive secret scope has ended")
     assert "secrets.GOOGLE_DRIVE_OAUTH_JSON" not in prep[prep.index("Checkout exact candidate after Drive secret scope has ended"):]
@@ -314,6 +375,7 @@ def main() -> None:
                 "floating_dds_action_dependencies": 0,
                 "archived_pilot_workflows": archive_state,
                 "main_30k_preparation_restores_immutable_pilot": True,
+                "main_30k_preparation_quarantined": True,
                 "main_30k_preparation_pr_safe_drive_restore": True,
                 "main_30k_preparation_candidate_secret_exposure": False,
                 "main_30k_preparation_mass_evaluation": False,

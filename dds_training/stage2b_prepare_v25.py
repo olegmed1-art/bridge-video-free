@@ -174,6 +174,8 @@ def prepare_stage2b_v25(
                 "strain": row["strain"],
                 "family_id": row["family_id"],
                 "heldout_fold": row["heldout_fold"],
+                "split": row["split"],
+                "out_of_fold": row["out_of_fold"],
                 "prediction": row["prediction"],
                 "source_prediction": row["source_prediction"],
                 "result": row["result"],

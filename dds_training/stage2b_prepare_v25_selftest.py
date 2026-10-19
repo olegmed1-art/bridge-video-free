@@ -7,6 +7,7 @@ from pathlib import Path
 
 from stage2b_prepare import lead_candidates, write_jsonl
 from stage2b_prepare_v25 import prepare_stage2b_v25
+from stage2b_v25 import recalibrate_oof_rows
 
 DEALS = [
     "N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3",
@@ -156,6 +157,13 @@ def main() -> None:
         assert ready["validation_opened"] is False
         assert ready["sealed_opened"] is False
         assert ready["dds_called"] is False
+
+        exported = [json.loads(line) for line in (out / "oof_predictions_v03_refined.jsonl").read_text().splitlines()]
+        assert len(exported) == 200
+        assert all(row["split"] == "train" and row["out_of_fold"] is True for row in exported)
+        replayed, replay_calibrator = recalibrate_oof_rows(exported)
+        assert len(replayed) == 200
+        assert replay_calibrator["oof_input_policy"] == "explicit-train-oof-family-fold-v1"
 
         manifest = json.loads((out / "CURRENT_STAGE_MANIFEST.json").read_text(encoding="utf-8"))
         assert manifest["current_algorithm"] == "dds-learning-v2.5-stage2b-candidate"

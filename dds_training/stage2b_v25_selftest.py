@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from itertools import product
+from unittest.mock import patch
 
 from stage2b_prepare import compare_oof
 from stage2b_v24 import row_loss, row_success
@@ -14,6 +15,7 @@ from stage2b_v25 import (
     exact_balanced_curriculum,
     paired_bootstrap_interval,
     recalibrate_oof_rows,
+    rewrite_oof_raw_probabilities,
     stratified_oof_comparison,
     support_aware_contract_probability,
 )
@@ -66,6 +68,7 @@ def make_row(
         "strain": strain,
         "family_id": f"F-{index}",
         "heldout_fold": index % 5,
+        "split": "train",
         "source_prediction": source_prediction,
         "prediction": prediction,
         "result": result,
@@ -173,7 +176,103 @@ def check_prediction_bound_lead_evidence() -> None:
         assert row_success(continuation) is False
 
 
+def check_oof_input_admission() -> None:
+    base = make_row(index=50, task_type="contract_tricks", strain=0,
+                    source_version="baseline", old_loss=1, new_loss=0,
+                    backoff="exact", support=250)
+    base["fold"] = base["heldout_fold"]
+    base["prediction"]["task_id"] = base["task_id"]
+    base["prediction"]["out_of_fold"] = True
+    base["result"].update({"task_id": base["task_id"], "split": "train",
+                           "family_id": base["family_id"], "fold": base["heldout_fold"]})
+    base["task"] = {
+        "task_id": base["task_id"], "task_type": base["task_type"],
+        "split": "train", "root_deal_id": base["family_id"],
+        "crossfit_fold": base["heldout_fold"],
+    }
+    original = deepcopy(base)
+    output, calibrator = recalibrate_oof_rows([base], minimum_support=1)
+    assert calibrator["oof_input_policy"] == "explicit-train-oof-family-fold-v1"
+    assert base == original
+    assert output[0]["out_of_fold"] is True and output[0]["split"] == "train"
+    assert output[0]["family_id"] == base["family_id"]
+
+    invalid_batches = [[], [None]]
+    for key in ("out_of_fold", "split", "task_id", "family_id", "heldout_fold"):
+        row = deepcopy(base)
+        del row[key]
+        invalid_batches.append([row])
+    for key, values in {
+        "out_of_fold": (False, None, 0, 1, "false", "true"),
+        "split": (None, "validation", "sealed_test", "TRAIN"),
+        "task_id": (None, "", " ", " padded ", 1),
+        "family_id": (None, "", " ", " padded ", 1),
+        "heldout_fold": (None, -1, True, 0.0, "0"),
+        "fold": (1, True, "0"),
+        "prediction": (None, []),
+        "result": (None, []),
+        "task": (None, []),
+    }.items():
+        for value in values:
+            row = deepcopy(base)
+            row[key] = value
+            invalid_batches.append([row])
+    for container, key, value in (
+        ("prediction", "out_of_fold", False),
+        ("prediction", "out_of_fold", "true"),
+        ("prediction", "task_id", "other"),
+        ("prediction", "split", "validation"),
+        ("prediction", "family_id", "other"),
+        ("prediction", "fold", 1),
+        ("prediction", "heldout_fold", False),
+        ("prediction", "task_type", "opening_lead"),
+        ("result", "split", "sealed_test"),
+        ("result", "split", "validation"),
+        ("result", "task_id", "other"),
+        ("result", "family_id", "other"),
+        ("result", "fold", 1),
+        ("result", "heldout_fold", False),
+        ("result", "task_type", "opening_lead"),
+        ("task", "task_id", "other"),
+        ("task", "task_type", "opening_lead"),
+        ("task", "split", "sealed_test"),
+        ("task", "crossfit_fold", 1),
+        ("task", "crossfit_fold", False),
+        ("task", "root_deal_id", "other"),
+    ):
+        row = deepcopy(base)
+        row[container][key] = value
+        invalid_batches.append([row])
+    invalid_batches.append([base, deepcopy(base)])
+    leaked = make_row(index=51, task_type="opening_lead", strain=0,
+                      source_version="baseline", old_loss=1, new_loss=0,
+                      backoff="exact", support=250)
+    leaked["family_id"] = base["family_id"]
+    invalid_batches.append([base, leaked])
+    for rows in invalid_batches:
+        before = deepcopy(rows)
+        # Invalid provenance must stop before any calibration fit, including
+        # a mixed batch where an otherwise-valid row precedes bad evidence.
+        for batch in (rows, [deepcopy(base), *rows] if rows else rows):
+            with patch("stage2b_v25.fit_segmented_oof_calibrator",
+                       side_effect=AssertionError("Fitted unadmitted evidence")):
+                for check in (rewrite_oof_raw_probabilities, recalibrate_oof_rows):
+                    try:
+                        check(batch)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError("Unadmitted OOF input did not fail closed")
+        assert rows == before
+
+    # Multiple task types for one family in the SAME fold are legitimate.
+    sibling = deepcopy(leaked)
+    sibling["heldout_fold"] = base["heldout_fold"]
+    recalibrate_oof_rows([base, sibling], minimum_support=1)
+
+
 def main() -> None:
+    check_oof_input_admission()
     check_prediction_bound_lead_evidence()
     unsupported = {
         "model_backoff_level": "baseline",
@@ -287,6 +386,7 @@ def main() -> None:
                 "candidate_card_calibration": True,
                 "invalid_lead_score_evidence_rejected": True,
                 "recorded_optimum_consistency_checked": True,
+                "explicit_train_oof_admission_checked": True,
                 "exhaustive_independent_score_oracle_cases": 384,
             },
             ensure_ascii=False,
