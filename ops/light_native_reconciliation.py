@@ -188,7 +188,9 @@ def observe_current(controller, runtime, capture_helpers, legacy_raw, raw, accep
         owner, live, bounded, Agreement, capture, current = _components()
         owner.validate_package(controller, value['source'], value['accepted_controller_sha256'])
         _need(type(runtime) is bytes and sha(runtime) == value['accepted_runtime_sha256'], 'PACKAGES')
-        retained = _parse(runtime, limit=3*1024*1024)
+        # Retained release.package used default ASCII JSON. Preserve its exact
+        # historical bytes/hash even when helper source contains Unicode.
+        retained = _parse(runtime, limit=3*1024*1024, ascii_json=True)
         _need(type(retained) is dict and set(retained) == {'version', 'source', 'runtime', 'helpers'}
               and type(retained['version']) is int and retained['version'] == 1
               and retained['source'] == owner.install.RETAINED_SOURCE == NATIVE_SOURCE, 'PACKAGES')
