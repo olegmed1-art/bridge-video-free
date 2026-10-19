@@ -1,6 +1,7 @@
 <?php
 // Explicit CI fixture only. Not Yan's actual CMS or production session broker.
-$cms = new stdClass(); $db = null; $rout = new stdClass();
+require __DIR__.'/../include/native-cms-interface-fixture.inc.php';
+require_once __DIR__.'/../include/diana19.cms-renderer.inc.php';
 $fixturePrivate = getenv('BRIDGE_NATIVE_SESSION_FIXTURE_PRIVATE');
 $fixtureDispatch = isset($GLOBALS['bridgeSpotBackendDispatch']) ? $GLOBALS['bridgeSpotBackendDispatch'] : null;
 $GLOBALS['bridgeDianaApplication'] = array(
@@ -31,15 +32,5 @@ $GLOBALS['bridgeDianaApplication'] = array(
         $request['headers']['Cookie'] = session_name().'='.session_id();
         return call_user_func($fixtureDispatch, $request);
     },
-    'render' => function($view, $application) {
-        if (session_status() !== PHP_SESSION_ACTIVE || $view['stage'] !== 'STAGING') {
-            throw new RuntimeException('native fixture renderer context missing');
-        }
-        $head = $view['head_html'];
-        foreach ($view['styles'] as $url) $head .= '<link rel="stylesheet" href="'.htmlspecialchars($url, ENT_QUOTES, 'UTF-8').'">';
-        foreach ($view['scripts'] as $url) $head .= '<script defer src="'.htmlspecialchars($url, ENT_QUOTES, 'UTF-8').'"></script>';
-        return '<!doctype html><html><head>'.$head.'</head><body>'.
-            '<header id="native-session-contract-fixture">NATIVE_PHP_SESSION_FIXTURE_NOT_YAN_CMS</header>'.
-            '<main>'.$view['fragment_html'].'</main><footer>EXISTING_SHELL_FIXTURE</footer></body></html>';
-    }
+    'render' => bridge_diana_native_cms_renderer()
 );

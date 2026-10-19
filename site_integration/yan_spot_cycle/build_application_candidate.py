@@ -1,4 +1,4 @@
-"""Source-exact CMS adapter candidate; does not include/run the unavailable CMS."""
+"""Source-exact CMS adapter; source report is verified, full CMS is not executed."""
 import argparse
 import difflib
 import json
@@ -32,6 +32,7 @@ def build(output: Path):
     patched = index.replace(marker, marker+hook, 1)
     output.mkdir(parents=True)
     for relative in ['include/diana19.application.inc.php', 'include/diana19.application-bindings.inc.php',
+                     'include/diana19.cms-renderer.inc.php', 'include/page/diana19.cms-view.inc.php',
                      'include/diana19.route.inc.php', 'include/spot-cycle.backend.inc.php',
                      'page/diana19.fragment.inc.php', 'css/diana19.application.css']:
         target = output/relative
@@ -43,7 +44,11 @@ def build(output: Path):
                                         fromfile='a/index.php', tofile='b/index.php'))
     output.with_suffix('.index.patch').write_text(patch, encoding='utf-8', newline='')
     return {'candidate': str(output), 'hook_after': 'cms/bootstrap.inc.php + session_start()',
-            'document_renderer': 'EXISTING_CMS_BINDING_REQUIRED', 'cms_source_available': False,
+            'document_renderer': 'NATIVE_CMS_PAGE_INCLUDE_VIEW_ADAPTER_PREPARED',
+            'cms_static_report_library_id': 'libfile_0efcde949f848191a9c1be413b2de24b',
+            'cms_archive_materialized_in_this_workspace': False,
+            'cms_route_mapping_applied': False, 'student_or_journal_binding_enabled': False,
+            'cms_source_available': False,
             'local_loopback_fallback': False, 'production_activated': False}
 
 

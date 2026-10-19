@@ -26,6 +26,7 @@ def verify(root):
     build(site)
     (site/'cms').mkdir()
     shutil.copyfile(HERE/'tests/anonymous_session_bootstrap_fixture.inc.php', site/'cms/bootstrap.inc.php')
+    install_native_shell_fixture(site)
     for path in (private, private/'php-sessions', private/'session-projections', private/'journals', artifact):
         path.mkdir(mode=0o700)
     front_port, back_port = ports()
@@ -97,10 +98,30 @@ def verify(root):
         'journal_bytes_equal_after_restart_readback':True,'unbound_school_route_http_status':503,
         'sessionless_application_catalog_status':403,'actual_yan_cms_verified':False,
         'reviewed_teacher_materials_uploaded':False,'production_changed':False,
-        'remaining_blocker':'Authorized code-only CMS include/render/session contract is unavailable; source archive previously returned 403 scope_violation. No source access retry or identity fallback.'}
+        'cms_renderer':'native page/includeView adapter on neutral contract fixture',
+        'cms_static_interface_report_available':True,'actual_cms_archive_executed':False,
+        'route_mapping_applied':False,'student_auth_enabled':False,
+        'remaining_blocker':'Real CMS route mapping and isolated runtime acceptance; verified student session and durable journal service remain unbound.'}
     (artifact/'HTTP_NATIVE_SESSION_EVIDENCE.json').write_text(json.dumps(report,indent=2)+'\n')
     print('HTTP_NATIVE_SESSION_EVIDENCE='+json.dumps(report))
     print('BROWSER_HTTP_EVIDENCE='+json.dumps(browser_report))
+
+
+def install_native_shell_fixture(site):
+    """Only neutral shell markers. No PHP source from the private archive runs."""
+    site = Path(site)
+    shutil.copyfile(HERE/'tests/native_cms_interface_fixture.inc.php', site/'include/native-cms-interface-fixture.inc.php')
+    blocks = site/'include/block'
+    blocks.mkdir()
+    contents = {
+        's-header': '''<?php echo '<!doctype html><html><head><title>'.htmlspecialchars($headerData['sitetitle'], ENT_QUOTES, 'UTF-8').'</title></head><body><div class="wrapper">';''',
+        'header': '<header id="native-session-contract-fixture">NATIVE_CMS_INTERFACE_FIXTURE_NOT_ARCHIVE_RUNTIME</header>',
+        'footer': '<footer id="native-footer-fixture">NATIVE_FOOTER_FIXTURE</footer>',
+        'js': '<script src="/legacy-jquery-fixture.js"></script>',
+        's-footer': '</div></body></html>',
+    }
+    for name, content in contents.items():
+        (blocks/(name+'.inc.php')).write_text(content, encoding='utf-8')
 
 
 if __name__=='__main__':

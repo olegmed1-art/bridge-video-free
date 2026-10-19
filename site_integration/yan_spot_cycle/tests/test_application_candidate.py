@@ -14,6 +14,11 @@ def test_application_hook_preserves_original_after_bootstrap_and_session(tmp_pat
     assert (output/'.htaccess').read_bytes() == original('htaccess.txt')
     assert not (output/'cms').exists()
     assert result['local_loopback_fallback'] is False
+    assert result['cms_archive_materialized_in_this_workspace'] is False
+    assert result['cms_route_mapping_applied'] is False
+    assert result['student_or_journal_binding_enabled'] is False
+    assert (output/'include/page/diana19.cms-view.inc.php').is_file()
+    assert (output/'include/diana19.cms-renderer.inc.php').is_file()
 
 
 def test_application_view_is_a_scoped_fragment_not_a_separate_document():
