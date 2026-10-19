@@ -1,0 +1,107 @@
+name: Qualified dormant Native HOST installation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/light-native-service-install.yml'
+      - 'ops/light_native_service_bootstrap.py'
+      - 'ops/light_native_service_history.py'
+      - 'ops/light_native_service_install*.py'
+      - 'ops/light_native_service_authority.py'
+      - 'ops/light_native_service_supervisor.py'
+      - 'ops/light_native_service_unit.py'
+      - 'ops/light_native_lane_controller.py'
+      - 'ops/light_native_lane_cycle.py'
+      - 'ops/light_native_lane_issuer.py'
+      - 'ops/light_native_lane_execution.py'
+      - 'ops/native_maintenance_run_guard.py'
+      - 'ops/native_maintenance_budgets.py'
+      - 'ops/native_maintenance_lifetime.py'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'ops/oracle_known_hosts_from_scan.sh'
+      - 'tests/test_light_native_service_history.py'
+      - 'tests/test_light_native_service_install.py'
+      - 'docs/operations/native-dormant-install-i2-20261019.md'
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact independently reviewed controller main
+        required: true
+        type: string
+      accepted_package_sha256:
+        description: Independently accepted exact target code package
+        required: true
+        type: string
+      accepted_action_sha256:
+        description: Accepted canonical finite install or rollback action
+        required: true
+        type: string
+      action_json:
+        description: Public DORMANT_INSTALL_ONLY action; no credentials or free text
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.expected_main_sha == github.sha && 'oracle-instance-workload-mutation' || format('native-dormant-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Linux root history, dormant bootstrap and rollback contracts
+        run: |
+          sudo -n env NATIVE_DORMANT_PID1_CONTRACT=ci /usr/bin/python3 -I -S -B - <<'PY'
+          import os, sys, unittest
+          sys.path.insert(0, os.getcwd())
+          suite = unittest.TestSuite(unittest.defaultTestLoader.discover('tests', pattern=pattern)
+                    for pattern in ('test_light_native_service_history.py', 'test_light_native_service_install.py'))
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          assert not result.skipped, 'Linux root contracts must execute without skips'
+          raise SystemExit(not result.wasSuccessful())
+          PY
+
+  install:
+    needs: contract
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' && github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: oracle-light-backup-mutation
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install only accepted stopped code and unit, with history first
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          PYTHONPATH=. /usr/bin/python3 -B -S ops/light_native_service_install_runner.py "$work/key" "$work/known_hosts"
