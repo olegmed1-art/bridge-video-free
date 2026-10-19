@@ -33,22 +33,87 @@ Mode: INCIDENT for containment; ASSURED remains the software-review mode.
 
 ## Preventing repeat execution
 
+### Read-only follow-up: exact usage and billing evidence
+
+The GitHub run/job/timing APIs were reread after containment:
+
+| Field | Observed value |
+| --- | --- |
+| Run / attempt / event | 39296951764 / 1 / pull_request_target |
+| Job | 118211827060, prepare-main |
+| Run duration reported by timing API | 250000 ms = 4m10s |
+| Job started / completed (UTC) | 2026-10-19 17:46:15 / 17:50:20 |
+| Job elapsed time | 245 seconds = 4m05s |
+| Runner | GitHub-hosted standard ubuntu-24.04; GitHub Actions 1000055012 |
+| Runner group | GitHub Actions, group ID 0 |
+| Repository visibility | public (`private=false`) |
+| Timing API billable.UBUNTU.total_ms | 0 |
+| Timing API job duration_ms in billable section | 0 for job118211827060 |
+| Terminal outcome | completed / cancelled |
+
+Primary API endpoints: [run](https://api.github.com/repos/olegmed1-art/bridge-video-free/actions/runs/39296951764),
+[jobs](https://api.github.com/repos/olegmed1-art/bridge-video-free/actions/runs/39296951764/jobs),
+[timing](https://api.github.com/repos/olegmed1-art/bridge-video-free/actions/runs/39296951764/timing).
+The timing response is positive evidence of **zero reported billable runner
+milliseconds**, not a monetary invoice. It agrees with GitHub's documented
+[free standard runner use in public repositories](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+The account billing-usage request for 2026-10-19 returned HTTP404 and the CLI
+reported missing `user` scope. No scope/credential was expanded. Actual invoice
+charges and any account-level storage charges remain **NOT VERIFIED**, not zero.
+
+Only preparation workflow336379251 is disabled_manually. The read-only snapshot
+confirmed verifier339542710, DDS fast335409582 and Secret gate340767500 active.
+The existing 578-byte incident artifact and job/timing receipts were downloaded
+locally for preservation. No corpus, remote artifact, cache or receipt was deleted;
+no run was retried. Full generated-state packaging had been skipped by cancellation,
+so persistence of the generated full corpus is not asserted.
+
+### Why PR creation triggered computation
+
+At head b66311a the preparation workflow explicitly subscribed to
+`pull_request_target` opened/synchronize/reopened, branch main and paths including
+`dds_training/**`. Its job condition accepted an owner-authored same-repository PR.
+PR2186 satisfied every condition. The trust check protected secret exposure but
+did not check a preparation scope, budget, receipt or explicit launch approval.
+The architecture selftest even allowed this exception because preparation did
+not call the mass evaluator. That assumption was insufficient: corpus generation,
+prediction and binary construction were still real work.
+
+### Durable source gate
+
+Automatic preparation triggers are removed. The preserved historical preparation
+job is unconditionally quarantined with `if: ${{ false }}` before runner allocation.
+Manual dispatch or administrative re-enabling alone cannot execute it. No checkbox
+or budget string enables a bypass. The owner's subsequent placement decision
+requires heavy DDS work on the existing OracleLight -> IBM route, not GitHub
+Actions. A future reviewed dataset/queue/resource admission belongs on that route;
+it must not replace this denial with GitHub computation. The administrative pause
+also remains. IBM server costs are authorized and are not being audited here.
+
+The architecture selftest rejects restoration of an automatic trigger, removal or
+dynamic replacement of the denial, and addition of an unguarded job. The active
+observable verifier now fails immediately with explicit BLOCKED/EVIDENCE_ONLY
+evidence when preparation is disabled/quarantined or its state cannot be read.
+It retains/uploads its blocked receipt; it does not report successful preparation
+or poll for thirty minutes. Other software/security CI remains active.
+
 A confirmed review finding required another PR update. Before any new push,
 GitHub showed zero in-progress and zero queued runs for preparation workflow
 ID 336379251. Only that optional compute workflow,
 `.github/workflows/dds-main-30k-prepare.yml`, was reversibly paused through the
 existing GitHub access. A fresh API read confirmed **disabled_manually**.
 No branch protection, required CI, receipt validation or other safety gate was
-disabled. The observable verifier is retained; any waiting run for this PR
-must be cancelled explicitly because no preparation attestation is expected.
+disabled. The observable verifier is retained. Before this source correction,
+its waiting runs were cancelled explicitly because no preparation attestation
+was expected. After this correction it must finish with a BLOCKED receipt.
 
 The workflow remains paused after this software patch. Do not re-enable it
-merely because the PR merges. The DDS owner must first provide and independently
-review an explicit admission gate for the exact scope and budget. Re-enabling
-it is a separate compute-authority decision. Manual dispatch is also unavailable
+because the PR merges or an IBM budget exists. Heavy DDS execution is assigned
+to existing OracleLight -> IBM with dataset/scope gates and resource coordination.
+Manual dispatch is also unavailable
 while paused; there were no active authorized jobs when containment occurred.
 
-PR merge cannot retrigger these preparation/verifier workflows: their PR events
+The preparation workflow no longer has PR triggers. The verifier's PR events
 are only opened, synchronize and reopened. Downstream Drive attestation requires
 successful preparation and therefore cannot attest the cancelled run.
 

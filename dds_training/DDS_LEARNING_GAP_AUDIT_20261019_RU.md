@@ -28,7 +28,7 @@ Governance: ASSURED для корректности алгоритма; producti
 |---|---|---|
 | Статус | Базовая версия алгоритма | Candidate/testing; запись данных или merge кода не означает принятия |
 | Legal line и DD trajectory | `playline.py`, `dds_play.py`, prefix solve и равнооптимальные ходы | Используются подготовленные линии; подготовка curriculum не доказывает качество card-level решений |
-| Family isolation | `root_deal_id`, folds, shards; TRAIN отдельно от holdout | `load_train_facts` фильтрует TRAIN, `prepare_oof_candidate` проверяет пересечение семейств; wrapper `recalibrate_oof_rows` сам ставит `out_of_fold=True` и отдельно требует будущего ужесточения входного контракта |
+| Family isolation | `root_deal_id`, folds, shards; TRAIN отдельно от holdout | `load_train_facts` фильтрует TRAIN, `prepare_oof_candidate` проверяет пересечение семейств; новый входной контракт v2.5 требует явные TRAIN/OOF, task/family IDs и согласованные folds, не создаёт OOF-признак сам |
 | Raw confidence | OOF calibration/abstention | Support-aware prior 0.18 для неподдержанного contract fallback; это вход к калибратору, не доказанная вероятность |
 | Метка успеха первого хода | Нельзя приписывать чужому решению DDS-результат | **Подтверждённый дефект:** v2.4/v2.5 калибратор и diagnostics использовали source `dd_regret` после замены prediction на candidate; исправляется этим изменением |
 | Model selection | Раздельный paired comparison по типу задачи | Исторические baseline-v0.1 и adaptive-v0.2 разделены; четыре NT/suit группы, practical threshold и bootstrap; automatic promotion=false |
@@ -117,23 +117,43 @@ self-test выполнили все функциональные assertions и �
 Повторная сверка main `1742ba4ed046e6d8c661341916b982465187087a` показала
 только независимое изменение Observer; DDS, AGENTS и governance не изменились.
 
+Первое исправление принято отдельно: [PR2186](https://github.com/olegmed1-art/bridge-video-free/pull/2186),
+merge `f733c943f822cb91e135e6761b6e95c806231f45`; окончательный head `d10eea22`
+прошёл [45/45 fast CI](https://github.com/olegmed1-art/bridge-video-free/actions/runs/39299723273)
+и повторное независимое ревью, включая 1470 проверок согласованности максимума.
+Историческое замечание выше закрыто; это приёмка software patch, не Learning v2.5.
+
 ## Следующие действия и границы
+
+Дополнительное ограниченное усиление: `recalibrate_oof_rows` и
+`rewrite_oof_raw_probabilities` проверяют весь входной batch до преобразования
+и fit. Обязательны `split="train"`, строгое `out_of_fold is True`, уникальный
+непустой строковый task_id, family_id и целочисленный неотрицательный
+heldout_fold. Одно семейство не может появляться в разных folds; противоречивые
+вложенные task/prediction/result metadata отклоняются. Новые JSONL-экспорты сохраняют
+явные split/OOF; старым файлам с отсутствующими полями provenance не дорисовывается.
+Calibrator отмечается `oof_input_policy=explicit-train-oof-family-fold-v1`.
+Это проверка согласованности метаданных, не независимое доказательство отсутствия
+утечки при обучении; такой факт по-прежнему обязан подтвердить producer.
 
 Открытие PR выявило опасный автоматический trigger подготовки 30k; выполненный
 объём, отмена и пауза workflow описаны в
 [журнале локализации инцидента](DDS_EXECUTION_CONTAINMENT_20261019.md).
-Эта подготовка не является свидетельством приёмки. До явного admission по
-scope/бюджету вычислительный workflow оставляется на паузе; safety gates и
-обычные программные тесты сохраняются.
+Эта подготовка не является свидетельством приёмки. Тяжёлый GitHub workflow
+остаётся на паузе и безусловно запрещён в исходниках. Новый допуск не включает
+GitHub compute: владелец назначил существующий OracleLight → IBM. Safety gates
+и обычные программные тесты сохраняются.
 
-После приёмки patch: отдельно ужесточить admission OOF-строк, затем подготовить
-план пересчёта calibration на уже зафиксированных TRAIN-фактах с проверкой
-хешей, бюджета, независимой calibration evaluation и разрешения на объём.
+Подготовлен [план OracleLight → IBM](DDS_IBM_TRAIN_ROUTE_PROPOSAL_20261019_RU.md):
+сначала сверить уже зафиксированные TRAIN-факты и возможность пересчёта
+calibration без повторного DDS. Нужны точные хеши, допустимый объём, окно
+владельцев и независимая calibration evaluation.
 Не повторять 42000-row подготовку автоматически. Затем потребуются реальные
 card-level/transfer/counterexample/rule evidence и отдельное решение о версии.
 
 Любое DDS TRAIN/validation/sealed выполнение требует свежего допуска своего
-scope и бюджета. Ни данный аудит, ни тесты его не выдают. IBM/Diana20, службы,
-ключи, права и инфраструктура вне scope. Rollback patch — revert кода;
+scope. Существующие IBM и расходы разрешены, но ресурсное окно и DDS-адаптер
+ещё не приняты. Ни данный аудит, ни тесты не открывают dataset gate.
+Diana20, службы, ключи и права не изменяются. Rollback patch — revert кода;
 возврат ошибочной калибровки не делает её допустимой для promotion, поэтому
 предпочтительно сохранить кандидат в testing до исправления вперёд.
