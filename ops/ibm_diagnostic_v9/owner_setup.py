@@ -3,6 +3,7 @@ SAFE_SETUP_PROGRESS_CODES=frozenset(("PUBLIC_PROGRESS_BUFFER","PUBLIC_PROGRESS_S
 import argparse,base64,fcntl,hashlib,io,json,os,re,stat,sys,tarfile,tempfile,types,shlex
 from pathlib import Path,PurePosixPath
 from diagnostic_process import run,need
+ADMISSION_SOURCE_SHA256="cc3f5c48f03cdce653ecac2da6cd505074ff78ba9432bf2a5b8a34671be130c3"
 SAFE_SETUP_PHASES=frozenset(("COLLECT_GUARD","COLLECT_IMPORT","COLLECT_CHECKOUT","COLLECT_OWNER","COLLECT_IAM","COLLECT_INSTANCE","COLLECT_DB","COLLECT_FACTORY","COLLECT_CAPTURE","COLLECT_ADMISSION","COLLECT_COMPLETE")) | frozenset(('OWNER_CONTEXT', 'EVENT_INPUT', 'OWNER_SECRET', 'ORACLE_TRUST', 'PACKET_DOWNLOAD', 'ARCHIVE_UNPACK', 'MANIFEST_VERIFY', 'CLOSURE_VERIFY', 'IDENTITY_IMPORT', 'CHECKOUT_VERIFY', 'FACTORY_IMPORT', 'FACTORY_VERIFY', 'ENTRY_IMPORT', 'PREARM'))
 SAFE_SETUP_REFUSAL_CODES=frozenset(("COLLECT_ONLY_SCOPE","COLLECT_ONLY_FORBIDDEN","COLLECT_ONLY_DEADLINE","COLLECT_ONLY_INSTANCE_STATE","COLLECT_ONLY_UNKNOWN","COLLECT_IAM_REFUSED","COLLECT_ONLY_REQUIRED")) | frozenset(('ADMIN_ROUTE_APPROVAL_BINDING', 'AUTHENTICATED_WINDOW_INPUTS_REQUIRED', 'COLLECT_ADMIT_CLOSURE', 'COLLECT_ADMIT_MODE', 'DDS3_SCALARS', 'DIAGNOSTIC_BASELINE', 'DIAGNOSTIC_BINDING', 'DIAGNOSTIC_FRESHNESS', 'DIAGNOSTIC_REMAINING', 'DIAGNOSTIC_SCHEMA', 'DISPATCH_FACTORY_CLOSURE', 'DISPATCH_FACTORY_CYCLE', 'EXISTING_OWNER_SECRET', 'EXISTING_OWNER_SSH_REFERENCES', 'EXPLICIT_OWNER_WINDOW_AND_STOP_APPROVAL_REQUIRED', 'FROZEN_RUNTIME_PROVENANCE', 'FROZEN_RUNTIME_SOURCE', 'GUEST_BOOT', 'INDEPENDENT_STOP_RUN_REQUIRED', 'INPUT_PINS', 'MAIN_PIN', 'MANIFEST_PIN', 'MEMFD_MODE', 'ORACLE_FINGERPRINT', 'ORACLE_PUBLIC_TRUST', 'OWNER_BUDGET', 'OWNER_CHECKOUT_CODE_PIN', 'OWNER_CHILD_EXIT', 'OWNER_CHILD_RESULT', 'OWNER_CLOSURE_SCOPE', 'OWNER_CODE_CHANGED', 'OWNER_CONTENT_IDENTITY', 'OWNER_CONTEXT', 'OWNER_CURRENT_MAIN', 'OWNER_DEADLINE_RESERVE', 'OWNER_DISPATCH_DUPLICATE', 'OWNER_DISPATCH_EVENT_LIMIT', 'OWNER_DISPATCH_EVENT_REQUIRED', 'OWNER_DISPATCH_INPUT_SCOPE', 'OWNER_DISPATCH_MODE', 'OWNER_DISPATCH_PACKET_PINS', 'OWNER_DISPATCH_REVIEW_PINS', 'OWNER_MANIFEST_PIN', 'OWNER_MANIFEST_SCOPE', 'OWNER_PARENT', 'OWNER_POWER_LANE', 'OWNER_PRIMARY_JOBS', 'OWNER_PRIMARY_RUN', 'OWNER_REVIEWED_CODE_PINS', 'OWNER_RUN', 'OWNER_SETUP_CONTEXT', 'OWNER_SHA', 'OWNER_STOP_ID', 'OWNER_WINDOW_POLICY_PIN', 'PRIMARY_UNVERIFIED', 'PRIVATE_ARCHIVE_PIN', 'PRIVATE_ARCHIVE_SCOPE', 'PRIVATE_CLOSURE', 'PRIVATE_FAILURE_CODE', 'PRIVATE_FAILURE_FIELDS', 'PRIVATE_FAILURE_STAGE', 'PRIVATE_FAILURE_TIMING', 'PRIVATE_RECEIPT_DIRECTORY', 'PRIVATE_RECEIPT_FILE', 'PRIVATE_RECEIPT_LIMIT', 'PRIVATE_RECEIPT_PARENT', 'PRIVATE_RECEIPT_READBACK', 'PRIVATE_RECEIPT_WRITE', 'PRIVATE_SOURCE', 'PROTECTED_SCOPE', 'PROTECTED_STATES', 'PUBLIC_BOOL', 'PUBLIC_BUFFER', 'PUBLIC_DEFAULT', 'PUBLIC_DUPLICATE', 'PUBLIC_FAILURE', 'PUBLIC_FAILURE_KIND', 'PUBLIC_FRAME', 'PUBLIC_HASH', 'PUBLIC_MUTATIONS', 'PUBLIC_ORDER', 'PUBLIC_PHASE_ORDER', 'PUBLIC_REFUSAL', 'PUBLIC_RESULT', 'PUBLIC_RESULT_BOOL', 'PUBLIC_RESULT_FIELDS', 'PUBLIC_RESULT_KIND', 'PUBLIC_RESULT_MUTATIONS', 'PUBLIC_STATUS', 'PUBLIC_WRITE_LIMIT', 'PUBLIC_WRITE_TIMEOUT', 'PUBLIC_WRITE_ZERO', 'QUALIFIED_MAIN_CHECKOUT', 'QUEUE_FRESHNESS', 'QUEUE_STALE_BEFORE_ARM', 'REVIEWED_PRIOR_BINDING_REQUIRED', 'ROOT_ROUTE_APPROVAL_REQUIRED', 'RUNNING_NOT_OBSERVED', 'SOURCE_ONLY_NOT_ARMED', 'SOURCE_PATH', 'SOURCE_READBACK', 'STATUS_PHASE', 'STOP_CONTRACT_PRELUDE', 'STOP_CONTRACT_PRELUDE_ORIGIN', 'STOP_CONTRACT_PRELUDE_STALE', 'TRUSTED_DISPATCH_FACTORY_REQUIRED', 'TRUSTED_DISPATCH_INPUTS_REQUIRED', 'UNKNOWN', 'UV_SCALARS', 'UV_SCHEMA', 'UV_TYPED_PRE', 'UV_TYPED_ROW'))
 # Fixed collect-import vocabulary; no dynamic class names, messages or paths.
@@ -131,11 +132,11 @@ def main(argv=None):
  started=time.monotonic()
  p=argparse.ArgumentParser()
  for name in ("archive-sha","manifest-sha","expected-main"):p.add_argument("--"+name,required=True)
- mode=p.add_mutually_exclusive_group();mode.add_argument("--run-reviewed",action="store_true");mode.add_argument("--collect-only",action="store_true");a=p.parse_args(argv)
+ mode=p.add_mutually_exclusive_group();mode.add_argument("--run-reviewed",action="store_true");mode.add_argument("--collect-only",action="store_true");mode.add_argument("--admit-only",action="store_true");a=p.parse_args(argv)
  need(re.fullmatch("[0-9a-f]{64}",a.archive_sha) and re.fullmatch("[0-9a-f]{64}",a.manifest_sha) and re.fullmatch("[0-9a-f]{40}",a.expected_main),"INPUT_PINS")
  expected={"GITHUB_REPOSITORY":"olegmed1-art/bridge-video-free","GITHUB_ACTOR":"olegmed1-art","GITHUB_TRIGGERING_ACTOR":"olegmed1-art","GITHUB_EVENT_NAME":"workflow_dispatch","GITHUB_REF":"refs/heads/main","GITHUB_SHA":a.expected_main,"GITHUB_RUN_ATTEMPT":"1","GITHUB_JOB":"ibm-diagnostic-trial"}
  need(all(os.environ.get(k)==v for k,v in expected.items()) and re.fullmatch("[1-9][0-9]{5,14}",os.environ.get("GITHUB_RUN_ID","")),"OWNER_SETUP_CONTEXT")
- return _supervise(lambda end:_run(a,end),started,seconds=120 if a.collect_only else OWNER_BUDGET_SECONDS,collect_only=a.collect_only)
+ return _supervise(lambda end:_run(a,end),started,seconds=120 if a.collect_only or a.admit_only else OWNER_BUDGET_SECONDS,collect_only=a.collect_only,admit_only=a.admit_only)
 def _run(a,end):
  setup_phase("EVENT_INPUT")
  event_path=os.environ.get("GITHUB_EVENT_PATH","");need(bool(event_path),"OWNER_DISPATCH_EVENT_REQUIRED")
@@ -154,7 +155,9 @@ def _run(a,end):
  need((type(mode) is bool or type(mode) is str and mode in ("true","false")) and yes(mode)==a.run_reviewed,"OWNER_DISPATCH_MODE")
  collect=dispatch.get("collect_only",False)
  need((type(collect) is bool or type(collect) is str and collect in ("true","false")) and yes(collect)==a.collect_only and not(a.run_reviewed and a.collect_only),"OWNER_DISPATCH_MODE")
- if a.run_reviewed or a.collect_only:
+ admit=dispatch.get("admit_only",False)
+ need((type(admit) is bool or type(admit) is str and admit in ("true","false")) and yes(admit)==a.admit_only and not(a.admit_only and (a.run_reviewed or a.collect_only)),"OWNER_DISPATCH_MODE")
+ if a.run_reviewed or a.collect_only or a.admit_only:
   need(yes(dispatch.get("approve_closed_window")) and yes(dispatch.get("approve_stop_route_hold")),"EXPLICIT_OWNER_WINDOW_AND_STOP_APPROVAL_REQUIRED")
  need(dispatch.get("reviewed_archive_sha")==a.archive_sha and dispatch.get("reviewed_manifest_sha")==a.manifest_sha and dispatch.get("expected_main_sha")==a.expected_main,"OWNER_DISPATCH_PACKET_PINS")
  setup_phase("OWNER_SECRET")
@@ -190,15 +193,25 @@ def _run(a,end):
   owner_inputs=types.ModuleType("owner_inputs");owner_inputs.__file__="<verified-owner-inputs>";sys.modules["owner_inputs"]=owner_inputs
   exec(compile(verified_cache["owner_inputs.py"],owner_inputs.__file__,"exec"),owner_inputs.__dict__);owner_inputs.__source_sha256__=manifest["files"]["owner_inputs.py"]
   setup_phase("FACTORY_VERIFY")
-  fresh_inputs=owner_inputs.DispatchInputsFactory.from_runner(context,dispatch,manifest,collect_only=a.collect_only) if a.run_reviewed or a.collect_only else None
+  if a.admit_only:
+   need(manifest.get("admit_only") is True and manifest.get("source_only") is True and manifest.get("final_binding") is False and manifest.get("collect_only") is False,"ADMIT_PACKAGE_SCOPE")
+   need(manifest["files"].get("owner_admission.py")==ADMISSION_SOURCE_SHA256,"ADMIT_MODULE_PIN")
+   fresh_inputs=owner_inputs.DispatchInputsFactory.from_runner(context,dispatch,manifest,admit_only=True)
+  else:fresh_inputs=owner_inputs.DispatchInputsFactory.from_runner(context,dispatch,manifest,collect_only=a.collect_only) if a.run_reviewed or a.collect_only else None
   setup_phase("ENTRY_IMPORT")
   raw=verified_cache["diagnostic_entry.py"]
   module=types.ModuleType("reviewed_diagnostic_entry");module.__file__=str(root/"diagnostic_entry.py");sys.modules[module.__name__]=module
   exec(compile(raw,module.__file__,"exec"),module.__dict__)
   # Same process holds memory fds; target c.Channel opens parent's /proc fd paths.
   os.environ.update(ORACLE_KEY_PATH="/proc/"+str(os.getpid())+"/fd/"+str(keyfd),ORACLE_KNOWN_HOSTS="/proc/"+str(os.getpid())+"/fd/"+str(knownfd))
-  args=["--manifest-sha",a.manifest_sha]+(["--run-reviewed"] if a.run_reviewed else ["--collect-only"] if a.collect_only else [])
+  args=["--manifest-sha",a.manifest_sha]+(["--run-reviewed"] if a.run_reviewed else ["--collect-only"] if a.collect_only else ["--admit-only"] if a.admit_only else [])
   setup_phase("PREARM")
+  if a.admit_only or (a.run_reviewed and "owner_admission.py" in verified_cache):
+   parent=Path(os.environ["RUNNER_TEMP"])/"ibm-owner-admission"
+   try:parent.mkdir(mode=0o700)
+   except FileExistsError:pass
+   info=parent.lstat();need(stat.S_ISDIR(info.st_mode) and info.st_uid==os.getuid() and stat.S_IMODE(info.st_mode)==0o700,"ADMIT_PRIVATE_PARENT")
+   return module.entry(args,owner_deadline=end,collect_admit_inputs=fresh_inputs,collect_only_phase=setup_phase,admission_receipt_parent=str(parent))
   return module.entry(args,owner_deadline=end,collect_admit_inputs=fresh_inputs,collect_only_phase=setup_phase)
  finally:
   for i in range(len(key)):key[i]=0
@@ -213,6 +226,12 @@ def _public_frame(raw):
   for k,v in pairs:need(k not in out,"PUBLIC_DUPLICATE");out[k]=v
   return out
  v=json.loads(raw,object_pairs_hook=unique);need(type(v) is dict,"PUBLIC_FRAME")
+ if v.get("kind")=="OWNER_ADMISSION_RETAINED_BEFORE_ARM":
+  helper=Path(__file__).with_name("owner_admission.py");source=helper.read_bytes()
+  need(0<len(source)<=65536 and hashlib.sha256(source).hexdigest()==ADMISSION_SOURCE_SHA256,"ADMIT_MODULE_PIN")
+  name="_pinned_owner_admission_public";module=types.ModuleType(name);sys.modules[name]=module
+  exec(compile(source,str(helper),"exec"),module.__dict__)
+  return module.validate_public_frame(v)
  if v.get("kind")=="COLLECT_RUNTIME_RECORD":return public_runtime_record(v)
  if v.get("kind")=="COLLECT_DIAGNOSTIC_STATUS":
   need(set(v)=={"kind","phase"} and type(v["phase"]) is str and v["phase"] in COLLECT_DIAGNOSTIC_PHASES,"PUBLIC_PROGRESS_STATUS");return v
@@ -232,12 +251,12 @@ def _public_frame(raw):
  if v.get("kind")=="OWNER_SETUP_REFUSED":
   need(set(v)=={"kind","completion_proven","power_state","failure_stage","failure_code"} and v["completion_proven"] is False and v["power_state"]=="UNKNOWN" and v["failure_stage"] in SAFE_SETUP_PHASES and v["failure_code"] in SAFE_SETUP_REFUSAL_CODES,"PUBLIC_REFUSAL");return v
  need(False,"PUBLIC_REFUSAL");return v
-def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS,*,collect_only=False):
+def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS,*,collect_only=False,admit_only=False):
  global _collect_progress_fd
  import signal,selectors,time,ctypes
  need(type(seconds) in (int,float) and 0<seconds<=OWNER_BUDGET_SECONDS,"OWNER_BUDGET")
  end=started+seconds;reader,writer=os.pipe();parent=os.getpid();pid=None;reaped=False;terminal=False;terminal_frame=None;phase_index=0;seq=0;reason=None;status=None;buf=bytearray()
- need(type(collect_only) is bool,"PUBLIC_PROGRESS_CHANNEL")
+ need(type(collect_only) is bool and type(admit_only) is bool and not(collect_only and admit_only),"PUBLIC_PROGRESS_CHANNEL")
  progress_reader,progress_writer=os.pipe2(os.O_CLOEXEC|os.O_NONBLOCK) if collect_only else (None,None)
  progress_buf=bytearray();progress_eof=not collect_only;progress_count=0;runtime_record_count=0;last_collect_phase=None
  original_blocking=os.get_blocking(1)
@@ -298,6 +317,7 @@ def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS,*,collect_only=False)
        v=_public_frame(raw)
        need(v["kind"] not in ("COLLECT_DIAGNOSTIC_STATUS","COLLECT_RUNTIME_RECORD"),"PUBLIC_PROGRESS_CHANNEL")
        if v["kind"]=="DIAGNOSTIC_STATUS":
+        need(not admit_only,"ADMIT_POWER_STATUS_FORBIDDEN")
         need(phase_index<len(STATUS_PHASES) and v["phase"]==STATUS_PHASES[phase_index],"PUBLIC_PHASE_ORDER");phase_index+=1;seq+=1
         v.update(seq=seq,elapsed_ms=max(0,int((time.monotonic()-started)*1000)))
         emit(v)
@@ -315,7 +335,12 @@ def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS,*,collect_only=False)
        reason="CHILD_OUTPUT_OPEN";break
       need(not progress_buf,"PUBLIC_PROGRESS_BUFFER")
       need(not buf and terminal,"OWNER_CHILD_RESULT")
-      expected=0 if terminal_frame["kind"] in ("VERIFIED_NOT_ARMED","COLLECT_ONLY_VERIFIED") or (terminal_frame["kind"]=="DIAGNOSTIC_TRIAL_COMPLETE" and terminal_frame["completion_proven"] and terminal_frame["private_receipt_retained"]) else 78
+      if admit_only:
+       need(phase_index==0 and terminal_frame["kind"] in ("OWNER_ADMISSION_RETAINED_BEFORE_ARM","OWNER_SETUP_REFUSED"),"ADMIT_TERMINAL_MODE")
+       expected=0 if terminal_frame["kind"]=="OWNER_ADMISSION_RETAINED_BEFORE_ARM" else 78
+      else:
+       need(terminal_frame["kind"]!="OWNER_ADMISSION_RETAINED_BEFORE_ARM","ADMIT_TERMINAL_MODE")
+       expected=0 if terminal_frame["kind"] in ("VERIFIED_NOT_ARMED","COLLECT_ONLY_VERIFIED") or (terminal_frame["kind"]=="DIAGNOSTIC_TRIAL_COMPLETE" and terminal_frame["completion_proven"] and terminal_frame["private_receipt_retained"]) else 78
       need(status==expected,"OWNER_CHILD_EXIT")
       emit(terminal_frame);return status
      reason="CHILD_OUTPUT_OPEN";break
