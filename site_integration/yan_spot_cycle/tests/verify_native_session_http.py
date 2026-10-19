@@ -101,7 +101,8 @@ def verify(root):
         'cms_renderer':'native page/includeView adapter on neutral contract fixture',
         'cms_static_interface_report_available':True,'actual_cms_archive_executed':False,
         'route_mapping_applied':False,'student_auth_enabled':False,
-        'remaining_blocker':'Real CMS route mapping and isolated runtime acceptance; verified student session and durable journal service remain unbound.'}
+        'yaml_mapping_required':False,'global_cms_settings_unchanged':True,
+        'remaining_blocker':'Real CMS shell/runtime acceptance and exact public subroute availability; verified student session and durable journal service remain unbound.'}
     (artifact/'HTTP_NATIVE_SESSION_EVIDENCE.json').write_text(json.dumps(report,indent=2)+'\n')
     print('HTTP_NATIVE_SESSION_EVIDENCE='+json.dumps(report))
     print('BROWSER_HTTP_EVIDENCE='+json.dumps(browser_report))

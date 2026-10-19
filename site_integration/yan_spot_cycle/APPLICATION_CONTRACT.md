@@ -26,9 +26,11 @@ The CMS source files and configuration are not modified by the builder.
 
 `include/diana19.cms-renderer.inc.php` exports the explicit factory
 `bridge_diana_native_cms_renderer()`. It installs no dispatch, mapping or login.
-After backend admission, it calls the confirmed `page()` and
-`includeView('practice')` interfaces. The fixed server-owned key also works with
-the existing query entry, whose REQUEST_URI may begin with `index.php`.
+After backend admission, it calls the confirmed `page()` interface. It clones
+the CMS object and adds one private selector `__bridge_diana19_renderer_v1`
+only to that clone's pages map, then calls its `includeView()`. The original
+CMS settings, YAML, default view and any existing practice page stay unchanged.
+An existing private selector or a clone hook causes a closed rejection.
 
 The resolved path must equal the new fixed
 `include/page/diana19.cms-view.inc.php`. A default, login or other view is
@@ -50,11 +52,13 @@ has no local loopback or administrator admission fallback.
 
 ## Unapplied route and runtime plan
 
-1. In an authorized isolated copy, verify the **single** non-secret pages mapping
-   entry for `practice`. The report deliberately did not read the YAML values.
-   If unused, the proposed value is `diana19.cms-view.inc` (includeView appends
-   `.php` under SYS_PAGE_DIR). If already occupied, stop and review a distinct
-   module key and matching code change; never overwrite another module.
+1. The exact code-only handoff `libfile_37e4c5ccee84819186e97a7b2eda0fa9`
+   confirms pages.practice is absent in this snapshot. That does not establish
+   a free URL: the default view may serve a database pageurl=practice. Therefore
+   **do not add pages.practice to YAML**. The scoped selector resolves the new
+   view on a temporary clone; it does not register a public top-level route.
+   Before deployment, verify that the exact new practice/diana19 subroute is
+   available without inspecting private SQL rows or replacing existing pages.
 2. Confirm SYS_PAGE_DIR resolves to `include/page/`, and SYS_BLOCK_DIR to the
    existing blocks. Keep the existing language-aware navigation and headers.
 3. Explicitly bind an already verified server-side dispatch callback and the
@@ -66,7 +70,7 @@ has no local loopback or administrator admission fallback.
    ru/he navigation, cookie/CSRF behavior, allowed assets and denied routes.
    The current neutral fixture cannot establish these real-runtime properties.
 
-No mapping, production file, runtime, permission or service is changed here.
+No persistent mapping, production file, permission or service is changed here.
 Persistent access, new stores or grants require the separate plan below before
 their own consent; this code preparation does not authorize them.
 
@@ -163,6 +167,15 @@ uses this renderer with a neutral CMS interface fixture, native PHP sessions,
 two owners, four newly generated answers, staged reveal, lost-response retry
 and restart readback. No private source archive is executed in either test.
 
-Rollback: remove the inserted index hook and eight new overlay files; restore
-any later operator-approved mapping from its own backup. The builder has not
-applied such a mapping or modified production data.
+Rollback: remove the inserted index hook and eight new overlay files. No YAML
+mapping is required, and the builder has not modified production data.
+
+Exact reviewed class pins (private sources excluded from public CI):
+cms SHA256 `708bd88fe1588f75c0c0b343bbed0ddc809ac467b9d7ffd066b78acab656a2c0`;
+routing SHA256 `e02acef2e8ec0c3c427f999841210f93d23560bdf9c058ef23bb754bd869e835`.
+Both files contain class definitions only. cms constructor loads configuration
+and includes a language-settings file; the narrow component test deliberately
+does not call it or the bootstrap. It creates a test-only instance without a
+constructor, with neutral settings and a SELECT-only in-memory stub, and calls
+only the reviewed routing/page/includeView methods. This is component acceptance
+on exact class bytes, not real bootstrap/auth/database or full-shell acceptance.

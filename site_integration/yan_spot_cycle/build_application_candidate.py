@@ -48,6 +48,7 @@ def build(output: Path):
             'cms_static_report_library_id': 'libfile_0efcde949f848191a9c1be413b2de24b',
             'cms_archive_materialized_in_this_workspace': False,
             'cms_route_mapping_applied': False, 'student_or_journal_binding_enabled': False,
+            'yaml_mapping_required': False, 'scoped_selector': '__bridge_diana19_renderer_v1',
             'cms_source_available': False,
             'local_loopback_fallback': False, 'production_activated': False}
 

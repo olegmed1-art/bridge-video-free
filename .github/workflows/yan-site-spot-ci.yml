@@ -52,6 +52,7 @@ jobs:
           php -l site_integration/yan_spot_cycle/tests/anonymous_session_bootstrap_fixture.inc.php
           php -l site_integration/yan_spot_cycle/tests/native_cms_interface_fixture.inc.php
           php -l site_integration/yan_spot_cycle/tests/native_cms_renderer_driver.php
+          php -l site_integration/yan_spot_cycle/tests/reviewed_cms_driver.php
       - name: Check staged persistence and explicit admission only
         run: >-
           python -m pytest -q -p no:cacheprovider

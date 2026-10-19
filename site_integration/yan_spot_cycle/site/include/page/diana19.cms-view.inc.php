@@ -1,5 +1,5 @@
 <?php
-// Separate FishArt view, selected through cms::includeView('practice').
+// Separate FishArt view, selected through a private scoped includeView key.
 // Only the admitted application renderer supplies this trusted view model.
 global $pageData, $db, $cms, $rout, $lang;
 if (!isset($bridgeDianaCmsView) || !defined('SYS_BLOCK_DIR')) {

@@ -19,6 +19,20 @@ function bridge_diana_native_cms_renderer() {
         if (!is_object($cms) || !is_callable(array($cms, 'page')) || !is_callable(array($cms, 'includeView'))) {
             throw new RuntimeException('native CMS renderer unavailable');
         }
+        // The reviewed cms class has no __clone hook. Keep this operation inert.
+        $selector = '__bridge_diana19_renderer_v1';
+        if (method_exists($cms, '__clone') || !isset($cms->siteSettings['pages']) ||
+            !is_array($cms->siteSettings['pages']) ||
+            array_key_exists($selector, $cms->siteSettings['pages']) ||
+            (isset($cms->siteSettings['pages']['admin']) &&
+             (!is_array($cms->siteSettings['pages']['admin']) ||
+              array_key_exists($selector, $cms->siteSettings['pages']['admin'])))) {
+            throw new RuntimeException('native CMS private selector unavailable');
+        }
+        // Copy-on-write mapping exists only on this clone, not in YAML, the
+        // global CMS or public /practice routing. Never replace a site key.
+        $moduleCms = clone $cms;
+        $moduleCms->siteSettings['pages'][$selector] = 'diana19.cms-view.inc';
         $expected = realpath(__DIR__.'/page/diana19.cms-view.inc.php');
         if ($expected === false) throw new RuntimeException('native module view unavailable');
         $level = ob_get_level();
@@ -29,13 +43,11 @@ function bridge_diana_native_cms_renderer() {
             throw new RuntimeException('native CMS render warning');
         });
         try {
-            // No CMS/admin fallback: the registered module must resolve exactly
+            // No CMS/admin fallback: the scoped module must resolve exactly
             // to our fixed view. A default/login/other view is never included.
-            // The fixed server-owned key also supports the existing query entry;
-            // routing::scriptName() reads REQUEST_URI and may see index.php there.
             ob_start();
             $pageData = $cms->page();
-            $selected = $cms->includeView('practice');
+            $selected = $moduleCms->includeView($selector);
             $unexpected = ob_get_clean();
             if ($unexpected !== '' || !is_array($pageData) || !is_string($selected) || realpath($selected) !== $expected) {
                 throw new RuntimeException('native CMS module mapping unavailable');

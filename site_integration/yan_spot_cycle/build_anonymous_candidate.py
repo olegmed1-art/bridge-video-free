@@ -24,7 +24,7 @@ def build(root: Path):
         'servers_started': 0, 'site_candidate': result,
         'backend_factory': 'bridge_school_api.anonymous_practice_adapter:create_anonymous_practice_app',
         'requires_existing_repository': True, 'production_activated': False,
-        'unresolved': 'Explicit native session/CSRF bridge, existing durable journal ownership and unverified pages.practice mapping; CMS renderer interfaces are confirmed by static report'}
+        'unresolved': 'Explicit native session/CSRF bridge, existing durable journal ownership and real shell acceptance; scoped renderer needs no pages.practice YAML mapping'}
     (root/'ANONYMOUS_ADAPTER.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf8')
     return manifest
 

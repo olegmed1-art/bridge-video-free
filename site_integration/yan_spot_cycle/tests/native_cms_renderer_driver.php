@@ -24,9 +24,11 @@ $view = array('title'=>'Neutral <module>', 'stage'=>'STAGING',
     'styles'=>array('/index.php?route=practice%2Fdiana19%2Fassets%2Fapplication.css'),
     'scripts'=>array('/index.php?route=practice%2Fdiana19%2Fassets%2Fdiana19.js'));
 $pageData = array('preserved'=>'original');
+$originalSettings = $cms->siteSettings;
 $level = ob_get_level();
 $html = $renderer($view, $application);
-check_native($cms->calls === array('page', 'includeView:practice'), 'native renderer lifecycle');
+check_native($cms->trace->calls === array('page', 'includeView:__bridge_diana19_renderer_v1'), 'native renderer lifecycle');
+check_native($cms->siteSettings === $originalSettings, 'global CMS mapping changed');
 check_native($pageData === array('preserved'=>'original') && ob_get_level() === $level, 'render context restoration');
 foreach (array('native-session-contract-fixture', 'native-footer-fixture', 'NEUTRAL_LEARNER_SLOT',
                'Neutral &lt;module&gt;', 'NEUTRAL_FIXTURE_VALUE') as $marker) {
@@ -37,14 +39,14 @@ foreach (array('<!doctype html>', '</head>', 'legacy-jquery-fixture.js',
     check_native(substr_count($html, $marker) === 1, 'duplicated document or assets');
 }
 check_native(strpos($html, 'NEUTRAL_FIXTURE_VALUE') < strpos($html, '</head>'), 'head injection boundary');
-$cms->calls = array();
+$cms->trace->calls = array();
 unset($GLOBALS['bridgeDianaApplication']);
 check_native(call_native_application() === array(503, ''), 'admin must not bypass missing bindings');
-check_native($cms->calls === array(), 'unbound application rendered');
+check_native($cms->trace->calls === array(), 'unbound application rendered');
 $GLOBALS['bridgeDianaApplication'] = array('render'=>$renderer,
     'dispatch'=>function($request, $application) { return array('status'=>403, 'headers'=>array(), 'body'=>''); });
 check_native(call_native_application() === array(403, ''), 'admission rejection changed');
-check_native($cms->calls === array(), 'renderer ran before admission');
+check_native($cms->trace->calls === array(), 'renderer ran before admission');
 $GLOBALS['bridgeDianaApplication']['dispatch'] = function($request, $application) {
     return array('status'=>200, 'headers'=>array(),
         'body'=>'<meta name="bridge-school-csrf-token" content="NEUTRAL_FIXTURE_VALUE">');
@@ -58,8 +60,15 @@ check_native($pageData === array('preserved'=>'original') && ob_get_level() === 
 $cms->warnOnPage = false;
 list($status, $html) = call_native_application();
 check_native($status === 200 && strpos($html, 'native-footer-fixture') !== false, 'renderer did not recover');
+check_native($cms->siteSettings === $originalSettings, 'site mappings changed after recovery');
+$cms->siteSettings['pages']['__bridge_diana19_renderer_v1'] = 'owned-by-existing-site';
+$collisionSettings = $cms->siteSettings;
+check_native(call_native_application() === array(503, ''), 'private key collision was overwritten');
+check_native($cms->siteSettings === $collisionSettings, 'collision changed global settings');
 echo json_encode(array('schema'=>'native-cms-renderer-fixture-evidence-v1', 'status'=>'PASS',
     'native_page_include_view_lifecycle'=>true, 'header_footer_preserved'=>true, 'one_document_and_assets'=>true,
     'missing_binding_with_admin_status'=>503, 'rejected_admission_status'=>403,
     'wrong_mapping_status'=>503, 'cms_warning_status'=>503, 'failed_render_body_empty'=>true,
+    'private_key_collision_status'=>503, 'global_cms_settings_unchanged'=>true,
+    'existing_practice_mapping_preserved'=>true, 'yaml_mapping_required'=>false,
     'context_restored'=>true, 'actual_cms_archive_executed'=>false, 'production_changed'=>false))."\n";
