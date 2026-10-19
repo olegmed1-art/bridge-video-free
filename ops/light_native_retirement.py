@@ -5,6 +5,7 @@ reader. The exact proposal acquires meaning only through a new finite policy's
 explicit hash reference and fresh verification by its consumer.
 """
 from contextlib import contextmanager
+import base64
 import hashlib
 import json
 import os
@@ -107,6 +108,190 @@ def record(raw,accepted=None):
 
 def entry(value):
     return 'issuers/'+value['policy_sha256']+'/'+format(value['index'],'04d')
+
+
+def inventory_retained_issuer(view,policy_sha256,index,runtime_source,runtime_sha256):
+    """Observe fixed retained inputs; content pins never confer acceptance.
+
+    The authenticated, bounded owner caller supplies a read-only Snapshot and
+    owns the existing observation locks. No DB, provider, service, historical
+    import or write port is available here. This is deliberately weaker than
+    the full retirement verifier: it does not certify history or live controls.
+    """
+    need(digest(policy_sha256) and type(index) is int and 0<=index<8
+         and digest(runtime_source,40) and digest(runtime_sha256),
+         'LANE_ISSUER_INVENTORY_SCOPE')
+    policy_root='issuers/'+policy_sha256
+    policy=parse(view.read(policy_root+'/policy.json',policy_sha256))
+    policy_keys={'version','action','source','accepted_controller_sha256',
+                 'accepted_runtime_sha256','not_before','expires_at',
+                 'predecessor','plans','authority'}
+    need(type(policy) is dict and set(policy)==policy_keys
+         and type(policy['version']) is int and policy['version']==1
+         and policy['action']=='issue' and digest(policy['source'],40)
+         and digest(policy['accepted_controller_sha256'])
+         and policy['accepted_runtime_sha256']==runtime_sha256
+         and type(policy['plans']) is list and 1<=len(policy['plans'])<=8
+         and index<len(policy['plans']), 'LANE_ISSUER_INVENTORY_POLICY')
+    location=policy_root+'/'+format(index,'04d')
+    need(view.names(policy_root)=={'policy.json'}|{format(n,'04d') for n in range(index+1)}
+         and view.names(location) in ({'intent.json'},{'intent.json',NAME}),
+         'LANE_ISSUER_INVENTORY_LAYOUT')
+    catalogue_entry=policy['plans'][index]
+    need(type(catalogue_entry) is dict
+         and set(catalogue_entry)=={'plan_base64','accepted_plan_sha256'}
+         and digest(catalogue_entry['accepted_plan_sha256'])
+         and type(catalogue_entry['plan_base64']) is str,
+         'LANE_ISSUER_INVENTORY_PLAN')
+    try:plan_bytes=base64.b64decode(catalogue_entry['plan_base64'],validate=True)
+    except (ValueError,TypeError):
+        raise Refusal('LANE_ISSUER_INVENTORY_PLAN') from None
+    plan_sha=catalogue_entry['accepted_plan_sha256']
+    need(0<len(plan_bytes)<=16384 and sha(plan_bytes)==plan_sha
+         and view.read(plan_sha+'/plan.json',plan_sha)==plan_bytes,
+         'LANE_ISSUER_INVENTORY_PLAN')
+    plan=parse(plan_bytes)
+    need(type(plan) is dict and plan.get('source')==runtime_source,
+         'LANE_ISSUER_INVENTORY_PLAN')
+    intent=parse(view.read(location+'/intent.json'))
+    need(type(intent) is dict and set(intent)=={'start','cycle'}
+         and type(intent['start']) is int and type(intent['cycle']) is dict,
+         'LANE_ISSUER_INVENTORY_INTENT')
+    cycle=intent['cycle']
+    need(set(cycle)=={'version','action','prepare'} and type(cycle['version']) is int
+         and cycle['version']==1 and cycle['action']=='cycle'
+         and type(cycle['prepare']) is dict, 'LANE_ISSUER_INVENTORY_INTENT')
+    prepare=cycle['prepare']
+    need(prepare.get('accepted_plan_sha256')==plan_sha
+         and prepare.get('plan_base64')==catalogue_entry['plan_base64']
+         and prepare.get('source')==policy['source']
+         and prepare.get('accepted_controller_sha256')==policy['accepted_controller_sha256']
+         and prepare.get('accepted_runtime_sha256')==runtime_sha256,
+         'LANE_ISSUER_INVENTORY_INTENT')
+    cycle_root='cycles/'+plan_sha
+    paths={name:plan_sha+'/'+name for name in
+           ('baseline.json','before.json','contained.json','prepare.json','runtime-package.json','wheels.tar')}
+    paths.update({'cycle-contain-intent':cycle_root+'/contain-intent.json',
+                  'cycle-intent':cycle_root+'/intent.json',
+                  'driver-contain-intent':plan_sha+'/contain-intent.json',
+                  'incident.json':cycle_root+'/incident.json',
+                  'issuer-intent':location+'/intent.json'})
+    observed={name:view.read(path,limit=16*1024*1024) for name,path in paths.items()}
+    need(encoded(parse(observed['cycle-intent']))==encoded(cycle)
+         and sha(observed['runtime-package.json'])==runtime_sha256,
+         'LANE_ISSUER_INVENTORY_BINDING')
+    pins={name:sha(raw) for name,raw in observed.items()}
+    journal_pins(pins)
+    proposal=dict(version=1,kind='FAILED_PREPARE_RETIREMENT_PROPOSAL',
+        requested_disposition='RETIRE_FAILED_PREPARE_AND_CANCEL_OLD_POLICY_REMAINDER',
+        policy_sha256=policy_sha256,index=index,plan_sha256=plan_sha,
+        repository=plan.get('repository'),failed_work_key=plan.get('work_key'),
+        failed_target_pr=plan.get('target_pr'),predecessor=prepare.get('predecessor'),
+        incident_sha256=pins['incident.json'],historical_controller_source=policy['source'],
+        historical_controller_sha256=policy['accepted_controller_sha256'],
+        retained_runtime_source=runtime_source,retained_runtime_sha256=runtime_sha256,
+        original_failure='UNKNOWN',
+        interpretation='EXPLICIT_NEW_POLICY_HASH_ALLOWLIST_AND_FRESH_GUARDS_REQUIRED',
+        **{key:False for key in FALSE_FLAGS})
+    proposed_bytes=encoded(proposal)
+    record(proposed_bytes)
+    actual=view.read(location+'/'+NAME,optional=True,limit=4096)
+    actual_state='ABSENT' if actual is None else 'EXACT' if actual==proposed_bytes else 'CONFLICT'
+    view.check()
+    result=dict(version=1,audit='LIGHT_NATIVE_ISSUER_INPUT_INVENTORY',state='OBSERVED',
+        policy_sha256=policy_sha256,index=index,journal_sha256=pins,
+        journal_map_sha256=sha(encoded(pins)),proposal_sha256=sha(proposed_bytes),
+        actual_proposal_state=actual_state,
+        actual_proposal_sha256=None if actual is None else sha(actual),
+        history_verified=False,controls_verified=False,incident_closed=False,
+        execution_acknowledged=False,new_task_authorized=False)
+    return public_issuer_inventory(result,policy_sha256,index)
+
+
+def public_issuer_inventory(value,policy_sha256,index):
+    """Reject unbounded/private output or any promotion from observation."""
+    flags={'history_verified','controls_verified','incident_closed',
+           'execution_acknowledged','new_task_authorized'}
+    keys={'version','audit','state','policy_sha256','index','journal_sha256',
+          'journal_map_sha256','proposal_sha256','actual_proposal_state',
+          'actual_proposal_sha256'}|flags
+    need(type(value) is dict and set(value)==keys and digest(policy_sha256)
+         and type(index) is int and 0<=index<8
+         and type(value['version']) is int and value['version']==1
+         and value['audit']=='LIGHT_NATIVE_ISSUER_INPUT_INVENTORY'
+         and value['state']=='OBSERVED' and value['policy_sha256']==policy_sha256
+         and type(value['index']) is int and value['index']==index
+         and all(value[key] is False for key in flags), 'LANE_ISSUER_INVENTORY_OUTPUT')
+    journal_pins(value['journal_sha256'])
+    need(value['journal_map_sha256']==sha(encoded(value['journal_sha256']))
+         and digest(value['proposal_sha256']), 'LANE_ISSUER_INVENTORY_OUTPUT')
+    state,actual=value['actual_proposal_state'],value['actual_proposal_sha256']
+    need(type(state) is str and state in ('ABSENT','EXACT','CONFLICT')
+         and ((state=='ABSENT' and actual is None)
+              or (state=='EXACT' and actual==value['proposal_sha256'])
+              or (state=='CONFLICT' and digest(actual) and actual!=value['proposal_sha256']))
+         and len(encoded(value))<4096, 'LANE_ISSUER_INVENTORY_OUTPUT')
+    return value
+
+
+def issuer_inventory_scope(value):
+    return dict(version=1,operation='READ_ONLY_INVENTORY_RETAINED_ISSUER_INPUTS',
+        source=value['source'],controller_sha256=value['accepted_controller_sha256'],
+        runtime_sha256=value['accepted_runtime_sha256'],policy_sha256=value['policy_sha256'],
+        index=value['index'])
+
+
+def issuer_inventory_reference(raw):
+    """A distinct finite read authority; never a retirement-write reference."""
+    value=parse(raw,limit=8192)
+    keys={'version','action','source','accepted_controller_sha256',
+          'accepted_runtime_sha256','policy_sha256','index','agreement',
+          'accepted_agreement_sha256'}
+    need(type(value) is dict and set(value)==keys and encoded(value)==raw
+         and type(value['version']) is int and value['version']==1
+         and value['action']=='inventory-issuer-reference'
+         and digest(value['source'],40)
+         and all(digest(value[key]) for key in ('accepted_controller_sha256',
+                 'accepted_runtime_sha256','policy_sha256','accepted_agreement_sha256'))
+         and type(value['index']) is int and 0<=value['index']<8,
+         'LANE_ISSUER_INVENTORY_REFERENCE')
+    agreement=value['agreement']
+    need(type(agreement) is dict and set(agreement)=={'version','owner','operation_digest',
+                'not_before','expires_at','coverage','evidence'}
+         and agreement['evidence']=='OWNER_ACCEPTED_READ_ONLY_ISSUER_INPUT_INVENTORY'
+         and sha(encoded(agreement))==value['accepted_agreement_sha256']
+         and agreement['operation_digest']==sha(encoded(issuer_inventory_scope(value))),
+         'LANE_ISSUER_INVENTORY_REFERENCE')
+    # The authenticated root entrypoint checks the full Agreement, clock and
+    # monotonic lifetime before and after the protected snapshot observation.
+    return value
+
+
+INVENTORY_REFUSALS=frozenset({
+    'LANE_ISSUER_INVENTORY_SCOPE','LANE_ISSUER_INVENTORY_POLICY',
+    'LANE_ISSUER_INVENTORY_LAYOUT','LANE_ISSUER_INVENTORY_PLAN',
+    'LANE_ISSUER_INVENTORY_INTENT','LANE_ISSUER_INVENTORY_BINDING',
+    'LANE_ISSUER_INVENTORY_OUTPUT','LANE_ISSUER_INVENTORY_REFERENCE',
+    'LANE_RETIREMENT_ROOT','LANE_RETIREMENT_PATH','LANE_RETIREMENT_METADATA',
+    'LANE_RETIREMENT_MISSING','LANE_RETIREMENT_SIZE','LANE_RETIREMENT_DRIFT',
+    'LANE_RETIREMENT_NOT_ACCEPTED','LANE_RETIREMENT_SCHEMA',
+    'COORDINATION_AGREEMENT_NOT_CURRENT','COORDINATION_AGREEMENT_EXPIRED',
+    'COORDINATION_AGREEMENT_SCOPE','COORDINATION_AGREEMENT_NOT_ACCEPTED',
+    'OBSERVATION_REFUSED'})
+
+
+def issuer_inventory_failure(exc):
+    reason=str(exc)
+    return dict(audit='LIGHT_NATIVE_ISSUER_INPUT_REFUSED',
+                reason=reason if reason in INVENTORY_REFUSALS else 'OBSERVATION_REFUSED')
+
+
+def public_inventory_failure(value):
+    need(type(value) is dict and set(value)=={'audit','reason'}
+         and value['audit']=='LIGHT_NATIVE_ISSUER_INPUT_REFUSED'
+         and type(value['reason']) is str and value['reason'] in INVENTORY_REFUSALS,
+         'LANE_ISSUER_INVENTORY_OUTPUT')
+    return value
 
 
 def parts(path):

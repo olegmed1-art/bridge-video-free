@@ -18,6 +18,36 @@ def tracked(view):
                 _names=lambda path: view.names(path.relative_to(owner.ROOT).as_posix()))
 
 
+def inventory_issuer_inputs(controller,runtime,raw,accepted,guard):
+    """Bounded root-only observation, with no DB/provider/service capabilities."""
+    from ops import light_native_lane_controller as owner
+    from ops.native_maintenance_agreement import Agreement
+    from ops.light_native_bounded import run
+    r.need(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic',
+           'LANE_ISSUER_INVENTORY_ROOT')
+    r.need(r.sha(raw)==accepted,'LANE_ISSUER_INVENTORY_REFERENCE')
+    reference=r.issuer_inventory_reference(raw)
+    owner.validate_package(controller,reference['source'],reference['accepted_controller_sha256'])
+    r.need(r.sha(runtime)==reference['accepted_runtime_sha256'],'LANE_ISSUER_INVENTORY_BINDING')
+    def checked_operation():
+        agreement=Agreement(reference['agreement'],reference['accepted_agreement_sha256'],
+                            r.issuer_inventory_scope(reference))
+        guard.assert_current();owner.release.staging.require_current_main(reference['source'])
+        with observation_locks(owner.ROOT),r.Snapshot(owner.ROOT,'unused') as view:
+            result=r.inventory_retained_issuer(view,reference['policy_sha256'],reference['index'],
+                owner.install.RETAINED_SOURCE,reference['accepted_runtime_sha256'])
+            view.check()
+            agreement.assert_held(agreement.scope)
+            guard.assert_current();owner.release.staging.require_current_main(reference['source'])
+            view.check()
+        agreement.assert_held(agreement.scope)
+        return r.public_issuer_inventory(result,reference['policy_sha256'],reference['index'])
+    def operation():
+        try:return checked_operation()
+        except BaseException as exc:return r.issuer_inventory_failure(exc)
+    return run(operation)
+
+
 class IssueAuthority:
     """In-process issuer capability, never accepted from request JSON."""
     def __init__(self,policy,index,prepare):
