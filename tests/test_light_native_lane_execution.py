@@ -44,7 +44,13 @@ def host(tmp_path,monkeypatch):
     value=dict(source=SOURCE,controller_source='c'*40,expires_at=int(time.time())+1000,seconds=120,
         prior=asdict(prior),protected={},protected_sha256='f'*64,original=original)
     state=dict(permanent=original.copy(),transient=False)
-    monkeypatch.setattr(target,'request',lambda digest:(value,prior,tmp_path))
+    monkeypatch.setattr(target,'request',lambda digest,**kwargs:(value,prior,tmp_path))
+    # These legacy algorithm tests use an explicit synthetic session port. The
+    # new stdlib session suite and PID1 fixture exercise the actual boundary.
+    session=object.__new__(target.ExecutionSession)
+    session.digest=DIGEST;session.value=value;session.prior=prior;session.directory=tmp_path
+    session.assert_current=lambda:target.require(time.time()<value['expires_at'],'SYNTHETIC_SESSION_EXPIRED')
+    monkeypatch.setattr(target.ExecutionSession,'enter',lambda digest:session)
     monkeypatch.setattr(target.os,'uname',lambda:SimpleNamespace(nodename='autopilot-lite-vnic'))
     monkeypatch.setattr(target.pwd,'getpwnam',lambda name:SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid()))
     monkeypatch.setattr(install,'root_parent',lambda path:None)
@@ -176,12 +182,15 @@ def test_restoration_imports_without_site_packages_or_database_driver():
 def test_arm_verifies_retained_script_and_actual_pid1_command(tmp_path,monkeypatch,fault):
     import hashlib
     script=tmp_path/'supervisor.py';script.write_bytes(b'# reviewed wrapper\n');script.chmod(0o600)
-    value={'supervisor_sha256':hashlib.sha256(script.read_bytes()).hexdigest(),'seconds':120}
+    value={'supervisor_sha256':hashlib.sha256(script.read_bytes()).hexdigest(),'seconds':120,
+           'clock':{'monotonic_start_ns':100*10**9,'monotonic_end_ns':220*10**9}}
+    monkeypatch.setattr(target.time,'monotonic_ns',lambda:101*10**9)
     prefix='/usr/bin/python3 -I -S -B '+str(script)
     command=lambda mode:'{ path=/usr/bin/python3 ; argv[]='+prefix+' '+mode+' '+DIGEST+' ; ignore_errors=no ; }'
     row=dict(MainPID=str(os.getpid()),ActiveState='active',User='root',Group='root',Restart='no',
         NoNewPrivileges='yes',KillMode='control-group',ExecStart=command('run'),ExecStopPost=command('restore'),
-        RuntimeMaxUSec='2min',TimeoutStopUSec='2min')
+        RuntimeMaxUSec='2min',TimeoutStopUSec='2min',Type='exec',RuntimeRandomizedExtraUSec='0',
+        ActiveEnterTimestampMonotonic='100000000')
     if fault=='script':script.write_bytes(b'# changed wrapper\n')
     elif fault=='start':row['ExecStart']=command('unrelated')
     elif fault=='kill_mode':row['KillMode']='process'

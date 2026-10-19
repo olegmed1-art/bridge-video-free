@@ -102,7 +102,13 @@ def test_launch_retains_no_credential_and_waits_for_cleanup_receipt(tmp_path,mon
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(target.subprocess,'run',execute)
     guard=SimpleNamespace(run_id=123,attempt=1,assert_running=lambda:calls.append('origin-live'))
-    value=dict(source='a'*40,accepted_controller_sha256='b'*64)
+    # Transport-only synthetic clock/session ports; actual origin/deadline
+    # validation belongs to test_light_native_execution_session and PID1 CI.
+    monkeypatch.setattr(target.execution,'capture_clock',lambda *args:({'synthetic_clock':True},'9'*64))
+    supervisor_command=target.execution.supervisor_command
+    monkeypatch.setattr(target.execution,'supervisor_command',
+                        lambda digest,seconds,**kwargs:supervisor_command(digest,seconds))
+    value=dict(version=1,accepted_plan_sha256='c'*64,source='a'*40,accepted_controller_sha256='b'*64)
     result=target.launch(b'wheels','private-password','private-token',SimpleNamespace(digest='c'*64),directory,
         value,prior,dict(protected={},protected_sha256='d'*64),
         dict(cursor_sha256='e'*64,dispatch_id='12345678-1234-4234-8234-123456789012'),guard)

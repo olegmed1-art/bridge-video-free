@@ -2,8 +2,9 @@
 
 No sequence, launch, supervisor, request, feed, Permit, history, root metadata,
 run_once, admission or restore implementation is replaced. Systemd/OS process,
-GitHub authority and DB transports are explicit synthetic adapters; all durable
-records and controller helper verification use actual fixture files.
+GitHub authority, session/origin-clock and DB ports are explicitly synthetic;
+actual session/PID1 evidence belongs to the separate execution-session fixture.
+All durable records and controller helper verification use actual fixture files.
 """
 import base64
 from contextlib import contextmanager
@@ -81,6 +82,24 @@ def sequence_host(tmp_path, monkeypatch, rig):
     guard = SimpleNamespace(run_id=17, attempt=1,
                             assert_running=lambda: events.append('authority'),
                             assert_current=lambda: events.append('authority'))
+    def capture_clock(seconds, expires_at, origin):
+        assert origin is guard
+        start=time.monotonic_ns();wall=time.time_ns()
+        return dict(boot_id='12345678-1234-1234-1234-123456789abc',wall_ns=wall,
+                    monotonic_start_ns=start,monotonic_end_ns=min(start+seconds*10**9,
+                    start+expires_at*10**9-wall),run_guard_deadline_ns=start+1800*10**9),'9'*64
+    monkeypatch.setattr(execution,'capture_clock',capture_clock)
+    original_command=execution.supervisor_command
+    monkeypatch.setattr(execution,'supervisor_command',
+                        lambda digest,seconds,**kwargs:original_command(digest,seconds))
+    def session_enter(digest):
+        value,prior_value,directory=execution.request(digest)
+        session=object.__new__(execution.ExecutionSession)
+        session.digest=digest;session.value=value;session.prior=prior_value;session.directory=directory
+        session.context=owner.parse(owner.read(directory/'owner-context.json',value['owner_context_sha256']))
+        session.assert_current=lambda:execution.require(time.time()<value['expires_at'],'SYNTHETIC_SESSION_EXPIRED')
+        return session
+    monkeypatch.setattr(execution.ExecutionSession,'enter',session_enter)
     monkeypatch.setattr(install.release.staging, 'require_current_main',
                         lambda value: events.append('main'))
     monkeypatch.setattr(install.hold, 'service_hold_identity', lambda: prior)
@@ -133,7 +152,9 @@ def sequence_host(tmp_path, monkeypatch, rig):
         return dict(MainPID=str(os.getpid()), ActiveState='active', User='root', Group='root',
                     Restart='no', NoNewPrivileges='yes', KillMode='control-group',
                     ExecStart=wrap('run'), ExecStopPost=wrap('restore'),
-                    RuntimeMaxUSec=str(owner.FIRST_EXECUTION_SECONDS) + 's', TimeoutStopUSec='120s')
+                    RuntimeMaxUSec=str(owner.FIRST_EXECUTION_SECONDS-10) + 's', TimeoutStopUSec='120s',
+                    Type='exec',RuntimeRandomizedExtraUSec='0',ActiveEnterTimestampMonotonic=str(
+                        state['request']['clock']['monotonic_start_ns']//1000+1))
     monkeypatch.setattr(execution.switch, 'show', show)
 
     from ops import native_maintenance_owner_host as host
@@ -172,6 +193,7 @@ def sequence_host(tmp_path, monkeypatch, rig):
         if state['fault']:
             if state['fault'] == 'missing':
                 request.pop('sequence', None); request['version'] = 1
+                request.pop('clock');request.pop('python_sha256')
             else:
                 request['sequence'] = request.get('sequence', 0) + 1
             raw = owner.encoded(request)
@@ -276,7 +298,7 @@ def test_derived_prepare_reaches_real_supervisor_and_feed(sequence_host, policy_
     host = sequence_host
     result = host.launch(policy_version, number)
     assert host.state['prepare']['version'] == (3 if policy_version == 2 else 2)
-    assert host.state['request']['version'] == 2 and host.state['request']['sequence'] == number
+    assert host.state['request']['version'] == 3 and host.state['request']['sequence'] == number
     assert result['state'] == 'STOPPED_HOLD'
     assert host.state['error'] is None and not host.state['transient']
     assert 'db-read' in host.events and 'supervisor-run' in host.events
@@ -289,9 +311,10 @@ def test_derived_prepare_reaches_real_supervisor_and_feed(sequence_host, policy_
 @pytest.mark.parametrize('fault', ['missing', 'wrong'])
 def test_actual_supervisor_refuses_missing_or_wrong_sequence_before_service_start(sequence_host, fault):
     host = sequence_host
-    with pytest.raises(RuntimeError, match='LANE_EXEC_FEED_CHANGED'):
+    expected='LANE_EXEC_REQUEST' if fault=='missing' else 'LANE_EXEC_FEED_CHANGED'
+    with pytest.raises(RuntimeError, match=expected):
         host.launch(fault=fault)
-    assert host.state['error'] == 'LANE_EXEC_FEED_CHANGED'
+    assert host.state['error'] == expected
     assert not any(isinstance(x, tuple) for x in host.events)
     assert not host.state['transient']
     assert host.install.hold.read(host.install.CONTROL / 'admission', 0o640, 16) == b'HOLD\n'
