@@ -46,12 +46,12 @@ def digest(value, length=64):
     return type(value) is str and re.fullmatch('[0-9a-f]{'+str(length)+'}', value) is not None
 
 
-def encoded(value):
+def encoded(value, *, ensure_ascii=False):
     return json.dumps(value, sort_keys=True, separators=(',', ':'),
-                      ensure_ascii=False, allow_nan=False).encode()
+                      ensure_ascii=ensure_ascii, allow_nan=False).encode()
 
 
-def parse(raw, limit=262144):
+def parse(raw, limit=262144, *, ensure_ascii=False):
     require(type(raw) is bytes and 0 < len(raw) <= limit, 'NATIVE_SERVICE_RECORD')
     def pairs(items):
         result = {}
@@ -62,7 +62,7 @@ def parse(raw, limit=262144):
     try:
         value = json.loads(raw, object_pairs_hook=pairs,
                            parse_constant=lambda _: require(False, 'NATIVE_SERVICE_RECORD'))
-        require(encoded(value) == raw, 'NATIVE_SERVICE_RECORD')
+        require(encoded(value, ensure_ascii=ensure_ascii) == raw, 'NATIVE_SERVICE_RECORD')
         return value
     except (ValueError, TypeError, UnicodeError):
         raise Refusal('NATIVE_SERVICE_RECORD') from None
@@ -199,7 +199,9 @@ def validate_policy(raw, manifest):
         except ValueError:
             raise Refusal('NATIVE_SERVICE_PLAN') from None
         require(sha(plan_raw) == entry['accepted_plan_sha256'], 'NATIVE_SERVICE_PLAN')
-        plan = parse(plan_raw, 16384)
+        # Plan uses native_cli_permission_engine.encode, whose ASCII escaping
+        # is part of the accepted bytes. Issuer policy itself remains UTF-8.
+        plan = parse(plan_raw, 16384, ensure_ascii=True)
         exact(plan, ('version', 'source', 'repository', 'target_pr', 'expected_head_sha',
                      'work_key', 'objective', 'priority', 'task_spec_json', 'branch'))
         require(type(plan['version']) is int and plan['version'] == 1
@@ -397,7 +399,9 @@ def _current_main(source):
 def _packages(controller, runtime, manifest):
     from ops import light_native_lane_controller as owner
     owner.validate_package(controller, manifest.source, manifest.controller_sha256)
-    retained = parse(runtime, 3*1024*1024)
+    # The retained release.package/bundle codec is historical default ASCII;
+    # never normalize its bytes to the service's UTF-8 journal codec.
+    retained = parse(runtime, 3*1024*1024, ensure_ascii=True)
     require(retained.get('source') == RETAINED_SOURCE, 'NATIVE_SERVICE_RUNTIME')
     owner.release.validate(retained['runtime'], retained['source'], retained['runtime']['sha256'])
 
