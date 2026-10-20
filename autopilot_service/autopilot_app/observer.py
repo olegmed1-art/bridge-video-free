@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Deterministic, read-only finding engine for Global School Observer (#1157).
 
-The module deliberately has no network, persistence, workflow, notification, or
+The module deliberately has no network, persistence, workflow, notification delivery, or
 mutation capability. Callers supply an already-observed snapshot; the engine
 only returns evidence-backed findings.
 """
@@ -100,6 +100,83 @@ def _make_finding(
     }
 
 
+def assess_sources(sources: Sequence[Mapping[str, Any]], *, now: datetime) -> list[dict[str, Any]]:
+    """Separate source freshness, blockers and completion of the stated scope.
+
+    A fresh fetch is not fresh verification of an operational index. Callers
+    must supply its embedded verification time, not the fetch time.
+    """
+    results = []
+    for source in sources:
+        refs = _safe_strings(source.get("evidence_refs"))
+        verified_at = _parse_time(source.get("verified_at"))
+        max_age = source.get("max_age_seconds", 86400)
+        claimed = source.get("status")
+        if (
+            not refs or verified_at is None or verified_at > now
+            or not isinstance(max_age, int) or isinstance(max_age, bool) or max_age <= 0
+            or claimed not in {"CONFIRMED", "BLOCKED", "COMPLETED"}
+        ):
+            state = "UNKNOWN"
+        elif (now - verified_at).total_seconds() > max_age:
+            state = "STALE"
+        else:
+            state = claimed
+        results.append({
+            "subject": source["subject"],
+            "state": state,
+            "verified_at": source.get("verified_at"),
+            "source_updated_at": source.get("source_updated_at"),
+            "observed_at": now.isoformat(),
+            "evidence_refs": refs,
+            "detail": source["detail"],
+            "minimal_next_action": (
+                "Restore valid source evidence and verification time before claiming its state."
+                if state == "UNKNOWN" else source["minimal_next_action"]
+            ),
+            "owner_or_lane": source["owner_or_lane"],
+        })
+    return results
+
+
+def build_notification_preview(
+    findings: Sequence[Mapping[str, Any]], *, seen_dedupe_keys: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Form owner-facing notifications in memory; never send or authorize them.
+
+    Suppression only covers this input and explicitly supplied prior keys.
+    It does not claim persistent suppression across scheduled runs.
+    """
+    seen = set(seen_dedupe_keys)
+    items = []
+    suppressed = 0
+    for finding in findings:
+        if finding["status"] != "OPEN":
+            continue
+        key = finding["dedupe_key"]
+        if not key or not _safe_strings(finding["evidence_refs"]):
+            raise ValueError("notification requires evidence and dedupe key")
+        if key in seen:
+            suppressed += 1
+            continue
+        seen.add(key)
+        message = (
+            f"[{finding['severity']} {finding['class']}] {finding['subject']}\n"
+            f"State: {finding['current_state']}\n"
+            f"Observed: {finding['observed_at']}\n"
+            f"Why: {finding['why_it_matters']}\n"
+            f"Next: {finding['minimal_next_action']}\n"
+            f"Owner: {finding['owner_or_lane']}\n"
+            f"Evidence: {', '.join(finding['evidence_refs'])}"
+        )
+        items.append({"dedupe_key": key, "message": message})
+    return {
+        "mode": "DRY_RUN", "delivery_status": "NOT_ATTEMPTED",
+        "notifications_enabled": False, "items": items,
+        "formed_count": len(items), "suppressed_count": suppressed,
+    }
+
+
 def evaluate_snapshot(
     snapshot: Mapping[str, Any],
     *,
@@ -131,6 +208,22 @@ def evaluate_snapshot(
     )
 
     findings: list[dict[str, Any]] = []
+    for source in assess_sources(snapshot.get("sources", []), now=now):
+        state = source["state"]
+        if state in {"CONFIRMED", "COMPLETED"}:
+            continue
+        # Missing evidence is itself identified by the requested source.
+        refs = source["evidence_refs"] or [f"source:{source['subject']}"]
+        findings.append(_make_finding(
+            rule=f"SOURCE_{state}",
+            finding_class={"UNKNOWN": "ERROR", "STALE": "STALE", "BLOCKED": "RISK"}[state],
+            severity="P1" if state == "UNKNOWN" else "P2",
+            subject=source["subject"], observed_at=observed_at, evidence_refs=refs,
+            current_state=f"{state}; verified_at={source['verified_at']}",
+            why_it_matters=source["detail"],
+            minimal_next_action=source["minimal_next_action"],
+            owner_or_lane=source["owner_or_lane"],
+        ))
     active_by_resource: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
 
     for task in tasks:

@@ -5,7 +5,7 @@ from ops.native_maintenance_run_guard import API,RunBinding,check,REPOSITORY,OWN
 WORKFLOW='.github/workflows/light-native-lane-owner.yml'
 WORKFLOW_SHA256='1c8d787c63a8e1cde3f72734b553cc4115625b443566ce77a60b5bf7806e5c3f'
 OBSERVATION_WORKFLOW='.github/workflows/light-native-retirement-observe.yml'
-OBSERVATION_WORKFLOW_SHA256='46d8d01c36df6b3711bf73fa7d6f1a462fd6c85c130ead28957eafb646e876e0'
+OBSERVATION_WORKFLOW_SHA256='f7d14421a3c9fb8345da37bf910badc043a2b68cde1b2e5b2f0ffe853955b6a5'
 
 
 class LaneRunBinding(RunBinding):

@@ -23,8 +23,10 @@ from collections import defaultdict
 from typing import Mapping, Sequence
 
 from stage2b_v24 import (
+    OPENING_LEAD_OUTCOME_POLICY,
     apply_segmented_calibration,
     fit_segmented_oof_calibrator,
+    opening_lead_loss,
     row_success,
     task_family,
 )
@@ -33,6 +35,7 @@ CANDIDATE_ALGORITHM_VERSION = "dds-learning-v2.5-stage2b-candidate"
 STRATIFIED_COMPARISON_SCHEMA = "dds-stage2b-stratified-oof-comparison-v2"
 CALIBRATION_DIAGNOSTICS_SCHEMA = "dds-stage2b-calibration-diagnostics-v2"
 FAMILY_POLICY_SCHEMA = "dds-stage2b-family-selection-policy-v1"
+OOF_INPUT_POLICY = "explicit-train-oof-family-fold-v1"
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -70,6 +73,66 @@ def support_aware_contract_probability(prediction: Mapping[str, object]) -> floa
     return _clamp(probability, 0.05, 0.95)
 
 
+def validate_oof_rows(rows: Sequence[Mapping[str, object]]) -> None:
+    """Reject missing/contradictory provenance; never manufacture OOF status.
+
+    This checks metadata consistency, not the truth of a caller's assertion.
+    The producer must still prove training/heldout family exclusion.
+    """
+    if not rows:
+        raise ValueError("No explicit TRAIN OOF rows supplied")
+    task_ids: set[str] = set()
+    family_folds: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("OOF rows must be mappings")
+        if row.get("out_of_fold") is not True or row.get("split") != "train":
+            raise ValueError("Every calibration row must explicitly be TRAIN and out_of_fold=true")
+        for key in ("task_id", "family_id"):
+            value = row.get(key)
+            if not isinstance(value, str) or not value.strip() or value != value.strip():
+                raise ValueError(f"OOF {key} must be a nonempty canonical string")
+        task_id, family = row["task_id"], row["family_id"]
+        if task_id in task_ids:
+            raise ValueError("Duplicate OOF task_id would inflate calibration support")
+        task_ids.add(task_id)
+        fold = row.get("heldout_fold")
+        if type(fold) is not int or fold < 0:
+            raise ValueError("OOF heldout_fold must be a nonnegative integer")
+        if "fold" in row and (type(row["fold"]) is not int or row["fold"] != fold):
+            raise ValueError("OOF fold contradicts heldout_fold")
+        if family in family_folds and family_folds[family] != fold:
+            raise ValueError("OOF family appears in multiple heldout folds")
+        family_folds[family] = fold
+        prediction = row.get("prediction")
+        if not isinstance(prediction, Mapping) or not isinstance(row.get("result"), Mapping):
+            raise ValueError("OOF prediction and result must be mappings")
+        if "out_of_fold" in prediction and prediction["out_of_fold"] is not True:
+            raise ValueError("Prediction contradicts explicit OOF provenance")
+        for name in ("prediction", "result"):
+            record = row[name]
+            for key, expected in (("task_id", task_id), ("split", "train"),
+                                  ("family_id", family), ("task_type", row.get("task_type"))):
+                if key in record and record[key] != expected:
+                    raise ValueError(f"OOF {name} {key} contradicts row provenance")
+            for key in ("fold", "heldout_fold"):
+                if key in record and (type(record[key]) is not int or record[key] != fold):
+                    raise ValueError(f"OOF {name} fold contradicts row provenance")
+        if "task" in row:
+            task = row["task"]
+            if not isinstance(task, Mapping):
+                raise ValueError("OOF task metadata must be a mapping")
+            if task.get("split") != "train" or task.get("task_id") != task_id:
+                raise ValueError("OOF task identity/split contradicts row provenance")
+            if "task_type" in task and task["task_type"] != row["task_type"]:
+                raise ValueError("OOF task type contradicts row provenance")
+            task_fold = task.get("crossfit_fold")
+            if type(task_fold) is not int or task_fold != fold:
+                raise ValueError("OOF task fold contradicts heldout_fold")
+            if (task.get("root_deal_id") or task.get("deal_id")) != family:
+                raise ValueError("OOF task family contradicts row provenance")
+
+
 def rewrite_oof_raw_probabilities(rows: Sequence[Mapping[str, object]]) -> list[dict]:
     """Return copied OOF rows with support-aware raw probabilities.
 
@@ -78,6 +141,7 @@ def rewrite_oof_raw_probabilities(rows: Sequence[Mapping[str, object]]) -> list[
     support, in which case a conservative family prior is used.
     """
 
+    validate_oof_rows(rows)
     rewritten: list[dict] = []
     for raw in rows:
         row = dict(raw)
@@ -111,24 +175,15 @@ def recalibrate_oof_rows(
     review_threshold: float = 0.65,
 ) -> tuple[list[dict], dict]:
     rewritten = rewrite_oof_raw_probabilities(rows)
-    calibration_rows = [
-        {
-            "task_type": row["task_type"],
-            "strain": row["strain"],
-            "prediction": row["prediction"],
-            "result": row["result"],
-            "out_of_fold": True,
-        }
-        for row in rewritten
-    ]
     calibrator = fit_segmented_oof_calibrator(
-        calibration_rows,
+        rewritten,
         minimum_support=minimum_support,
         maximum_bins=12,
         review_threshold=review_threshold,
     )
     calibrator["algorithm_version"] = CANDIDATE_ALGORITHM_VERSION
     calibrator["raw_probability_policy"] = "support-aware-v2"
+    calibrator["oof_input_policy"] = OOF_INPUT_POLICY
 
     output: list[dict] = []
     for row in rewritten:
@@ -149,6 +204,8 @@ def recalibrate_oof_rows(
 def _task_loss(task_type: str, prediction: Mapping[str, object], result: Mapping[str, object]) -> float:
     if task_type == "contract_tricks":
         return abs(int(prediction["tricks"]) - int(result["dds_tricks"]))
+    if task_type == "opening_lead":
+        return opening_lead_loss(prediction, result)
     scores = {str(card).upper(): float(value) for card, value in result.get("scores", {}).items()}
     chosen = str(prediction.get("card", "")).upper()
     if scores and chosen in scores:
@@ -327,6 +384,7 @@ def calibration_diagnostics(rows: Sequence[Mapping[str, object]]) -> dict:
     return {
         "schema": CALIBRATION_DIAGNOSTICS_SCHEMA,
         "algorithm_version": CANDIDATE_ALGORITHM_VERSION,
+        "opening_lead_outcome_policy": OPENING_LEAD_OUTCOME_POLICY,
         "groups": groups,
     }
 

@@ -1,9 +1,9 @@
 {
-  "schema_version": "1.5",
+  "schema_version": "1.6",
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "PHASE3B_SHADOW_DRAFT_CANARY_PROVEN",
+  "status": "PARTIAL_RECONCILIATION_CURRENT_RUNTIME_UNVERIFIED",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -23,25 +23,19 @@
     "reasoning": "OpenAI Responses API and Agents SDK"
   },
   "deployment": {
-    "vercel_team_plan": "pro_existing",
-    "target_project": "existing_oracle_frankfurt_vm",
-    "target_root_directory": "oracle_autopilot/",
-    "target_service": "school-autopilot-shadow.service",
-    "staged_source_revision": "d908565a5de4481f0bf9a1d2a489f04f8893af65",
-    "instance_lifecycle_state": "RUNNING",
-    "service_active": true,
-    "service_enabled": true,
-    "online_observer_service": "school-autopilot-online-observer.service",
-    "online_observer_source_revision": "92dfbb34b61ed32d045b90f7310665449ea55307",
-    "online_observer_active": true,
-    "online_observer_enabled": true,
-    "online_observer_activation_workflow_run_id": 33480237060,
-    "production_activated": false,
-    "shadow_only": true,
-    "activation_workflow_run_id": 33472414879
+    "reconciliation_state": "UNKNOWN_CURRENT_RUNTIME",
+    "service_active": null,
+    "service_enabled": null,
+    "production_activated": null,
+    "shadow_only": null,
+    "observed_at": null,
+    "scope": "No host/database/service read was performed by this GitHub-only index reconciliation. Null means unknown, not stopped or disabled.",
+    "last_recorded_verification": "2026-09-01",
+    "historical_evidence_pointer": "historical_deployment and historical_verification",
+    "mutating_action_allowed_from_index": false
   },
   "phase": {
-    "current": "PHASE_2_BOUNDED_WRITE_SHADOW_CANARY_PROVEN",
+    "current": "CURRENT_OPERATIONAL_PHASE_NOT_RECONCILED",
     "ordered": [
       "PHASE_0_DESIGN",
       "PHASE_1_ORACLE_SHADOW_BUILD",
@@ -84,8 +78,8 @@
     "neon_cost_decision": "DIRECTOR_APPROVED_WITH_FINANCIAL_CAUTION"
   },
   "promotion_blocks": [
-    "main_branch_unprotected",
-    "production_canary_881_not_proven",
+    "current_runtime_and_queue_acceptance_not_reverified",
+    "production_promotion_not_established_by_github_workflow_success",
     "oracle_idle_stop_guard_627_not_closed"
   ],
   "safety_invariants": [
@@ -118,6 +112,79 @@
     }
   ],
   "verification": {
+    "verified_at": "2026-09-01",
+    "scope": "Previous scoped shadow verification as recorded, not refreshed by this partial pass. Details retained in historical_verification.",
+    "reconciled_at": "2026-10-19T17:45:02Z",
+    "reconciliation_status": "PARTIAL_GITHUB_PRIMARY_SOURCES",
+    "current_runtime_verification": "NOT_PERFORMED",
+    "source_revision": "1742ba4ed046e6d8c661341916b982465187087a",
+    "mutating_action_allowed_from_index": false
+  },
+  "next_actions": [
+    "request_current_runtime_and_queue_reconciliation_from_the_existing_subsystem_owner",
+    "retain_historical_receipts_without_replaying_closed_or_unknown_runs",
+    "preserve_existing_holds_services_authority_and_cost_boundaries",
+    "record_current_Native_acceptance_only_after_its_owner_supplies_verified_cutover_and_recovery_evidence",
+    "complete_governance_audit_620_using_the_recorded_remaining_criteria",
+    "keep_observer_external_notifications_disabled_until_separate_acceptance_and_authorization"
+  ],
+  "historical_status": "PHASE3B_SHADOW_DRAFT_CANARY_PROVEN",
+  "decision_scope": "Historical design decision; not a new runtime instruction or production authorization.",
+  "stack_scope": "Historical design, not a current host/service inventory.",
+  "pilot_budget_scope": "Historical approval record; current usage/costs not measured, no new spending authority.",
+  "historical_deployment": {
+    "vercel_team_plan": "pro_existing",
+    "target_project": "existing_oracle_frankfurt_vm",
+    "target_root_directory": "oracle_autopilot/",
+    "target_service": "school-autopilot-shadow.service",
+    "staged_source_revision": "d908565a5de4481f0bf9a1d2a489f04f8893af65",
+    "instance_lifecycle_state": "RUNNING",
+    "service_active": true,
+    "service_enabled": true,
+    "online_observer_service": "school-autopilot-online-observer.service",
+    "online_observer_source_revision": "92dfbb34b61ed32d045b90f7310665449ea55307",
+    "online_observer_active": true,
+    "online_observer_enabled": true,
+    "online_observer_activation_workflow_run_id": 33480237060,
+    "production_activated": false,
+    "shadow_only": true,
+    "activation_workflow_run_id": 33472414879
+  },
+  "historical_phase": "PHASE_2_BOUNDED_WRITE_SHADOW_CANARY_PROVEN",
+  "historical_promotion_blocks": [
+    "main_branch_unprotected",
+    "production_canary_881_not_proven",
+    "oracle_idle_stop_guard_627_not_closed"
+  ],
+  "promotion_gate_observations": [
+    {
+      "gate": "main_branch_unprotected",
+      "observation": "NOT_CURRENT: GitHub reports protected=true",
+      "observed_at": "2026-10-19T17:45:02Z",
+      "evidence_refs": [
+        "https://api.github.com/repos/olegmed1-art/bridge-video-free/branches/main"
+      ],
+      "scope": "Protected flag only; no branch rules changed and no merge permission granted by this index."
+    },
+    {
+      "gate": "production_canary_881_not_proven",
+      "observation": "HISTORICAL_RECEIPTS_NOT_REUSED_AS_CURRENT_PRODUCTION_ACCEPTANCE",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/881"
+      ],
+      "scope": "Preserve promotion safety checks; reconcile the correct current owner/run before any action."
+    },
+    {
+      "gate": "oracle_idle_stop_guard_627_not_closed",
+      "observation": "OPEN",
+      "observed_at": "2026-10-19T17:45:02Z",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/627"
+      ],
+      "scope": "No STOP operation or lifecycle authority inferred."
+    }
+  ],
+  "historical_verification": {
     "verified_at": "2026-09-01",
     "temporary_neon_branch_id": "br-still-tooth-b1ilkfcj",
     "temporary_neon_branch_name": "autopilot-shadow-final-20260830",
@@ -442,12 +509,55 @@
       "production_mutation": false
     }
   },
-  "next_actions": [
+  "reconciliation": {
+    "observed_at": "2026-10-19T17:45:02Z",
+    "status": "PARTIAL_GITHUB_PRIMARY_SOURCES",
+    "observed_main_sha": "1742ba4ed046e6d8c661341916b982465187087a",
+    "current_tracker": {
+      "url": "https://github.com/olegmed1-art/bridge-video-free/issues/782",
+      "state": "open",
+      "updated_at": "2026-09-01T12:32:16Z"
+    },
+    "native_source_milestone": {
+      "url": "https://github.com/olegmed1-art/bridge-video-free/pull/2184",
+      "merged": true,
+      "merge_sha": "45a129f13f54923bbdd418e721731326675279d6",
+      "scope": "Read-only retained-input inventory source; PR explicitly includes no production dispatch."
+    },
+    "observer_milestone": {
+      "url": "https://github.com/olegmed1-art/bridge-video-free/pull/2185",
+      "merge_sha": "1742ba4ed046e6d8c661341916b982465187087a",
+      "shadow_run": "https://github.com/olegmed1-art/bridge-video-free/actions/runs/39295595183",
+      "notifications_enabled": false
+    },
+    "unverified_scopes": [
+      "current_service_and_host_state",
+      "current_canonical_database_and_queue",
+      "Native_production_acceptance_and_cutover",
+      "current_credentials_validity",
+      "current_costs",
+      "off_host_recovery",
+      "autonomy_benefit_metrics"
+    ],
+    "historical_snapshot": "https://github.com/olegmed1-art/bridge-video-free/blob/1742ba4ed046e6d8c661341916b982465187087a/ops/autopilot/project-state.json",
+    "mutating_action_allowed_from_index": false,
+    "controller_workflow_metadata": {
+      "url": "https://github.com/olegmed1-art/bridge-video-free/actions/runs/39284860802",
+      "name": "Oracle Light post-terminal resume",
+      "head_sha": "36edbdf6093479b65051fac50727bb9841c9400a",
+      "status": "completed",
+      "conclusion": "success",
+      "updated_at": "2026-10-19T16:37:22Z",
+      "scope": "Public workflow metadata only; not a fresh runtime/queue/production acceptance assertion."
+    }
+  },
+  "historical_next_actions": [
     "keep_oracle_instance_running_until_explicit_director_order",
     "keep_autopilot_in_shadow_only_mode_and_do_not_merge_or_promote_to_production",
     "keep_phase3b_canary_pr_1011_draft_and_unmerged",
     "complete_scheduled_24_hour_shadow_stability_checkpoint_without_media_or_model_workloads",
     "renew_or_replace_the_temporary_runtime_login_before_2026_09_06",
     "complete_production_canary_881_and_idle_guard_627_before_any_production_promotion"
-  ]
+  ],
+  "historical_sections_scope": "Historical status, deployment, verification, phase, blockers and next actions are retained evidence, not executable instructions or current authority."
 }

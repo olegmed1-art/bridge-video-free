@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from itertools import product
+from unittest.mock import patch
+
+from stage2b_prepare import compare_oof
+from stage2b_v24 import row_loss, row_success
 
 from stage2b_v25 import (
     CANDIDATE_ALGORITHM_VERSION,
@@ -9,6 +15,7 @@ from stage2b_v25 import (
     exact_balanced_curriculum,
     paired_bootstrap_interval,
     recalibrate_oof_rows,
+    rewrite_oof_raw_probabilities,
     stratified_oof_comparison,
     support_aware_contract_probability,
 )
@@ -54,13 +61,14 @@ def make_row(
             "model_evidence_count": support,
             "raw_confidence_probability": 0.75,
         }
-        result = {"scores": scores, "dd_regret": float(old_loss)}
+        result = {"scores": scores, "best_defense_tricks": 5, "dd_regret": float(old_loss)}
     return {
         "task_id": f"R-{task_type}-{index}",
         "task_type": task_type,
         "strain": strain,
         "family_id": f"F-{index}",
         "heldout_fold": index % 5,
+        "split": "train",
         "source_prediction": source_prediction,
         "prediction": prediction,
         "result": result,
@@ -68,7 +76,204 @@ def make_row(
     }
 
 
+def check_prediction_bound_lead_evidence() -> None:
+    # The immutable result.dd_regret belongs to the source prediction. A new
+    # candidate must be labelled from its own card, including equal optima.
+    for old_loss, new_loss in ((2, 0), (0, 2)):
+        rows = [
+            make_row(
+                index=2000 + index, task_type="opening_lead", strain=0,
+                source_version="bridge-adaptive-v0.2", old_loss=old_loss,
+                new_loss=new_loss, backoff="exact", support=250,
+            )
+            for index in range(120)
+        ]
+        before = deepcopy(rows)
+        calibrated, calibrator = recalibrate_oof_rows(rows, minimum_support=5)
+        assert calibrator["opening_lead_outcome_policy"] == "predicted-card-dds-score-v1"
+        expected_success = new_loss == 0
+        assert all(row_success(row) == expected_success for row in rows)
+        assert all(row_loss(row) == new_loss for row in rows)
+        assert all(row["prediction"]["calibrated_probability"] == int(expected_success) for row in calibrated)
+        assert all(row["prediction"]["accept"] == expected_success for row in calibrated)
+        metrics = stratified_oof_comparison(calibrated)["source_versions"]["bridge-adaptive-v0.2"]["opening_lead_suit"]
+        assert metrics["candidate_zero_loss_rate"] == int(expected_success)
+        assert compare_oof(rows)["families"]["opening_lead"]["candidate_mean_loss"] == new_loss
+        diagnostic = calibration_diagnostics(calibrated)["groups"]["opening_lead_suit:exact"]
+        assert diagnostic["accepted"] == (120 if expected_success else 0)
+        assert diagnostic["accepted_actual_success_rate"] == (1.0 if expected_success else None)
+        assert rows == before, "Calibration rewrote immutable source evidence"
+
+    tied = deepcopy(rows[0])
+    tied["prediction"]["card"] = "sk"
+    tied["result"] = {"scores": {"sa": 5, "SK": 5, "S2": 3}, "best_defense_tricks": 5, "dd_regret": 2}
+    assert row_success(tied) is True
+    assert row_loss(tied) == 0
+
+    malformed_results = [
+        {"dd_regret": 0},
+        {"scores": {}, "dd_regret": 0},
+        {"scores": {"SA": 5, "S2": 3}, "dd_regret": 0},
+        {"scores": {"SA": 5, "SK": 3, "sk": 4}, "dd_regret": 0},
+        {"scores": {"SA": 5, "SK": None}, "dd_regret": 0},
+        {"scores": {"SK": 3}, "best_defense_tricks": 5, "dd_regret": 2},
+        {"scores": {"SA": 5, "SK": 3}, "best_defense_tricks": 4, "dd_regret": 0},
+    ]
+    for best in (None, "invalid", float("nan"), float("inf"), -1, 14):
+        malformed_results.append({"scores": {"SA": 5, "SK": 3}, "best_defense_tricks": best})
+    for score in (float("nan"), float("inf"), -1, 14):
+        for card in ("SA", "SK"):
+            result = {"scores": {"SA": 5, "SK": 3, "S2": 2}, "dd_regret": 0}
+            result["scores"][card] = score
+            malformed_results.append(result)
+    for result in malformed_results:
+        invalid = deepcopy(tied)
+        invalid["result"] = result
+        before = deepcopy(invalid)
+        for check in (
+            lambda: row_success(invalid),
+            lambda: row_loss(invalid),
+            lambda: recalibrate_oof_rows([invalid]),
+            lambda: calibration_diagnostics([invalid]),
+            lambda: compare_oof([invalid]),
+            lambda: stratified_oof_comparison([invalid]),
+        ):
+            try:
+                check()
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Incomplete/invalid lead evidence did not fail closed")
+            assert invalid == before, "Evidence rejection rewrote immutable source data"
+
+    # Independently derive loss by searching the smallest compensation that
+    # dominates every alternative, rather than reusing max(scores)-chosen.
+    # All 64 three-card tables in 0..3, each chosen card, both stale source
+    # labels: 384 cases, no bridge solver or corpus access.
+    for values in product(range(4), repeat=3):
+        scores = dict(zip(("SA", "SK", "S2"), values))
+        for chosen in scores:
+            expected_loss = next(
+                compensation for compensation in range(4)
+                if all(scores[chosen] + compensation >= score for score in values)
+            )
+            expected_success = all(scores[chosen] >= score for score in values)
+            for source_regret in (0, 2):
+                row = deepcopy(tied)
+                row["prediction"]["card"] = chosen
+                row["result"] = {"scores": scores, "dd_regret": source_regret}
+                assert row_success(row) == expected_success
+                assert row_loss(row) == expected_loss
+                assert compare_oof([row])["families"]["opening_lead"]["candidate_mean_loss"] == expected_loss
+                metrics = stratified_oof_comparison([row])["source_versions"]["bridge-adaptive-v0.2"]["opening_lead_suit"]
+                assert metrics["candidate_mean_loss"] == expected_loss
+                calibrated, _ = recalibrate_oof_rows([row], minimum_support=1)
+                assert calibrated[0]["prediction"]["calibrated_probability"] == int(expected_success)
+
+    for task_type in ("declarer_continuation", "defense_continuation"):
+        continuation = {"task_type": task_type, "prediction": {"card": "SA"}, "result": {"dd_regret": 1}}
+        assert row_loss(continuation) == 1
+        assert row_success(continuation) is False
+
+
+def check_oof_input_admission() -> None:
+    base = make_row(index=50, task_type="contract_tricks", strain=0,
+                    source_version="baseline", old_loss=1, new_loss=0,
+                    backoff="exact", support=250)
+    base["fold"] = base["heldout_fold"]
+    base["prediction"]["task_id"] = base["task_id"]
+    base["prediction"]["out_of_fold"] = True
+    base["result"].update({"task_id": base["task_id"], "split": "train",
+                           "family_id": base["family_id"], "fold": base["heldout_fold"]})
+    base["task"] = {
+        "task_id": base["task_id"], "task_type": base["task_type"],
+        "split": "train", "root_deal_id": base["family_id"],
+        "crossfit_fold": base["heldout_fold"],
+    }
+    original = deepcopy(base)
+    output, calibrator = recalibrate_oof_rows([base], minimum_support=1)
+    assert calibrator["oof_input_policy"] == "explicit-train-oof-family-fold-v1"
+    assert base == original
+    assert output[0]["out_of_fold"] is True and output[0]["split"] == "train"
+    assert output[0]["family_id"] == base["family_id"]
+
+    invalid_batches = [[], [None]]
+    for key in ("out_of_fold", "split", "task_id", "family_id", "heldout_fold"):
+        row = deepcopy(base)
+        del row[key]
+        invalid_batches.append([row])
+    for key, values in {
+        "out_of_fold": (False, None, 0, 1, "false", "true"),
+        "split": (None, "validation", "sealed_test", "TRAIN"),
+        "task_id": (None, "", " ", " padded ", 1),
+        "family_id": (None, "", " ", " padded ", 1),
+        "heldout_fold": (None, -1, True, 0.0, "0"),
+        "fold": (1, True, "0"),
+        "prediction": (None, []),
+        "result": (None, []),
+        "task": (None, []),
+    }.items():
+        for value in values:
+            row = deepcopy(base)
+            row[key] = value
+            invalid_batches.append([row])
+    for container, key, value in (
+        ("prediction", "out_of_fold", False),
+        ("prediction", "out_of_fold", "true"),
+        ("prediction", "task_id", "other"),
+        ("prediction", "split", "validation"),
+        ("prediction", "family_id", "other"),
+        ("prediction", "fold", 1),
+        ("prediction", "heldout_fold", False),
+        ("prediction", "task_type", "opening_lead"),
+        ("result", "split", "sealed_test"),
+        ("result", "split", "validation"),
+        ("result", "task_id", "other"),
+        ("result", "family_id", "other"),
+        ("result", "fold", 1),
+        ("result", "heldout_fold", False),
+        ("result", "task_type", "opening_lead"),
+        ("task", "task_id", "other"),
+        ("task", "task_type", "opening_lead"),
+        ("task", "split", "sealed_test"),
+        ("task", "crossfit_fold", 1),
+        ("task", "crossfit_fold", False),
+        ("task", "root_deal_id", "other"),
+    ):
+        row = deepcopy(base)
+        row[container][key] = value
+        invalid_batches.append([row])
+    invalid_batches.append([base, deepcopy(base)])
+    leaked = make_row(index=51, task_type="opening_lead", strain=0,
+                      source_version="baseline", old_loss=1, new_loss=0,
+                      backoff="exact", support=250)
+    leaked["family_id"] = base["family_id"]
+    invalid_batches.append([base, leaked])
+    for rows in invalid_batches:
+        before = deepcopy(rows)
+        # Invalid provenance must stop before any calibration fit, including
+        # a mixed batch where an otherwise-valid row precedes bad evidence.
+        for batch in (rows, [deepcopy(base), *rows] if rows else rows):
+            with patch("stage2b_v25.fit_segmented_oof_calibrator",
+                       side_effect=AssertionError("Fitted unadmitted evidence")):
+                for check in (rewrite_oof_raw_probabilities, recalibrate_oof_rows):
+                    try:
+                        check(batch)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError("Unadmitted OOF input did not fail closed")
+        assert rows == before
+
+    # Multiple task types for one family in the SAME fold are legitimate.
+    sibling = deepcopy(leaked)
+    sibling["heldout_fold"] = base["heldout_fold"]
+    recalibrate_oof_rows([base, sibling], minimum_support=1)
+
+
 def main() -> None:
+    check_oof_input_admission()
+    check_prediction_bound_lead_evidence()
     unsupported = {
         "model_backoff_level": "baseline",
         "model_evidence_count": 0,
@@ -132,6 +337,7 @@ def main() -> None:
 
     diagnostics = calibration_diagnostics(recalibrated)
     assert diagnostics["schema"] == "dds-stage2b-calibration-diagnostics-v2"
+    assert diagnostics["opening_lead_outcome_policy"] == "predicted-card-dds-score-v1"
     assert any(key.startswith("contract_suit:baseline") for key in diagnostics["groups"])
 
     interval = paired_bootstrap_interval([1.0] * 100, samples=200)
@@ -177,6 +383,11 @@ def main() -> None:
                 "suit_candidate_nt_fallback_policy": True,
                 "exact_50_50_curriculum": True,
                 "queue_strain_enrichment": True,
+                "candidate_card_calibration": True,
+                "invalid_lead_score_evidence_rejected": True,
+                "recorded_optimum_consistency_checked": True,
+                "explicit_train_oof_admission_checked": True,
+                "exhaustive_independent_score_oracle_cases": 384,
             },
             ensure_ascii=False,
             indent=2,

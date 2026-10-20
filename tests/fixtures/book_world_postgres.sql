@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS public.school (
  school_id uuid PRIMARY KEY, stable_name text UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS public.source (
  source_id uuid PRIMARY KEY, school_id uuid NOT NULL REFERENCES public.school,
- canonical_locator text NOT NULL, title text, source_type text DEFAULT 'book', status text DEFAULT 'active');
+ canonical_locator text NOT NULL, title text, source_type text DEFAULT 'book', status text DEFAULT 'active',
+ trust_class text, rights_notes text);
 CREATE TABLE IF NOT EXISTS public.knowledge_item (
  knowledge_item_id uuid PRIMARY KEY, school_id uuid NOT NULL REFERENCES public.school,
  stable_key text NOT NULL, knowledge_type text NOT NULL, title text NOT NULL,

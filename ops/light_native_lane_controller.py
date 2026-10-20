@@ -26,11 +26,13 @@ EXTRA=('ops/light_native_lane_issuer.py','ops/light_native_lane_controller.py','
        'ops/light_native_lane_feed.py','ops/light_native_lane_owner.py',
        'ops/light_native_lane_run_guard.py','database/__init__.py',
        'database/light_native_pilot_intake.py','database/native_cli_permission_engine.py',
-       'ops/light_native_retirement.py','ops/light_native_retirement_live.py','ops/light_native_bounded.py')
+       'ops/light_native_retirement.py','ops/light_native_retirement_live.py','ops/light_native_bounded.py',
+       'ops/light_native_service_unit.py')
 RETIREMENT_HELPERS={'ops/light_native_retirement.py','ops/light_native_retirement_live.py','ops/light_native_bounded.py'}
 require=release.require
 encoded=execution.encoded
 parse=execution.parse
+parse_plan=execution.parse_plan
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
 
 
@@ -46,15 +48,16 @@ def validate_package(raw,source,accepted,*,allow_legacy=False):
             and release.source.identifier(source,40),'LANE_OWNER_PACKAGE')
     value=parse(raw)
     expected=set((*release.HELPERS,*EXTRA))
+    historical=expected-{'ops/light_native_service_unit.py'}
     names=set(value.get('helpers',{}))
     require(set(value)=={'version','kind','source','helpers'} and value['version']==1
             and value['kind']=='LIGHT_LANE_CONTROLLER' and value['source']==source
             and (names==expected or allow_legacy and names in
-                 (expected-RETIREMENT_HELPERS,
-                  expected-RETIREMENT_HELPERS-{'ops/light_native_lane_issuer.py'},
-                  expected-RETIREMENT_HELPERS-{'ops/light_native_lane_cycle.py','ops/light_native_lane_issuer.py'},
-                  expected-{'ops/light_native_lane_issuer.py'},
-                  expected-{'ops/light_native_lane_cycle.py','ops/light_native_lane_issuer.py'}))
+                 (historical,historical-RETIREMENT_HELPERS,
+                  historical-RETIREMENT_HELPERS-{'ops/light_native_lane_issuer.py'},
+                  historical-RETIREMENT_HELPERS-{'ops/light_native_lane_cycle.py','ops/light_native_lane_issuer.py'},
+                  historical-{'ops/light_native_lane_issuer.py'},
+                  historical-{'ops/light_native_lane_cycle.py','ops/light_native_lane_issuer.py'}))
             and all(type(v) is str for v in value['helpers'].values()),'LANE_OWNER_PACKAGE')
     return value
 
@@ -379,15 +382,15 @@ def launch(wheels,credential,token,plan,directory,value,prior,baseline,feed_resu
     script=supervisor_source(value['source'])
     context=encoded(dict(owner_plan_sha256=plan.digest,controller_sha256=value['accepted_controller_sha256'],
         wheels_sha256=sha(wheels),run_id=run_guard.run_id,attempt=run_guard.attempt))
-    request=encoded(dict(version=1,source=install.RETAINED_SOURCE,controller_source=value['source'],
-        seconds=remaining,expires_at=int(time.time())+remaining,prior=asdict(prior),
+    expires_at=int(time.time())+remaining
+    clock,python_sha256=execution.capture_clock(remaining,expires_at,run_guard)
+    request=encoded(dict(version=3,source=install.RETAINED_SOURCE,controller_source=value['source'],
+        seconds=remaining,expires_at=expires_at,clock=clock,python_sha256=python_sha256,
+        sequence=sequence(value),prior=asdict(prior),
         protected=baseline['protected'],protected_sha256=baseline['protected_sha256'],
         cursor_sha256=feed_result['cursor_sha256'],dispatch_id=feed_result['dispatch_id'],
         original=install.verify_hold_process(install.RETAINED_SOURCE,pwd.getpwnam('school-autopilot')),
         supervisor_sha256=sha(script),owner_context_sha256=sha(context)))
-    if value.get('version') in (2,3):
-        body=parse(request);body.update(version=2,sequence=sequence(value))
-        request=encoded(body)
     digest=sha(request)
     if not execution.ROOT.exists():install.fresh_directory(execution.ROOT,0o700)
     target=execution.ROOT/digest
@@ -396,7 +399,7 @@ def launch(wheels,credential,token,plan,directory,value,prior,baseline,feed_resu
         retain(target/name,raw)
     retain(directory/'execution.json',encoded(dict(request_sha256=digest)))
     run_guard.assert_running()
-    command=execution.supervisor_command(digest,remaining)
+    command=execution.supervisor_command(digest,remaining,clock=clock)
     command[1:1]=['--wait','--pipe']
     wire=encoded(dict(credential=credential,token=token))
     result=subprocess.run(command,input=wire,capture_output=True,timeout=remaining+150,
@@ -413,8 +416,9 @@ def supervisor(mode,digest):
     if mode=='restore':
         print(json.dumps(execution.restore(digest),sort_keys=True));return
     require(mode=='run','LANE_OWNER_SUPERVISOR_MODE')
-    value,prior,target=execution.request(digest)
-    context=parse(read(target/'owner-context.json',value['owner_context_sha256']))
+    session=execution.ExecutionSession.enter(digest)
+    value,prior,target=session.value,session.prior,session.directory
+    context=session.context
     verify_helpers(value['controller_source'],context['controller_sha256'])
     require(set(context)=={'owner_plan_sha256','controller_sha256','wheels_sha256','run_id','attempt'}
             and all(release.source.identifier(context[k],64) for k in
@@ -429,12 +433,13 @@ def supervisor(mode,digest):
     from ops.light_native_lane_run_guard import authenticated
     from ops.light_native_pilot_owner import observed_target
     from ops.native_maintenance_run_guard import API
+    guard=authenticated(value['controller_source'],context['run_id'],context['attempt'],wire['token'])
+    session.assert_current()
     with loaded_runtime(wheels) as (psycopg,_):
         from ops.native_maintenance_owner_attest import parameters
         from oracle_autopilot import light_native_preflight as preflight
         from database.light_native_pilot_intake import Plan
         plan=Plan(read(owner_directory/'plan.json'),context['owner_plan_sha256'])
-        guard=authenticated(value['controller_source'],context['run_id'],context['attempt'],wire['token'])
         def fresh(permit):
             guard.assert_running()
             observed_target(API(wire['token']),plan)
@@ -445,7 +450,7 @@ def supervisor(mode,digest):
                     expires_at=item['expires_at'],agreement_sha256=item['owner_preflight']['agreement_sha256'])
             require(evidence==item['owner_preflight'],'LANE_OWNER_PREFLIGHT_CHANGED')
             return True
-        result=execution.run_once(digest,fresh,live_guard=guard.assert_running)
+        result=execution.run_once(digest,fresh,live_guard=guard.assert_running,session=session)
         retain(target/'outcome.json',encoded(result))
         print(json.dumps(dict(audit='LIGHT_LANE_EXECUTED',**result),sort_keys=True))
 

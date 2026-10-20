@@ -7,6 +7,11 @@ on:
       reviewed_manifest_sha: {required: true, type: string}
       run_reviewed: {required: true, type: boolean, default: false}
       collect_only: {required: true, type: boolean, default: false}
+      admit_only:
+        description: 'Retain authenticated admission and read it back, then exit before ARM or power actions'
+        required: true
+        type: boolean
+        default: false
       approve_closed_window:
         description: 'For this reviewed 6min window: no owner console/manual start, rerun/dispatch or Oracle manual start; accept residual queue uncertainty'
         required: true
@@ -27,7 +32,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   ibm-diagnostic-trial:
-    if: ${{ (!(inputs.run_reviewed && inputs.collect_only) && (!(inputs.run_reviewed || inputs.collect_only) || (inputs.approve_closed_window && inputs.approve_stop_route_hold))) && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
+    if: ${{ (!(inputs.run_reviewed && inputs.collect_only) && !(inputs.run_reviewed && inputs.admit_only) && !(inputs.collect_only && inputs.admit_only) && (!(inputs.run_reviewed || inputs.collect_only || inputs.admit_only) || (inputs.approve_closed_window && inputs.approve_stop_route_hold))) && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
     environment: database-production
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -55,13 +60,24 @@ jobs:
           EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
           RUN_REVIEWED: ${{ inputs.run_reviewed }}
           COLLECT_ONLY: ${{ inputs.collect_only }}
+          ADMIT_ONLY: ${{ inputs.admit_only }}
         run: |
           set -eu
           set -- --archive-sha "$REVIEWED_ARCHIVE_SHA" --manifest-sha "$REVIEWED_MANIFEST_SHA" --expected-main "$EXPECTED_MAIN"
-          case "$RUN_REVIEWED:$COLLECT_ONLY" in
-            true:false) set -- "$@" --run-reviewed ;;
-            false:true) set -- "$@" --collect-only ;;
-            false:false) ;;
+          case "$RUN_REVIEWED:$COLLECT_ONLY:$ADMIT_ONLY" in
+            true:false:false) set -- "$@" --run-reviewed ;;
+            false:true:false) set -- "$@" --collect-only ;;
+            false:false:true) set -- "$@" --admit-only ;;
+            false:false:false) ;;
             *) exit 78 ;;
           esac
           "$RUNNER_TEMP/ibm-diagnostic-venv/bin/python" ops/ibm_diagnostic_v9/owner_setup.py "$@"
+      - name: Retain admission metadata without captures or credentials
+        if: ${{ always() && inputs.admit_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ibm-owner-admission-${{ github.run_id }}
+          path: ${{ runner.temp }}/ibm-owner-admission/admission-*/*.json
+          retention-days: 7
+          include-hidden-files: false
+          if-no-files-found: ignore

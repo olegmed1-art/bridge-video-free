@@ -27,6 +27,7 @@ from typing import Iterable, Mapping, Sequence
 
 CANDIDATE_ALGORITHM_VERSION = "dds-learning-v2.4-stage2b-candidate"
 CALIBRATION_SCHEMA = "dds-oof-calibration-v2"
+OPENING_LEAD_OUTCOME_POLICY = "predicted-card-dds-score-v1"
 RESIDUAL_MODEL_SCHEMA = "dds-hierarchical-residual-v1"
 LEAD_MODEL_SCHEMA = "dds-opening-lead-family-model-v1"
 CURRENT_STAGE_SCHEMA = "dds-current-stage-manifest-v1"
@@ -86,6 +87,45 @@ def task_family(task_type: str, strain: int | str | None) -> str:
     return task_type
 
 
+def opening_lead_loss(prediction: Mapping[str, object], result: Mapping[str, object]) -> float:
+    """Score this prediction, never the source card's stored ``dd_regret``.
+
+    Stage 2B reuses immutable DDS score tables across source and candidate
+    predictions. Missing card-specific evidence must stop preparation rather
+    than silently relabel the candidate with the source prediction's outcome.
+    A recorded optimum, when present, must agree with the score map maximum.
+    """
+    raw_scores = result.get("scores")
+    if not isinstance(raw_scores, Mapping) or not raw_scores:
+        raise ValueError("Opening-lead evaluation requires a nonempty DDS score map")
+    scores: dict[str, float] = {}
+    for card, value in raw_scores.items():
+        card = str(card).upper()
+        try:
+            score = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Opening-lead DDS scores must be finite trick counts in 0..13") from exc
+        if not math.isfinite(score) or not 0 <= score <= 13:
+            raise ValueError("Opening-lead DDS scores must be finite trick counts in 0..13")
+        if card in scores and scores[card] != score:
+            raise ValueError("Conflicting opening-lead DDS scores for the same card")
+        scores[card] = score
+    chosen = str(prediction.get("card", "")).upper()
+    if chosen not in scores:
+        raise ValueError("Opening-lead prediction card is missing from the DDS score map")
+    best = max(scores.values())
+    if "best_defense_tricks" in result:
+        try:
+            recorded_best = float(result["best_defense_tricks"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Opening-lead DDS optimum must be a finite trick count in 0..13") from exc
+        if not math.isfinite(recorded_best) or not 0 <= recorded_best <= 13:
+            raise ValueError("Opening-lead DDS optimum must be a finite trick count in 0..13")
+        if recorded_best != best:
+            raise ValueError("Opening-lead DDS score map contradicts best_defense_tricks")
+    return best - scores[chosen]
+
+
 def row_success(row: Mapping[str, object]) -> bool:
     task_type = str(row["task_type"])
     prediction = row["prediction"]
@@ -94,6 +134,8 @@ def row_success(row: Mapping[str, object]) -> bool:
         raise TypeError("prediction and result must be mappings")
     if task_type == "contract_tricks":
         return int(prediction["tricks"]) == int(result["dds_tricks"])
+    if task_type == "opening_lead":
+        return opening_lead_loss(prediction, result) == 0.0
     regret = result.get("dd_regret")
     return regret is not None and float(regret) == 0.0
 
@@ -106,6 +148,8 @@ def row_loss(row: Mapping[str, object]) -> float:
         raise TypeError("prediction and result must be mappings")
     if task_type == "contract_tricks":
         return abs(int(prediction["tricks"]) - int(result["dds_tricks"]))
+    if task_type == "opening_lead":
+        return opening_lead_loss(prediction, result)
     regret = result.get("dd_regret")
     return 13.0 if regret is None else float(regret)
 
@@ -229,6 +273,7 @@ def fit_segmented_oof_calibrator(
         "schema": CALIBRATION_SCHEMA,
         "algorithm_version": CANDIDATE_ALGORITHM_VERSION,
         "source": "family_safe_out_of_fold_train_only",
+        "opening_lead_outcome_policy": OPENING_LEAD_OUTCOME_POLICY,
         "minimum_support": int(minimum_support),
         "review_threshold": float(review_threshold),
         "rows": len(eligible),

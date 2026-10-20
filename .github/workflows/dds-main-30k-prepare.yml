@@ -1,14 +1,6 @@
 name: DDS main 30k — prepare from preserved pilot
 
 on:
-  pull_request_target:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-    paths:
-      - 'dds_training/**'
-      - '.github/workflows/dds-main-30k-prepare.yml'
-      - '.github/workflows/dds-training-v23-smoke.yml'
-      - '.github/workflows/dds-drive-restore-contract.yml'
   workflow_dispatch:
 
 permissions:
@@ -30,15 +22,10 @@ env:
 
 jobs:
   prepare-main:
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'pull_request_target' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          github.event.pull_request.user.login == 'olegmed1-art'
-        )
-      }}
+    # Durable quarantine after run39296951764. Re-enabling the workflow or
+    # manually dispatching it must not grant compute authority. Heavy DDS work
+    # belongs on the existing OracleLight -> IBM route, never this runner.
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:

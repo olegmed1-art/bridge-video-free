@@ -28,6 +28,20 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/light-native-service-install.yml'
+  'ops/light_native_service_authority.py'
+  'ops/light_native_service_supervisor.py'
+  'ops/light_native_service_unit.py'
+  'ops/light_native_lane_cycle.py'
+  'ops/light_native_lane_issuer.py'
+  'ops/light_native_lane_execution.py'
+  'ops/light_native_service_bootstrap.py'
+  'ops/light_native_service_history.py'
+  'ops/light_native_service_install.py'
+  'ops/light_native_service_install_runner.py'
+  'tests/test_light_native_service_history.py'
+  'tests/test_light_native_service_install.py'
+  'docs/operations/native-dormant-install-i2-20261019.md'
   '.github/workflows/light-native-retirement-observe.yml'
   'ops/light_native_retirement_observe_runner.py'
   'ops/light_native_retirement_live.py'

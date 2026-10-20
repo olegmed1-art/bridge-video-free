@@ -33,7 +33,58 @@ jobs:
       EXPECTED_OWNER: olegmed1-art
       EXPECTED_PILOT_ZIP_SHA256: ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130
       SOURCE_WORKFLOW: dds-main-30k-prepare.yml
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
+      - name: Fail closed immediately when preparation is not authorized
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/${SOURCE_WORKFLOW}" \
+            > "$RUNNER_TEMP/dds-prep-workflow.json" \
+            || printf '{}' > "$RUNNER_TEMP/dds-prep-workflow.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/contents/.github/workflows/${SOURCE_WORKFLOW}?ref=${BASE_SHA}" \
+            > "$RUNNER_TEMP/dds-prep-source.json" \
+            || printf '{}' > "$RUNNER_TEMP/dds-prep-source.json"
+          python - <<'PY'
+          # DDS_PREPARATION_ADMISSION_BEGIN
+          import base64, json, os, re
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          reason = 'admission_state_unavailable'
+          try:
+              metadata = json.loads((root / 'dds-prep-workflow.json').read_text())
+              payload = json.loads((root / 'dds-prep-source.json').read_text())
+              source = base64.b64decode(''.join(payload['content'].split()), validate=True).decode('utf-8')
+              header, jobs = source.split('\njobs:', 1)
+              preparation = re.search(r'(?ms)^  prepare-main:\n(.*?)(?=^  [\w-]+:|\Z)', jobs)
+              if metadata.get('state') not in {'active', 'disabled_manually', 'disabled_inactivity', 'deleted'}:
+                  reason = 'admission_state_unavailable'
+              elif preparation is None:
+                  reason = 'admission_state_unavailable'
+              elif metadata['state'] != 'active':
+                  reason = 'preparation_workflow_disabled'
+              elif re.search(r'(?m)^    if: \$\{\{\s*false\s*\}\}\s*$', preparation[1]):
+                  reason = 'preparation_quarantined'
+              elif not re.search(r'(?m)^  pull_request_target:', header):
+                  reason = 'automatic_preparation_not_authorized'
+              else:
+                  reason = ''
+          except (OSError, ValueError, KeyError, TypeError, AttributeError):
+              pass
+          if reason:
+              evidence = {
+                  'schema': 'dds-prsafe-observable-evidence-v1',
+                  'status': 'BLOCKED', 'authority': 'EVIDENCE_ONLY',
+                  'reason': reason, 'compute_authorized': False,
+                  'pr_number': os.environ['PR_NUMBER'],
+                  'head_sha': os.environ['HEAD_SHA'],
+              }
+              (root / 'dds-prsafe-observable-evidence.json').write_text(json.dumps(evidence, sort_keys=True) + '\n')
+              print(json.dumps(evidence, sort_keys=True))
+              raise SystemExit(1)
+          # DDS_PREPARATION_ADMISSION_END
+          PY
+
       - name: Wait for and independently verify matching trusted preparation
         shell: bash
         run: |
@@ -153,6 +204,7 @@ jobs:
           PY
 
       - name: Upload independently observable verification evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dds-prsafe-drive-observable-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
