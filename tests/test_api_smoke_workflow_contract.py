@@ -20,11 +20,21 @@ def check_workflow(text: str) -> None:
     if not job_match:
         raise ValueError("missing production smoke job")
     job = job_match.group(1)
-    if "    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.api-static.outputs.allow_production_smoke == 'true'\n" not in job:
+    if "    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.api-static.result == 'success' && needs.api-static.outputs.production_smoke_scope_status == 'run' && needs.api-static.outputs.allow_production_smoke == 'true'\n" not in job:
         raise ValueError("production smoke must be restricted to main push")
     if "allow_production_smoke: ${{ steps.smoke-scope.outputs.allow_smoke }}" not in text:
         raise ValueError("production smoke needs the no-secret scope output")
-    if 'run: python -I -B tools/l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT"' not in text:
+    if "production_smoke_scope_status: ${{ steps.smoke-scope.outputs.scope_status }}" not in text:
+        raise ValueError("production smoke needs explicit successful classification")
+    scope_match = re.search(r"^      - name: Classify complete main-push diff before production credentials\n(.*?)(?=^      - name: |\Z)", text, re.M | re.S)
+    if not scope_match:
+        raise ValueError("missing classifier step")
+    classification = scope_match.group(1)
+    if ('        if: github.event_name == \'push\' && github.ref == \'refs/heads/main\'\n' not in classification
+            or '          set -euo pipefail\n' not in classification
+            or '          python -I -B tools/l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT"\n' not in classification
+            or re.search(r"^\s+continue-on-error:", classification, re.M)
+            or '||' in classification or ';' in classification):
         raise ValueError("scope classification must precede secret-bearing smoke")
     if "    needs: api-static\n" not in job:
         raise ValueError("production smoke must wait for static checks")
@@ -80,6 +90,11 @@ class SmokeWorkflowTests(unittest.TestCase):
         mutations = (
             (" && needs.api-static.outputs.allow_production_smoke == 'true'", ""),
             ("allow_production_smoke: ${{ steps.smoke-scope.outputs.allow_smoke }}", "allow_production_smoke: true"),
+            (" && needs.api-static.result == 'success'", ""),
+            (" && needs.api-static.outputs.production_smoke_scope_status == 'run'", ""),
+            ("production_smoke_scope_status: ${{ steps.smoke-scope.outputs.scope_status }}", "production_smoke_scope_status: run"),
+            ("        id: smoke-scope\n", "        id: smoke-scope\n        continue-on-error: true\n"),
+            ('l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT"\n', 'l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT" || true\n'),
             ("github.event_name == 'push' && github.ref == 'refs/heads/main'", "github.event_name == 'pull_request'"),
             ("    needs: api-static\n", ""),
             ("          VERCEL_ENV: production\n", ""),
