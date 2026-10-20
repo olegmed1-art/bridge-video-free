@@ -20,8 +20,12 @@ def check_workflow(text: str) -> None:
     if not job_match:
         raise ValueError("missing production smoke job")
     job = job_match.group(1)
-    if "    if: github.event_name == 'push' && github.ref == 'refs/heads/main'\n" not in job:
+    if "    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.api-static.outputs.allow_production_smoke == 'true'\n" not in job:
         raise ValueError("production smoke must be restricted to main push")
+    if "allow_production_smoke: ${{ steps.smoke-scope.outputs.allow_smoke }}" not in text:
+        raise ValueError("production smoke needs the no-secret scope output")
+    if 'run: python -I -B tools/l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT"' not in text:
+        raise ValueError("scope classification must precede secret-bearing smoke")
     if "    needs: api-static\n" not in job:
         raise ValueError("production smoke must wait for static checks")
     if "    timeout-minutes: 2\n" not in job:
@@ -74,6 +78,8 @@ class SmokeWorkflowTests(unittest.TestCase):
 
     def test_dangerous_mutations_are_rejected(self):
         mutations = (
+            (" && needs.api-static.outputs.allow_production_smoke == 'true'", ""),
+            ("allow_production_smoke: ${{ steps.smoke-scope.outputs.allow_smoke }}", "allow_production_smoke: true"),
             ("github.event_name == 'push' && github.ref == 'refs/heads/main'", "github.event_name == 'pull_request'"),
             ("    needs: api-static\n", ""),
             ("          VERCEL_ENV: production\n", ""),
