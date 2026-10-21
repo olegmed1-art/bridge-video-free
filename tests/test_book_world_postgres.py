@@ -460,3 +460,185 @@ def test_publication_holds_identity_rows_against_concurrent_mutation(mutation):
                             (staged["version_ids"][0], source_id)).fetchone()[0] == build_world_publication(bundle, receipt, identity)["records"][0]["content"]["citation"]
         assert read.execute("SELECT count(*) FROM public.domain_event WHERE changeset_id=%s "
                             "AND event_type='BookWorldPublished'", (result["changeset_id"],)).fetchone()[0] == 1
+
+
+def _synthetic_pipeline_pdf():
+    """Three valid fixture pages; no published book content or external parser."""
+    stream = b"BT /F1 12 Tf 20 100 Td (Synthetic conditional claim. iv) Tj ET"
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>",
+               b"<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>"]
+    for page in range(3):
+        content_id = 4 + page * 2
+        objects.extend([
+            ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+             "/Resources << /Font << /F1 9 0 R >> >> /Contents %d 0 R >>" % content_id).encode(),
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        ])
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    data, offsets = b"%PDF-1.7\n", [0]
+    for number, value in enumerate(objects, 1):
+        offsets.append(len(data))
+        data += str(number).encode() + b" 0 obj\n" + value + b"\nendobj\n"
+    xref = len(data)
+    data += b"xref\n0 10\n0000000000 65535 f \n"
+    data += b"".join(("%010d 00000 n \n" % offset).encode() for offset in offsets[1:])
+    return data + b"trailer\n<< /Size 10 /Root 1 0 R >>\nstartxref\n" + str(xref).encode() + b"\n%%EOF\n"
+
+
+def test_real_storage_source_staging_review_to_teacher_consumer(monkeypatch, tmp_path):
+    """Real local stores/readers; synthetic reviews and delivery, never pilot admission."""
+    import hashlib
+    import json
+    import sqlite3
+    from bridge_contracts.book_material import produce_bundle
+    from bridge_contracts.book_material_store import BookStagingStore
+    from database.source_registration import register_source, SourceRegistrationError
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    from evolutionary_course import book_teacher_consumer as consumer
+
+    pdf = tmp_path / "synthetic-pipeline.pdf"
+    pdf.write_bytes(_synthetic_pipeline_pdf())
+    template, review = reviewed_fixture()
+    source = {**template["source"], "edition_id": str(uuid4()),
+              "locator": "https://example.invalid/synthetic-pipeline-" + uuid4().hex,
+              "rendition_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest()}
+    records = [record(page=page) for page in range(3)]
+    for candidate in records:
+        candidate["content"]["conditions"] = ["Synthetic visible-information condition", "Synthetic opening-lead condition"]
+        candidate["content"]["exceptions"] = ["Synthetic no-contract-guarantee limit", "Synthetic entry-and-tempo limit"]
+    value = produce_bundle(source, {**template["run"], "run_id": str(uuid4())}, records)
+    review.update(rendition_sha256=source["rendition_sha256"], source_size_bytes=pdf.stat().st_size)
+    claim = deepcopy(review["claims"][0])
+    review["claims"] = [{**deepcopy(claim), "object_id": obj["object_id"],
+                         "content_sha256": digest(obj["content"]),
+                         "anchor_sha256": digest(obj["anchor"])} for obj in value["objects"]]
+    source_id = str(uuid4())
+    with psycopg.connect(DSN) as setup:
+        setup.execute(Path("tests/fixtures/book_world_postgres.sql").read_text())
+        setup.commit()  # DDL is a separate disposable-fixture operation.
+        setup.execute("INSERT INTO public.school VALUES(%s,%s) ON CONFLICT(stable_name) DO NOTHING",
+                      (str(uuid4()), EXPECTED_SCHOOL))
+        school_id = str(setup.execute("SELECT school_id FROM public.school WHERE stable_name=%s",
+                                     (EXPECTED_SCHOOL,)).fetchone()[0])
+        args = dict(school_id=school_id, source_id=source_id, source_type="book",
+                    title=source["title"], locator=source["locator"])
+        with setup.cursor() as cur:
+            with pytest.raises(SourceRegistrationError, match="SOURCE_REGISTRATION_LOCK_ORDER_REQUIRED"):
+                register_source(cur, **args)
+        assert setup.execute("SELECT count(*) FROM public.source WHERE source_id=%s", (source_id,)).fetchone()[0] == 0
+        setup.commit()  # Release school setup locks before the source barrier.
+        with setup.cursor() as cur:
+            assert register_source(cur, **args) == 1
+            assert register_source(cur, **args) == 0
+
+    staged_path = tmp_path / "book-staging.sqlite"
+    with sqlite3.connect(staged_path) as local:
+        staged = BookStagingStore(local).stage(value)
+        assert staged["new_ids"] == staged["new_observations"] == 3
+        assert staged["publication"] == "NOT_PUBLISHED"
+    with sqlite3.connect(staged_path) as local:
+        stored, local_status = local.execute("SELECT bundle_json,status FROM book_batch WHERE run_id=?",
+                                            (value["run"]["run_id"],)).fetchone()
+        value = json.loads(stored)
+        assert local_status == "COMMITTED_LOCAL" and value["publication"] == "NOT_PUBLISHED"
+        assert all(obj["review"] == "NOT_REVIEWED" and obj["verification"] == "M0" for obj in value["objects"])
+
+    publication = build_world_publication(value, review)
+    expected_receipt = {"schema": publication["schema"], "changeset_id": None,
+        "version_ids": [None] * 3, "new_versions": None, "authority_lane": "WORLD_EXTERNAL",
+        "publication_hash": None, "outbox_delivery": "REQUIRES_READBACK",
+        "canon_activation_performed": False, "dry_run": False, "committed": None}
+    packet = {"content_contract": publication["schema"],
+        "import_state": {"knowledge_import_committed": False, "observed_import_receipt": None},
+        "source": {**source, "registry_source_id": source_id}, "run": value["run"],
+        "review_evidence_summary": {"synthetic_only": True, "not_real_E01_E03": True},
+        "expected_import_receipt": expected_receipt, "cards": []}
+    for label, projected in zip(consumer.LABELS, publication["records"], strict=True):
+        content, key = projected["content"], projected["stable_key"]
+        citation = deepcopy(content["citation"])
+        packet["cards"].append({"card_label": label, "candidate_id": "SYNTHETIC-" + label,
+            "name": "Synthetic " + label, "skill": "Synthetic skill", "stable_key": key, "object_id": key,
+            **{field: deepcopy(content[field]) for field in ("statement", "conditions", "exceptions", "origin", "verification")},
+            "citation": citation, "source_pages": {"pdf_page_index_0based": citation["pdf_page_index"],
+                "pdf_page_number_1based": citation["pdf_page_index"] + 1,
+                "printed_page_label": citation["printed_page_label"]},
+            "source_review_id": review["review_id"], "knowledge_item_id": None, "knowledge_version_id": None})
+    unbound = consumer.build_card_map(packet)
+    reads = []
+
+    @contextmanager
+    def connect_test():
+        with psycopg.connect(DSN, row_factory=dict_row) as connection:
+            yield connection
+    monkeypatch.setattr(knowledge, "connect", connect_test)
+    monkeypatch.setenv("BRIDGE_API_TOKEN", "synthetic-pipeline-token")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer synthetic-pipeline-token"}
+
+    def query_actual(**kwargs):
+        reads.append(kwargs)
+        return knowledge.query_knowledge(**kwargs)
+
+    from bridge_contracts.book_world import render_teacher_book
+    def consume(mapping, label):
+        context = {"topic": consumer.TOPICS[label], "stage": "INITIAL_PLAN",
+            "dummy_exposed": True, "opening_lead_made": True, "asks_for": "PRINCIPLE_EXPLANATION"}
+        return consumer.consume_card(mapping, label, context,
+            query_knowledge=query_actual, render_teacher_book=render_teacher_book)
+
+    assert consume(unbound, "E01")["reason"] == "IMPORT_NOT_COMMITTED" and reads == []
+    identity_review = reviewed_identity_fixture(value, review, school_id, source_id, source["locator"])
+    with psycopg.connect(DSN) as writer:
+        identity_result = reconcile_book_source_asset(writer, value, review, school_id=school_id,
+            source_id=source_id, identity_receipt=identity_review)
+        assert identity_result["new_source_rows"] == 0 and identity_result["new_asset_rows"] == 1
+        actual = persist_book_world(writer, value, review, school_id=school_id,
+            source_id=source_id, identity_receipt=identity_review)
+        assert actual["committed"] and actual["new_versions"] == 3
+    with psycopg.connect(DSN) as read:
+        event = read.execute("SELECT payload FROM public.domain_event WHERE changeset_id=%s "
+                             "AND event_type='BookWorldRecorded'", (actual["changeset_id"],)).fetchone()[0]
+        observed_ids = {str(row[0]) for row in read.execute(
+            "SELECT knowledge_version_id FROM public.knowledge_version WHERE knowledge_version_id=ANY(%s::uuid[])",
+            (actual["version_ids"],)).fetchall()}
+        assert observed_ids == set(actual["version_ids"])
+    bound = consumer.bind_import_receipt(unbound, actual, event)
+    assert consume(bound, "E01")["reason"] == "BOOK_WORLD_GAP"  # A committed staging receipt is insufficient.
+    first_key = bound["cards"][0]["stable_key"]
+    assert client.get("/v1/knowledge/teacher/book", params={"stable_key": first_key}, headers=headers).status_code == 404
+
+    with psycopg.connect(DSN) as delivery:
+        # Only this disposable fixture simulates external delivery. No catalog or pilot receipt is asserted.
+        delivery.execute("UPDATE public.outbox_message SET status='published' WHERE changeset_id=%s",
+                         (actual["changeset_id"],))
+    with psycopg.connect(DSN) as writer:
+        published = publish_book_world(writer, school_id=school_id, changeset_id=actual["changeset_id"],
+            delivery_receipt={"schema": "book-world-delivery-v1", "publication_hash": actual["publication_hash"],
+                              "catalog_receipt_ref": "synthetic-disposable-delivery-only"})
+        assert published["publication"] == "WORLD_VERIFIED"
+
+    def counts():
+        with psycopg.connect(DSN) as read:
+            return tuple(read.execute("SELECT count(*) FROM public." + table).fetchone()[0]
+                for table in ("source", "asset", "source_asset", "knowledge_item", "knowledge_version",
+                              "changeset", "domain_event", "outbox_message", "canon_activation"))
+    before_reads = counts()
+    for card in bound["cards"]:
+        result = consume(bound, card["card_label"])
+        assert result["status"] == "EXPLANATION_READY"
+        assert result["book_response"]["knowledge_version_id"] == card["knowledge_version_id"]
+        assert result["book_response"]["citations"] == [card["expected_content"]["citation"]]
+        assert all(text in result["explanation_with_page"]
+                   for field in ("conditions", "exceptions") for text in card["expected_content"][field])
+        assert result["canon_activation_performed"] is result["domain_writes_performed"] is False
+        response = client.get("/v1/knowledge/teacher/book", params={"stable_key": card["stable_key"]}, headers=headers)
+        assert response.status_code == 200 and response.json() == result["book_response"]
+    assert counts() == before_reads
+    with psycopg.connect(DSN) as writer:
+        assert retire_book_world(writer, school_id=school_id, version_ids=actual["version_ids"]) == 3
+    assert consume(bound, "E01")["reason"] == "BOOK_WORLD_GAP"
+    assert client.get("/v1/knowledge/teacher/book", params={"stable_key": first_key}, headers=headers).status_code == 404
+    with psycopg.connect(DSN) as read:
+        assert read.execute("SELECT count(*) FROM public.source_asset WHERE source_id=%s", (source_id,)).fetchone()[0] == 1
+        assert read.execute("SELECT count(*) FROM public.canon_activation WHERE knowledge_version_id=ANY(%s::uuid[])",
+                            (actual["version_ids"],)).fetchone()[0] == 0

@@ -68,6 +68,12 @@ def check_workflow(text: str) -> None:
         if f"curl --fail --silent --connect-timeout 2 --max-time {limit} " not in steps[name]:
             raise ValueError("HTTP smoke requests need explicit deadlines")
     start = steps["Start API"]
+    if "from tools.api_smoke_session import install; install(db); import uvicorn;" not in start:
+        raise ValueError("bounded sessions must be installed before app import")
+    if text.count("      - 'tools/api_smoke_session.py'") != 2 or text.count("      - 'tests/test_api_smoke_session.py'") != 2:
+        raise ValueError("smoke session changes must trigger PR and main checks")
+    if "          python -B tests/test_api_smoke_session.py\n" not in text:
+        raise ValueError("session regression must run before smoke")
     if "db.CONNECT_ATTEMPTS = 1;" not in start or "workers=1)" not in start:
         raise ValueError("only the CI API process must use one connection attempt")
     if "if (: >/dev/tcp/127.0.0.1/8000) 2>/dev/null; then\n" not in start:
@@ -88,6 +94,8 @@ class SmokeWorkflowTests(unittest.TestCase):
 
     def test_dangerous_mutations_are_rejected(self):
         mutations = (
+            ("install(db); import uvicorn;", "import uvicorn;"),
+            ("          python -B tests/test_api_smoke_session.py\n", ""),
             (" && needs.api-static.outputs.allow_production_smoke == 'true'", ""),
             ("allow_production_smoke: ${{ steps.smoke-scope.outputs.allow_smoke }}", "allow_production_smoke: true"),
             (" && needs.api-static.result == 'success'", ""),
@@ -139,15 +147,19 @@ class SmokeWorkflowTests(unittest.TestCase):
                                    psycopg=types.SimpleNamespace(connect=connect, OperationalError=error))
                 exec(code, db.__dict__)
                 uvicorn = types.ModuleType("uvicorn")
+                bounded = types.ModuleType("tools.api_smoke_session")
+                bounded.install = MagicMock()
                 uvicorn.run = MagicMock(side_effect=lambda *args, **kwargs: db._open_connection())
                 with patch.dict(sys.modules, {"bridge_school_api":package,
-                                              "bridge_school_api.db":db, "uvicorn":uvicorn}):
+                                              "bridge_school_api.db":db, "uvicorn":uvicorn,
+                                              "tools.api_smoke_session":bounded}):
                     if fail:
                         with self.assertRaises(error):
                             exec(launcher, {})
                     else:
                         exec(launcher, {})
                 uvicorn.run.assert_called_once_with("app:app", host="127.0.0.1", port=8000, workers=1)
+                bounded.install.assert_called_once_with(db)
                 connect.assert_called_once_with("synthetic-dsn", connect_timeout=10,
                                                 application_name="bridge-school-api", row_factory=db.dict_row)
                 sleep.assert_not_called()

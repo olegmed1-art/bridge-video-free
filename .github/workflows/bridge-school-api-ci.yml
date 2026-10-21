@@ -13,6 +13,8 @@ on:
       - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_smoke_workflow_contract.py'
+      - 'tools/api_smoke_session.py'
+      - 'tests/test_api_smoke_session.py'
       - 'tools/l1_ci_smoke_scope.py'
       - 'tests/test_l1_ci_smoke_scope.py'
       - 'tests/test_runtime_app_incident_probe.py'
@@ -43,6 +45,8 @@ on:
       - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_smoke_workflow_contract.py'
+      - 'tools/api_smoke_session.py'
+      - 'tests/test_api_smoke_session.py'
       - 'tools/l1_ci_smoke_scope.py'
       - 'tests/test_l1_ci_smoke_scope.py'
       - 'tests/test_runtime_app_incident_probe.py'
@@ -102,6 +106,7 @@ jobs:
         run: |
           PYTHONPATH=. python tests/test_api_dsn_contract.py
           python tests/test_api_smoke_workflow_contract.py
+          python -B tests/test_api_smoke_session.py
           python -I -B tests/test_l1_ci_smoke_scope.py
       - name: Verify secret-safe incident diagnostics and health responses
         run: |
@@ -177,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           # Only this CI process fails on its first DB connection error.
-          python -c "from bridge_school_api import db; db.CONNECT_ATTEMPTS = 1; import uvicorn; uvicorn.run('app:app', host='127.0.0.1', port=8000, workers=1)" >/tmp/bridge-school-api.log 2>&1 &
+          python -c "from bridge_school_api import db; db.CONNECT_ATTEMPTS = 1; from tools.api_smoke_session import install; install(db); import uvicorn; uvicorn.run('app:app', host='127.0.0.1', port=8000, workers=1)" >/tmp/bridge-school-api.log 2>&1 &
           echo $! >/tmp/bridge-school-api.pid
           for attempt in $(seq 1 30); do
             # Wait for the local listener without invoking a database route.

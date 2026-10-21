@@ -200,7 +200,7 @@ jobs:
           import hashlib
           from pathlib import Path
           expected = {
-              'database/outbox_publisher.py': 'd89c6ed30832aec867bde7ff033720eeb29451e38572c2f3cfea4f7046fbf42e',
+              'database/outbox_publisher.py': 'ebaa40e5024d3e3d1866c1427bfa56ffbf85a64a7966f85dc956b64917abbf6d',
               'database/outbox_publication_decision.py': '8c145525a0c7ab3b51b217207400b04640838c2b08cc9b404e72eda11ea174b9',
               'bridge_neon_persistence.py': '16e66f086b3fe12f67286c2af99e07f63553153ae9adcf979559f8e324126568',
               'video_completed_staging_handoff.py': '6e530ef7a0810aaed756ba7041eaf8fcc07937c8c0bc0266f766e89574e4e1fa',

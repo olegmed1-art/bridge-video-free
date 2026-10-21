@@ -1,0 +1,471 @@
+{
+  "fixture_contract": "book-world-canonical-v2-synthetic-fixture-v1",
+  "synthetic_only": true,
+  "real_delivery_proof": false,
+  "school_id": "11111111-1111-1111-1111-111111111111",
+  "source_id": "22222222-2222-2222-2222-222222222222",
+  "bundle": {
+    "schema": "book-material-staging-v1",
+    "source": {
+      "source_id": "SYNTHETIC-SOURCE",
+      "edition_id": "SYNTHETIC-EDITION",
+      "rendition_sha256": "aca6ce205086b21d5847c5b9ec5e31c842a19cb753a250b21de3c7c33967cd49",
+      "title": "Synthetic bridge fixture (not a published book)",
+      "locator": "https://example.invalid/synthetic-book",
+      "page_count": 3
+    },
+    "run": {
+      "run_id": "synthetic-run-1",
+      "model_version": "none",
+      "prompt_version": "none"
+    },
+    "objects": [
+      {
+        "kind": "ATOM",
+        "anchor": {
+          "pdf_page_index": 0,
+          "printed_page_label": "iv",
+          "bbox": [
+            0.1,
+            0.2,
+            0.8,
+            0.9
+          ],
+          "bbox_units": "NORMALIZED_TOP_LEFT",
+          "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256",
+          "segment_sha256": "297426f2d4007f0503d7989702f35431df464510d6bb3a5a7eb931843e4bcbb4"
+        },
+        "content": {
+          "statement": "Synthetic conditional claim.",
+          "domain": "CARD_PLAY",
+          "conditions": [
+            "Synthetic visible-information condition",
+            "Synthetic opening-lead condition"
+          ],
+          "exceptions": [
+            "Synthetic no-contract-guarantee limit",
+            "Synthetic entry-and-tempo limit"
+          ]
+        },
+        "origin": "AUTHOR",
+        "rights": "INTERNAL_ALLOWED",
+        "errata_ids": [],
+        "object_id": "BOOK-3130477e4dd706848952a57727b7c6e502c76618217bcd8ebe720b5f7c7c039b",
+        "verification": "M0",
+        "review": "NOT_REVIEWED"
+      },
+      {
+        "kind": "ATOM",
+        "anchor": {
+          "pdf_page_index": 1,
+          "printed_page_label": "iv",
+          "bbox": [
+            0.1,
+            0.2,
+            0.8,
+            0.9
+          ],
+          "bbox_units": "NORMALIZED_TOP_LEFT",
+          "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256",
+          "segment_sha256": "297426f2d4007f0503d7989702f35431df464510d6bb3a5a7eb931843e4bcbb4"
+        },
+        "content": {
+          "statement": "Synthetic conditional claim.",
+          "domain": "CARD_PLAY",
+          "conditions": [
+            "Synthetic visible-information condition",
+            "Synthetic opening-lead condition"
+          ],
+          "exceptions": [
+            "Synthetic no-contract-guarantee limit",
+            "Synthetic entry-and-tempo limit"
+          ]
+        },
+        "origin": "AUTHOR",
+        "rights": "INTERNAL_ALLOWED",
+        "errata_ids": [],
+        "object_id": "BOOK-95c5ad2730a5f66ed15fc3ee3154d6d3a4482f4720494e89a6d9dacc9d217847",
+        "verification": "M0",
+        "review": "NOT_REVIEWED"
+      },
+      {
+        "kind": "ATOM",
+        "anchor": {
+          "pdf_page_index": 2,
+          "printed_page_label": "iv",
+          "bbox": [
+            0.1,
+            0.2,
+            0.8,
+            0.9
+          ],
+          "bbox_units": "NORMALIZED_TOP_LEFT",
+          "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256",
+          "segment_sha256": "297426f2d4007f0503d7989702f35431df464510d6bb3a5a7eb931843e4bcbb4"
+        },
+        "content": {
+          "statement": "Synthetic conditional claim.",
+          "domain": "CARD_PLAY",
+          "conditions": [
+            "Synthetic visible-information condition",
+            "Synthetic opening-lead condition"
+          ],
+          "exceptions": [
+            "Synthetic no-contract-guarantee limit",
+            "Synthetic entry-and-tempo limit"
+          ]
+        },
+        "origin": "AUTHOR",
+        "rights": "INTERNAL_ALLOWED",
+        "errata_ids": [],
+        "object_id": "BOOK-6babe0547b62ef889000af21fe861472ef83f221f697addb8b777b11860af360",
+        "verification": "M0",
+        "review": "NOT_REVIEWED"
+      }
+    ],
+    "relations": [],
+    "legacy_ids": {},
+    "processing": "STAGED",
+    "publication": "NOT_PUBLISHED"
+  },
+  "review_receipt": {
+    "schema": "book-source-review-v1",
+    "review_id": "SYNTHETIC-REVIEW",
+    "reviewer": "synthetic-test-reviewer",
+    "independence_group": "synthetic-formal-check",
+    "assurance": "I2",
+    "rendition_sha256": "aca6ce205086b21d5847c5b9ec5e31c842a19cb753a250b21de3c7c33967cd49",
+    "source_size_bytes": 42,
+    "source_page_count": 3,
+    "claims": [
+      {
+        "object_id": "BOOK-3130477e4dd706848952a57727b7c6e502c76618217bcd8ebe720b5f7c7c039b",
+        "content_sha256": "4e116cb2074a6c3aa697986f9a18ca649464bef8300daeadecf565b35380570d",
+        "anchor_sha256": "681a5d4fd12fcee2b83c22f60102248e95341322be442ba1af8d860409597e73",
+        "verification": "M1",
+        "checks": {
+          "conditions": "PASS",
+          "semantic": "PASS",
+          "errata": "PASS",
+          "internal_rights": "PASS",
+          "semantic_dedup": "PASS",
+          "source_anchor": "PASS",
+          "counterexample": "PASS",
+          "positive_example": "PASS",
+          "exceptions": "PASS"
+        },
+        "positive_example_ref": "synthetic-positive",
+        "counterexample_ref": "synthetic-negative",
+        "review_evidence_ref": "synthetic-review"
+      },
+      {
+        "object_id": "BOOK-95c5ad2730a5f66ed15fc3ee3154d6d3a4482f4720494e89a6d9dacc9d217847",
+        "content_sha256": "4e116cb2074a6c3aa697986f9a18ca649464bef8300daeadecf565b35380570d",
+        "anchor_sha256": "d1b5b789494430b1e0fd678cec878da112fb809cd0ce1dc6ee4704e5804d7fae",
+        "verification": "M1",
+        "checks": {
+          "conditions": "PASS",
+          "semantic": "PASS",
+          "errata": "PASS",
+          "internal_rights": "PASS",
+          "semantic_dedup": "PASS",
+          "source_anchor": "PASS",
+          "counterexample": "PASS",
+          "positive_example": "PASS",
+          "exceptions": "PASS"
+        },
+        "positive_example_ref": "synthetic-positive",
+        "counterexample_ref": "synthetic-negative",
+        "review_evidence_ref": "synthetic-review"
+      },
+      {
+        "object_id": "BOOK-6babe0547b62ef889000af21fe861472ef83f221f697addb8b777b11860af360",
+        "content_sha256": "4e116cb2074a6c3aa697986f9a18ca649464bef8300daeadecf565b35380570d",
+        "anchor_sha256": "31ccf789e841cafb3d8cd88f9c173ef0c1f0360e87bdca6ce07be3e7e0cbcfbc",
+        "verification": "M1",
+        "checks": {
+          "conditions": "PASS",
+          "semantic": "PASS",
+          "errata": "PASS",
+          "internal_rights": "PASS",
+          "semantic_dedup": "PASS",
+          "source_anchor": "PASS",
+          "counterexample": "PASS",
+          "positive_example": "PASS",
+          "exceptions": "PASS"
+        },
+        "positive_example_ref": "synthetic-positive",
+        "counterexample_ref": "synthetic-negative",
+        "review_evidence_ref": "synthetic-review"
+      }
+    ]
+  },
+  "packet": {
+    "content_contract": "book-world-reviewed-v1",
+    "import_state": {
+      "knowledge_import_committed": false,
+      "observed_import_receipt": null
+    },
+    "source": {
+      "source_id": "SYNTHETIC-SOURCE",
+      "edition_id": "SYNTHETIC-EDITION",
+      "rendition_sha256": "aca6ce205086b21d5847c5b9ec5e31c842a19cb753a250b21de3c7c33967cd49",
+      "title": "Synthetic bridge fixture (not a published book)",
+      "locator": "https://example.invalid/synthetic-book",
+      "page_count": 3,
+      "registry_source_id": "22222222-2222-2222-2222-222222222222"
+    },
+    "run": {
+      "run_id": "synthetic-run-1",
+      "model_version": "none",
+      "prompt_version": "none"
+    },
+    "review_evidence_summary": {
+      "synthetic_only": true
+    },
+    "expected_import_receipt": {
+      "schema": "book-world-reviewed-v1",
+      "changeset_id": null,
+      "version_ids": [
+        null,
+        null,
+        null
+      ],
+      "new_versions": null,
+      "authority_lane": "WORLD_EXTERNAL",
+      "publication_hash": null,
+      "outbox_delivery": "REQUIRES_READBACK",
+      "canon_activation_performed": false,
+      "dry_run": false,
+      "committed": null
+    },
+    "cards": [
+      {
+        "card_label": "E01",
+        "candidate_id": "SYNTHETIC-E01",
+        "name": "Synthetic E01",
+        "skill": "Synthetic skill",
+        "stable_key": "BOOK-3130477e4dd706848952a57727b7c6e502c76618217bcd8ebe720b5f7c7c039b",
+        "object_id": "BOOK-3130477e4dd706848952a57727b7c6e502c76618217bcd8ebe720b5f7c7c039b",
+        "statement": "Synthetic conditional claim.",
+        "conditions": [
+          "Synthetic visible-information condition",
+          "Synthetic opening-lead condition"
+        ],
+        "exceptions": [
+          "Synthetic no-contract-guarantee limit",
+          "Synthetic entry-and-tempo limit"
+        ],
+        "origin": "AUTHOR",
+        "verification": "M1",
+        "citation": {
+          "source_id": "SYNTHETIC-SOURCE",
+          "edition_id": "SYNTHETIC-EDITION",
+          "title": "Synthetic bridge fixture (not a published book)",
+          "locator": "https://example.invalid/synthetic-book",
+          "rendition_sha256": "aca6ce205086b21d5847c5b9ec5e31c842a19cb753a250b21de3c7c33967cd49",
+          "pdf_page_index": 0,
+          "printed_page_label": "iv",
+          "bbox": [
+            0.1,
+            0.2,
+            0.8,
+            0.9
+          ],
+          "bbox_units": "NORMALIZED_TOP_LEFT",
+          "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256",
+          "segment_sha256": "297426f2d4007f0503d7989702f35431df464510d6bb3a5a7eb931843e4bcbb4"
+        },
+        "source_pages": {
+          "pdf_page_index_0based": 0,
+          "pdf_page_number_1based": 1,
+          "printed_page_label": "iv"
+        },
+        "source_review_id": "SYNTHETIC-REVIEW",
+        "knowledge_item_id": null,
+        "knowledge_version_id": null
+      },
+      {
+        "card_label": "E02",
+        "candidate_id": "SYNTHETIC-E02",
+        "name": "Synthetic E02",
+        "skill": "Synthetic skill",
+        "stable_key": "BOOK-95c5ad2730a5f66ed15fc3ee3154d6d3a4482f4720494e89a6d9dacc9d217847",
+        "object_id": "BOOK-95c5ad2730a5f66ed15fc3ee3154d6d3a4482f4720494e89a6d9dacc9d217847",
+        "statement": "Synthetic conditional claim.",
+        "conditions": [
+          "Synthetic visible-information condition",
+          "Synthetic opening-lead condition"
+        ],
+        "exceptions": [
+          "Synthetic no-contract-guarantee limit",
+          "Synthetic entry-and-tempo limit"
+        ],
+        "origin": "AUTHOR",
+        "verification": "M1",
+        "citation": {
+          "source_id": "SYNTHETIC-SOURCE",
+          "edition_id": "SYNTHETIC-EDITION",
+          "title": "Synthetic bridge fixture (not a published book)",
+          "locator": "https://example.invalid/synthetic-book",
+          "rendition_sha256": "aca6ce205086b21d5847c5b9ec5e31c842a19cb753a250b21de3c7c33967cd49",
+          "pdf_page_index": 1,
+          "printed_page_label": "iv",
+          "bbox": [
+            0.1,
+            0.2,
+            0.8,
+            0.9
+          ],
+          "bbox_units": "NORMALIZED_TOP_LEFT",
+          "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256",
+          "segment_sha256": "297426f2d4007f0503d7989702f35431df464510d6bb3a5a7eb931843e4bcbb4"
+        },
+        "source_pages": {
+          "pdf_page_index_0based": 1,
+          "pdf_page_number_1based": 2,
+          "printed_page_label": "iv"
+        },
+        "source_review_id": "SYNTHETIC-REVIEW",
+        "knowledge_item_id": null,
+        "knowledge_version_id": null
+      },
+      {
+        "card_label": "E03",
+        "candidate_id": "SYNTHETIC-E03",
+        "name": "Synthetic E03",
+        "skill": "Synthetic skill",
+        "stable_key": "BOOK-6babe0547b62ef889000af21fe861472ef83f221f697addb8b777b11860af360",
+        "object_id": "BOOK-6babe0547b62ef889000af21fe861472ef83f221f697addb8b777b11860af360",
+        "statement": "Synthetic conditional claim.",
+        "conditions": [
+          "Synthetic visible-information condition",
+          "Synthetic opening-lead condition"
+        ],
+        "exceptions": [
+          "Synthetic no-contract-guarantee limit",
+          "Synthetic entry-and-tempo limit"
+        ],
+        "origin": "AUTHOR",
+        "verification": "M1",
+        "citation": {
+          "source_id": "SYNTHETIC-SOURCE",
+          "edition_id": "SYNTHETIC-EDITION",
+          "title": "Synthetic bridge fixture (not a published book)",
+          "locator": "https://example.invalid/synthetic-book",
+          "rendition_sha256": "aca6ce205086b21d5847c5b9ec5e31c842a19cb753a250b21de3c7c33967cd49",
+          "pdf_page_index": 2,
+          "printed_page_label": "iv",
+          "bbox": [
+            0.1,
+            0.2,
+            0.8,
+            0.9
+          ],
+          "bbox_units": "NORMALIZED_TOP_LEFT",
+          "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256",
+          "segment_sha256": "297426f2d4007f0503d7989702f35431df464510d6bb3a5a7eb931843e4bcbb4"
+        },
+        "source_pages": {
+          "pdf_page_index_0based": 2,
+          "pdf_page_number_1based": 3,
+          "printed_page_label": "iv"
+        },
+        "source_review_id": "SYNTHETIC-REVIEW",
+        "knowledge_item_id": null,
+        "knowledge_version_id": null
+      }
+    ]
+  },
+  "trusted_authorization": {
+    "schema": "book-world-outbox-authorization-v1",
+    "authorization_ref": "SYNTHETIC-CANONICAL-OPERATOR-NOT-REAL",
+    "decision": "allowed",
+    "purpose": "BOOK_WORLD_OUTBOX_DELIVERY_ONLY",
+    "scope": {
+      "school_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "22222222-2222-2222-2222-222222222222",
+      "run": {
+        "run_id": "synthetic-run-1",
+        "model_version": "none",
+        "prompt_version": "none"
+      },
+      "publication_hash": "533ae56a48f5a4206c7db842056e5d4ff2ebc977e226fc799ddeb894e249f4c5",
+      "stable_keys": [
+        "BOOK-3130477e4dd706848952a57727b7c6e502c76618217bcd8ebe720b5f7c7c039b",
+        "BOOK-95c5ad2730a5f66ed15fc3ee3154d6d3a4482f4720494e89a6d9dacc9d217847",
+        "BOOK-6babe0547b62ef889000af21fe861472ef83f221f697addb8b777b11860af360"
+      ],
+      "version_ids": [
+        "a50dc903-76e6-57a3-a966-374f001539e6",
+        "5ae13abf-6eb0-5eb5-a3c6-186dcbb8bde2",
+        "c67416a8-1d44-5539-a871-dbe1ab03e26f"
+      ],
+      "recorded_changeset_id": "7ee2c624-af4b-56cd-8ded-b6890f0db198"
+    }
+  },
+  "recorded_payload": {
+    "schema": "book-world-reviewed-v1",
+    "publication_hash": "533ae56a48f5a4206c7db842056e5d4ff2ebc977e226fc799ddeb894e249f4c5",
+    "run": {
+      "run_id": "synthetic-run-1",
+      "model_version": "none",
+      "prompt_version": "none"
+    },
+    "source_id": "22222222-2222-2222-2222-222222222222",
+    "stable_keys": [
+      "BOOK-3130477e4dd706848952a57727b7c6e502c76618217bcd8ebe720b5f7c7c039b",
+      "BOOK-95c5ad2730a5f66ed15fc3ee3154d6d3a4482f4720494e89a6d9dacc9d217847",
+      "BOOK-6babe0547b62ef889000af21fe861472ef83f221f697addb8b777b11860af360"
+    ],
+    "version_ids": [
+      "a50dc903-76e6-57a3-a966-374f001539e6",
+      "5ae13abf-6eb0-5eb5-a3c6-186dcbb8bde2",
+      "c67416a8-1d44-5539-a871-dbe1ab03e26f"
+    ],
+    "event_contract": "book-world-recorded-v2",
+    "publication_authorization_status": "allowed"
+  },
+  "published_payload": {
+    "schema": "book-world-delivery-v1",
+    "publication_hash": "533ae56a48f5a4206c7db842056e5d4ff2ebc977e226fc799ddeb894e249f4c5",
+    "catalog_receipt_ref": "SYNTHETIC-CANONICAL-CATALOG-NOT-REAL",
+    "event_contract": "book-world-published-v2",
+    "publication_authorization_status": "allowed",
+    "recorded_event_id": "f462137f-bf7f-516c-ab35-2799a4739ee7",
+    "recorded_changeset_id": "7ee2c624-af4b-56cd-8ded-b6890f0db198",
+    "recorded_payload_hash": "4d04c81285cebe79d23474c71d3d431ea8158e05868065c1596fe71c4c3b9839"
+  },
+  "import_receipt": {
+    "schema": "book-world-reviewed-v1",
+    "changeset_id": "7ee2c624-af4b-56cd-8ded-b6890f0db198",
+    "version_ids": [
+      "a50dc903-76e6-57a3-a966-374f001539e6",
+      "5ae13abf-6eb0-5eb5-a3c6-186dcbb8bde2",
+      "c67416a8-1d44-5539-a871-dbe1ab03e26f"
+    ],
+    "new_versions": 3,
+    "authority_lane": "WORLD_EXTERNAL",
+    "publication_hash": "533ae56a48f5a4206c7db842056e5d4ff2ebc977e226fc799ddeb894e249f4c5",
+    "outbox_delivery": "REQUIRES_READBACK",
+    "canon_activation_performed": false,
+    "dry_run": false,
+    "committed": true,
+    "receipt_contract": "book-world-import-receipt-v2",
+    "publication_authorization_status": "allowed"
+  },
+  "publication_receipt": {
+    "changeset_id": "9b6b53cb-cce0-5b9b-bdf9-efea349ebf47",
+    "version_ids": [
+      "a50dc903-76e6-57a3-a966-374f001539e6",
+      "5ae13abf-6eb0-5eb5-a3c6-186dcbb8bde2",
+      "c67416a8-1d44-5539-a871-dbe1ab03e26f"
+    ],
+    "publication": "WORLD_VERIFIED",
+    "canon_activation_performed": false,
+    "dry_run": false,
+    "committed": true,
+    "receipt_contract": "book-world-publication-receipt-v2",
+    "publication_authorization_status": "allowed"
+  }
+}

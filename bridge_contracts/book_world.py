@@ -156,6 +156,14 @@ def validate_book_world_evidence(content: dict, provenance: dict) -> None:
     claims = [c for c in review_claims if c["object_id"] == content["source_object_id"]]
     _require(len(claims) == 1 and claims[0].get("checks") == {k: "PASS" for k in CHECKS}
              and receipt.get("assurance") in {"I2", "I3", "I4"}, "BOOK_WORLD_REVIEW")
+    # Rehashing a stored projection cannot substitute for the original review.
+    reviewed_content = {k: content[k] for k in ("statement", "domain", "conditions", "exceptions")}
+    reviewed_anchor = {k: citation[k] for k in ("pdf_page_index", "printed_page_label", "bbox",
+                                               "bbox_units", "segment_sha256", "segment_hash_method")}
+    _require(claims[0]["content_sha256"] == digest(reviewed_content)
+             and claims[0]["anchor_sha256"] == digest(reviewed_anchor)
+             and claims[0]["verification"] in ("M1", "M2")
+             and content["verification"] == claims[0]["verification"], "BOOK_WORLD_CLAIM_PROOF_BINDING")
 
 
 def render_teacher_book(item: dict) -> dict:
@@ -170,6 +178,7 @@ def render_teacher_book(item: dict) -> dict:
     validate_book_world_evidence(content, provenance)
     receipt, citation = provenance["review_receipt"], content["citation"]
     identity_review = provenance.get("source_identity_review")
+    _require(item["stable_key"] == content["source_object_id"], "BOOK_WORLD_VERSION_HASH")
     _require(provenance.get("version_hash") == publication_version(
         {"stable_key": item["stable_key"], "content": content}, receipt, identity_review), "BOOK_WORLD_VERSION_HASH")
     sources = item.get("sources")

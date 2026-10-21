@@ -17,6 +17,8 @@ from types import ModuleType
 import unittest
 from unittest.mock import patch
 import uuid
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 
 CHANGESET = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -33,7 +35,8 @@ class OfflineConnection:
         self.db.execute("ATTACH DATABASE ':memory:' AS public")
         self.db.executescript("""
             CREATE TABLE public.domain_event (
-                event_id TEXT PRIMARY KEY, payload TEXT, event_position INTEGER
+                event_id TEXT PRIMARY KEY, payload TEXT, event_position INTEGER,
+                event_type TEXT, school_id TEXT, changeset_id TEXT
             );
             CREATE TABLE public.outbox_message (
                 outbox_id TEXT PRIMARY KEY, event_id TEXT, changeset_id TEXT,
@@ -46,12 +49,15 @@ class OfflineConnection:
         self.rolled_back = False
         self.selection_error = False
         self.missing_position = False
+        self.autocommit = False
+        self.info = SimpleNamespace(transaction_status=0)
 
     def seed(self, index, payload, *, changeset=CHANGESET, position=None):
         key = str(uuid.UUID(int=100 + index))
         self.db.execute(
-            "INSERT INTO public.domain_event VALUES (?, ?, ?)",
-            (key, json.dumps(payload), position),
+            "INSERT INTO public.domain_event VALUES (?, ?, ?, ?, ?, ?)",
+            (key, json.dumps(payload), position, "VideoTechnicalRecorded",
+             str(uuid.UUID(int=9)), str(changeset)),
         )
         self.db.execute(
             "INSERT INTO public.outbox_message VALUES (?, ?, ?, ?, ?, ?)",
@@ -104,6 +110,14 @@ class OfflineConnection:
     def cursor(self):
         return OfflineCursor(self)
 
+    @contextmanager
+    def transaction(self):
+        self.info.transaction_status = 2
+        try:
+            yield
+        finally:
+            self.info.transaction_status = 0
+
     def commit(self):
         self.commit_calls += 1
         self.db.commit()
@@ -130,7 +144,9 @@ class OfflineCursor:
         self.cursor.execute(sql, tuple(str(p) if isinstance(p, uuid.UUID) else p for p in params))
 
     def fetchall(self):
-        return self.cursor.fetchall()
+        rows = self.cursor.fetchall()
+        return [(*row[:-1], json.loads(row[-1])) if len(row) == 7 and row[-1] is not None
+                else row for row in rows]
 
     def fetchone(self):
         return self.cursor.fetchone()
