@@ -1,5 +1,5 @@
 """Independent I2 synthetic rejection tests. No database, filesystem corpus, or network."""
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from types import SimpleNamespace
 import pytest
@@ -55,7 +55,16 @@ def replay_fixture(monkeypatch, drift):
     cursor = ReplayCursor(row, item_id)
     monkeypatch.setattr(persistence, "source_locator", lambda _cur, _school, _source, locator, **kw: locator)
     connection = SimpleNamespace(info=SimpleNamespace(transaction_status=0),
-        transaction=lambda **kw: nullcontext(), cursor=lambda **kw: nullcontext(cursor))
+        cursor=lambda **kw: nullcontext(cursor))
+    @contextmanager
+    def transaction(**kwargs):
+        assert connection.info.transaction_status == 0
+        connection.info.transaction_status = 2
+        try:
+            yield
+        finally:
+            connection.info.transaction_status = 0
+    connection.transaction = transaction
     return connection, value, receipt, cursor
 
 @pytest.mark.parametrize("field,bad", [

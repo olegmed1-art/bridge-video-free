@@ -28,6 +28,9 @@ def persist_book_world(connection, bundle: dict, receipt: dict, *, school_id: st
                        source_id: str, before_commit=None, dry_run=False, identity_receipt=None,
                        delivery_authorization=None) -> dict:
     """Legacy wrapper retains transaction ownership and exact return shape."""
+    # Reject inadmissible material before inspecting or opening a transaction.
+    # The in-transaction API still validates independently for its direct callers.
+    build_world_publication(bundle, receipt, identity_receipt)
     if type(dry_run) is not bool or connection.info.transaction_status != 0:
         raise ValueError("BOOK_WORLD_REQUIRES_IDLE_CONNECTION")
     with connection.transaction(force_rollback=dry_run):

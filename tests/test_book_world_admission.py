@@ -3,7 +3,7 @@
 The cursor scripts delivered/stored rows, not PostgreSQL semantics or delivery.
 Review receipts are test evidence only, never a real source-review attestation.
 """
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -89,7 +89,16 @@ def publish(monkeypatch, items, delivery, cursor):
     # Source binding is supplied, not tested by this local cursor double.
     monkeypatch.setattr(persistence, "source_locator", lambda _cur, _school, _source, locator, **kw: locator)
     connection = SimpleNamespace(info=SimpleNamespace(transaction_status=0),
-        transaction=lambda **kw: nullcontext(), cursor=lambda **kw: nullcontext(cursor))
+        cursor=lambda **kw: nullcontext(cursor))
+    @contextmanager
+    def transaction(**kwargs):
+        assert connection.info.transaction_status == 0
+        connection.info.transaction_status = 2
+        try:
+            yield
+        finally:
+            connection.info.transaction_status = 0
+    connection.transaction = transaction
     return persistence.publish_book_world(connection, school_id=SCHOOL,
         changeset_id=CHANGESET, delivery_receipt=delivery)
 
