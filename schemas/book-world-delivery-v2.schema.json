@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bridge:book-world-delivery-v2",
+  "title": "Canonical flat Books delivery v2",
+  "$defs": {
+    "recorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_contract",
+        "publication_authorization_status",
+        "publication_hash",
+        "run",
+        "schema",
+        "source_id",
+        "stable_keys",
+        "version_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "book-world-reviewed-v1"
+        },
+        "event_contract": {
+          "const": "book-world-recorded-v2"
+        },
+        "publication_authorization_status": {
+          "enum": [
+            "allowed",
+            "blocked",
+            "unknown"
+          ]
+        },
+        "publication_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "run": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "model_version",
+            "prompt_version",
+            "run_id"
+          ],
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "\\S"
+            },
+            "model_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "\\S"
+            },
+            "prompt_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "\\S"
+            }
+          }
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "stable_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^BOOK-[0-9a-f]{64}$"
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "version_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        }
+      }
+    },
+    "published": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalog_receipt_ref",
+        "event_contract",
+        "publication_authorization_status",
+        "publication_hash",
+        "recorded_changeset_id",
+        "recorded_event_id",
+        "recorded_payload_hash",
+        "schema"
+      ],
+      "properties": {
+        "schema": {
+          "const": "book-world-delivery-v1"
+        },
+        "event_contract": {
+          "const": "book-world-published-v2"
+        },
+        "publication_authorization_status": {
+          "enum": [
+            "allowed",
+            "blocked",
+            "unknown"
+          ]
+        },
+        "publication_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "catalog_receipt_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        },
+        "recorded_event_id": {
+          "type": "string",
+          "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "recorded_changeset_id": {
+          "type": "string",
+          "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "recorded_payload_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "import_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_lane",
+        "canon_activation_performed",
+        "changeset_id",
+        "committed",
+        "dry_run",
+        "new_versions",
+        "outbox_delivery",
+        "publication_authorization_status",
+        "publication_hash",
+        "receipt_contract",
+        "schema",
+        "version_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "book-world-reviewed-v1"
+        },
+        "changeset_id": {
+          "type": "string",
+          "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "version_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "new_versions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "authority_lane": {
+          "const": "WORLD_EXTERNAL"
+        },
+        "publication_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "outbox_delivery": {
+          "const": "REQUIRES_READBACK"
+        },
+        "canon_activation_performed": {
+          "type": "boolean"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "committed": {
+          "type": "boolean"
+        },
+        "receipt_contract": {
+          "const": "book-world-import-receipt-v2"
+        },
+        "publication_authorization_status": {
+          "enum": [
+            "allowed",
+            "blocked",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "publication_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canon_activation_performed",
+        "changeset_id",
+        "committed",
+        "dry_run",
+        "publication",
+        "publication_authorization_status",
+        "receipt_contract",
+        "version_ids"
+      ],
+      "properties": {
+        "changeset_id": {
+          "type": "string",
+          "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "version_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "publication": {
+          "enum": [
+            "WORLD_VERIFIED",
+            "DRY_RUN_NOT_PUBLISHED"
+          ]
+        },
+        "canon_activation_performed": {
+          "type": "boolean"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "committed": {
+          "type": "boolean"
+        },
+        "receipt_contract": {
+          "const": "book-world-publication-receipt-v2"
+        },
+        "publication_authorization_status": {
+          "enum": [
+            "allowed",
+            "blocked",
+            "unknown"
+          ]
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/recorded"
+    },
+    {
+      "$ref": "#/$defs/published"
+    },
+    {
+      "$ref": "#/$defs/import_receipt"
+    },
+    {
+      "$ref": "#/$defs/publication_receipt"
+    }
+  ],
+  "$comment": "Cross-field scope, paired order, digest, causal equality and trusted authorization require Python validation; JSON Schema alone grants no authority."
+}

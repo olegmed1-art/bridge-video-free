@@ -20,8 +20,22 @@ def check_workflow(text: str) -> None:
     if not job_match:
         raise ValueError("missing production smoke job")
     job = job_match.group(1)
-    if "    if: github.event_name == 'push' && github.ref == 'refs/heads/main'\n" not in job:
+    if "    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.api-static.result == 'success' && needs.api-static.outputs.production_smoke_scope_status == 'run' && needs.api-static.outputs.allow_production_smoke == 'true'\n" not in job:
         raise ValueError("production smoke must be restricted to main push")
+    if "allow_production_smoke: ${{ steps.smoke-scope.outputs.allow_smoke }}" not in text:
+        raise ValueError("production smoke needs the no-secret scope output")
+    if "production_smoke_scope_status: ${{ steps.smoke-scope.outputs.scope_status }}" not in text:
+        raise ValueError("production smoke needs explicit successful classification")
+    scope_match = re.search(r"^      - name: Classify complete main-push diff before production credentials\n(.*?)(?=^      - name: |\Z)", text, re.M | re.S)
+    if not scope_match:
+        raise ValueError("missing classifier step")
+    classification = scope_match.group(1)
+    if ('        if: github.event_name == \'push\' && github.ref == \'refs/heads/main\'\n' not in classification
+            or '          set -euo pipefail\n' not in classification
+            or '          python -I -B tools/l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT"\n' not in classification
+            or re.search(r"^\s+continue-on-error:", classification, re.M)
+            or '||' in classification or ';' in classification):
+        raise ValueError("scope classification must precede secret-bearing smoke")
     if "    needs: api-static\n" not in job:
         raise ValueError("production smoke must wait for static checks")
     if "    timeout-minutes: 2\n" not in job:
@@ -54,6 +68,12 @@ def check_workflow(text: str) -> None:
         if f"curl --fail --silent --connect-timeout 2 --max-time {limit} " not in steps[name]:
             raise ValueError("HTTP smoke requests need explicit deadlines")
     start = steps["Start API"]
+    if "from tools.api_smoke_session import install; install(db); import uvicorn;" not in start:
+        raise ValueError("bounded sessions must be installed before app import")
+    if text.count("      - 'tools/api_smoke_session.py'") != 2 or text.count("      - 'tests/test_api_smoke_session.py'") != 2:
+        raise ValueError("smoke session changes must trigger PR and main checks")
+    if "          python -B tests/test_api_smoke_session.py\n" not in text:
+        raise ValueError("session regression must run before smoke")
     if "db.CONNECT_ATTEMPTS = 1;" not in start or "workers=1)" not in start:
         raise ValueError("only the CI API process must use one connection attempt")
     if "if (: >/dev/tcp/127.0.0.1/8000) 2>/dev/null; then\n" not in start:
@@ -74,6 +94,15 @@ class SmokeWorkflowTests(unittest.TestCase):
 
     def test_dangerous_mutations_are_rejected(self):
         mutations = (
+            ("install(db); import uvicorn;", "import uvicorn;"),
+            ("          python -B tests/test_api_smoke_session.py\n", ""),
+            (" && needs.api-static.outputs.allow_production_smoke == 'true'", ""),
+            ("allow_production_smoke: ${{ steps.smoke-scope.outputs.allow_smoke }}", "allow_production_smoke: true"),
+            (" && needs.api-static.result == 'success'", ""),
+            (" && needs.api-static.outputs.production_smoke_scope_status == 'run'", ""),
+            ("production_smoke_scope_status: ${{ steps.smoke-scope.outputs.scope_status }}", "production_smoke_scope_status: run"),
+            ("        id: smoke-scope\n", "        id: smoke-scope\n        continue-on-error: true\n"),
+            ('l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT"\n', 'l1_ci_smoke_scope.py >> "$GITHUB_OUTPUT" || true\n'),
             ("github.event_name == 'push' && github.ref == 'refs/heads/main'", "github.event_name == 'pull_request'"),
             ("    needs: api-static\n", ""),
             ("          VERCEL_ENV: production\n", ""),
@@ -118,15 +147,19 @@ class SmokeWorkflowTests(unittest.TestCase):
                                    psycopg=types.SimpleNamespace(connect=connect, OperationalError=error))
                 exec(code, db.__dict__)
                 uvicorn = types.ModuleType("uvicorn")
+                bounded = types.ModuleType("tools.api_smoke_session")
+                bounded.install = MagicMock()
                 uvicorn.run = MagicMock(side_effect=lambda *args, **kwargs: db._open_connection())
                 with patch.dict(sys.modules, {"bridge_school_api":package,
-                                              "bridge_school_api.db":db, "uvicorn":uvicorn}):
+                                              "bridge_school_api.db":db, "uvicorn":uvicorn,
+                                              "tools.api_smoke_session":bounded}):
                     if fail:
                         with self.assertRaises(error):
                             exec(launcher, {})
                     else:
                         exec(launcher, {})
                 uvicorn.run.assert_called_once_with("app:app", host="127.0.0.1", port=8000, workers=1)
+                bounded.install.assert_called_once_with(db)
                 connect.assert_called_once_with("synthetic-dsn", connect_timeout=10,
                                                 application_name="bridge-school-api", row_factory=db.dict_row)
                 sleep.assert_not_called()
@@ -134,3 +167,4 @@ class SmokeWorkflowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

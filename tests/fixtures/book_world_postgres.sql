@@ -31,12 +31,16 @@ CREATE TABLE IF NOT EXISTS public.domain_event (
  aggregate_type text NOT NULL, aggregate_version bigint NOT NULL CHECK(aggregate_version>0),
  changeset_id uuid NOT NULL REFERENCES public.changeset, correlation_id uuid NOT NULL,
  idempotency_namespace text NOT NULL, idempotency_key text NOT NULL, payload_hash text NOT NULL,
- payload jsonb NOT NULL, UNIQUE(school_id,aggregate_id,aggregate_version),
+ payload jsonb NOT NULL, event_position bigint, UNIQUE(school_id,aggregate_id,aggregate_version),
  UNIQUE(school_id,idempotency_namespace,idempotency_key,payload_hash));
 CREATE TABLE IF NOT EXISTS public.outbox_message (
- outbox_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ outbox_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  changeset_id uuid NOT NULL REFERENCES public.changeset,
- event_id uuid NOT NULL UNIQUE REFERENCES public.domain_event, status text NOT NULL DEFAULT 'pending');
+ event_id uuid NOT NULL UNIQUE REFERENCES public.domain_event, status text NOT NULL DEFAULT 'pending',
+ created_at timestamptz NOT NULL DEFAULT now(), published_at timestamptz,
+ attempt_count integer NOT NULL DEFAULT 0, last_error text);
+CREATE TABLE IF NOT EXISTS public.event_position_allocator (
+ partition_key text PRIMARY KEY, last_position bigint NOT NULL DEFAULT 0 CHECK(last_position>=0));
 CREATE TABLE IF NOT EXISTS public.canon_activation (
  canon_activation_id uuid PRIMARY KEY, knowledge_version_id uuid NOT NULL REFERENCES public.knowledge_version);
 

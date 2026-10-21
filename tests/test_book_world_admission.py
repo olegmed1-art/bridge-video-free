@@ -54,14 +54,18 @@ class PublicationCursor:
         self.items, self.delivery = items, delivery
         self.writes = []
         self.rowcount = 1
+        # The real legacy Recorded event has exactly these six fields.
+        self.recorded_payload = {"schema": WORLD_SCHEMA,
+            "publication_hash": delivery["publication_hash"], "source_id": SOURCE,
+            "run": {"run_id": "synthetic-publication-cursor", "model_version": "none", "prompt_version": "synthetic"},
+            "stable_keys": [i["stable_key"] for i in items],
+            "version_ids": [i["item_id"] for i in items]}
 
     def execute(self, statement, params=None):
         sql = " ".join(statement.split())
         self.rows = []
         if sql.startswith("SELECT e.payload"):
-            self.rows = [({"publication_hash": self.delivery["publication_hash"],
-                          "source_id": SOURCE,
-                          "version_ids": [i["item_id"] for i in self.items]},)]
+            self.rows = [(deepcopy(self.recorded_payload),)]
         elif sql.startswith("SELECT kv.knowledge_version_id,kv.content,kv.provenance"):
             self.rows = [(i["item_id"], deepcopy(i["content"]), deepcopy(i["provenance"]))
                          + ((i["stable_key"],) if "ki.stable_key" in sql else ()) for i in self.items]
@@ -156,3 +160,17 @@ def test_related_atom_never_reaches_persistence_connection(relation, incoming):
     assert value == before
     assert value["processing"] == "STAGED"
     assert value["publication"] == "NOT_PUBLISHED"
+
+
+@pytest.mark.parametrize("kind", ["legacy_extra_allowed", "old_nested"])
+def test_malformed_delivered_recorded_cannot_bypass_exact_legacy_fields(monkeypatch, kind):
+    items, delivery = candidate_batch()
+    cursor = PublicationCursor(items, delivery)
+    if kind == "legacy_extra_allowed":
+        cursor.recorded_payload["publication_authorization_status"] = "allowed"
+    else:
+        cursor.recorded_payload = {"schema":"book-world-outbox-v2","event_type":"BookWorldRecorded",
+            "publication_authorization_status":"allowed","payload":cursor.recorded_payload,"authorization":{}}
+    with pytest.raises(ValueError, match="BOOK_WORLD_OUTBOX_SCHEMA"):
+        publish(monkeypatch, items, delivery, cursor)
+    assert cursor.writes == []
