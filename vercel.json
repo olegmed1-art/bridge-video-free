@@ -7,7 +7,7 @@
   },
   "git": {
     "deploymentEnabled": {
-      "main": true,
+      "main": false,
       "preview": false,
       "*": false,
       "codex/shape-generator-v2-20261011": false
