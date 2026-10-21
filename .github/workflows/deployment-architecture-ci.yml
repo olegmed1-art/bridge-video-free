@@ -55,7 +55,7 @@ jobs:
           import json
           x=json.load(open('vercel.json', encoding='utf-8'))
           deployment=(x.get('git') or {}).get('deploymentEnabled') or {}
-          assert deployment.get('main') is True, deployment
+          assert deployment.get('main') is False, deployment
           assert deployment.get('preview') is False, deployment
           assert deployment.get('*') is False, deployment
           PY
