@@ -1,0 +1,50 @@
+{
+  "schema": "factor-identity-source-only-validation/v1",
+  "date_utc": "2026-10-22",
+  "base_main": "a993b69d931f88f84fac0c2dd3d02592f3d2e5ee",
+  "release_status": "HOLD_NOT_INSTALLED",
+  "public_regressions": {
+    "tests": 11,
+    "generic_rank_suit_subcases": 52,
+    "result": "PASS",
+    "dependencies": "stdlib and git; no pixels"
+  },
+  "private_saved_arrays": {
+    "factor_diagnostics": 137,
+    "unchanged": 129,
+    "explicit_tie_unknown": 8,
+    "new_cards_accepted": 0,
+    "tests": 4,
+    "result": "PASS",
+    "original_unknown_history_preserved": 227,
+    "no_pixels_or_new_NCC": true,
+    "not_full_worker_replay": true
+  },
+  "test_first_evidence": {
+    "baseline_failures": 8,
+    "baseline_others_verbatim": 129
+  },
+  "independent_assurance": {
+    "level": "I2_DIFFERENT_EXACT_ALGORITHM",
+    "verdict": "PASS_LIMITED_SOURCE_ONLY_NO_ACTIVATION",
+    "oracle_sha256": "8d803cd624d25c210a7bea1c4873b5598add25aae072a03c897f0d5263e5f4f4",
+    "review_sha256": "944633cb2d6701f3e9b859e62d422dc51c4b72ab0915e66d624d691f20bc00b3",
+    "score_states": 256,
+    "helper_calls": 520,
+    "blocking_findings": []
+  },
+  "human_packet_local_only": {
+    "records": 59,
+    "unique_existing_rasters": 58,
+    "missing_baseline_rasters": 12,
+    "human_labels_created": 0,
+    "sha256": "906b62e34177f62e38b09dedaefc3ee1501d54b19236482d826fa524b06e3838"
+  },
+  "scope_limits": [
+    "Diagnostic source-only; no active main caller",
+    "Pinned frozen observer source; main observer API incompatible",
+    "No precision, false-positive, temporal or full-hand claim",
+    "No Geometry enable, thresholds, authority, queue/lifecycle, server or DB change",
+    "CI status is tracked separately against the published commit"
+  ]
+}

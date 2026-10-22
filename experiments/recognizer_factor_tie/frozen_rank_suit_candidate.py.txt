@@ -1,0 +1,116 @@
+"""Opt-in glyph-factor fallback to the unchanged original corner observer.
+
+All templates come from the original pinned sprite, never the labelled video.
+The original 0.78 score, 0.08 identity margin and 0.85 white-retention gates
+remain. Rank/suit margins are additional gates. No deck or hand completion.
+"""
+from __future__ import annotations
+
+import hashlib
+
+from bridge_vision.bridgit_partial_pixel_observer import (
+    GamblerPartialPixelObserver, _bgr_cell, _normalized_bank,
+)
+from bridge_vision.gambler_classic_reference import CARDS,RANKS,SUITS,decode_card_cells
+
+VERSION="gambler-rank-suit-fallback-candidate-v1"
+RANK_ROI=(4,4,25,26)
+SUIT_ROI=(3,27,20,45)
+MIN_SCORE=.78
+MIN_MARGIN=.08
+MIN_WHITE=.85
+
+
+class GamblerRankSuitCandidate(GamblerPartialPixelObserver):
+    def __init__(self,geometry,*,with_receipts=True):
+        super().__init__(geometry,minimum_score=MIN_SCORE,minimum_margin=MIN_MARGIN,with_receipts=True)
+        self._factor_cache={}
+
+    def _factors(self,sprite):
+        if sprite.sprite_sha256 not in self._factor_cache:
+            cells=decode_card_cells(sprite)
+            templates=[_bgr_cell(cells[c]) for c in CARDS]
+            def bank(box):
+                x0,y0,x1,y1=box
+                return _normalized_bank([p[y0:y1,x0:x1] for p in templates])
+            self._factor_cache[sprite.sprite_sha256]=(bank(RANK_ROI),bank(SUIT_ROI))
+        return self._factor_cache[sprite.sprite_sha256]
+
+    def __call__(self,frame_path,sprite):
+        import cv2
+        import numpy as np
+
+        result=super().__call__(frame_path,sprite)
+        if (sprite.card_width,sprite.card_height)!=(109,147):
+            return dict(result,fallback_status="UNSUPPORTED_NATIVE_SPRITE_SIZE")
+        image=cv2.imread(str(frame_path),cv2.IMREAD_COLOR)
+        rank_bank,suit_bank=self._factors(sprite)
+        size,whole_bank,templates,_=self._bank_cache[sprite.sprite_sha256]
+        radius=3
+        def vector(patch,box):
+            x0,y0,x1,y1=box
+            v=patch[y0:y1,x0:x1].astype(np.float32).ravel()
+            v-=v.mean()
+            v/=max(float(cv2.norm(v)),1e-6)
+            return v
+        remaining=[]
+        for item in result["unknown"]:
+            old=item.get("receipt")
+            if (not old or item["reason"] not in ("CARD_UNCERTAIN","CORNER_OCCLUDED")
+                    or old["best_score"]<MIN_SCORE):
+                remaining.append(item)
+                continue
+            x,y=old["anchor_xy"]
+            best=np.full(52,-2.,np.float32)
+            locations={}
+            rank_max=np.full(13,-2.,np.float32)
+            suit_max=np.full(4,-2.,np.float32)
+            for dy in range(-radius,radius+1):
+                for dx in range(-radius,radius+1):
+                    xx,yy=x+dx,y+dy
+                    if xx<0 or yy<0 or xx+size[0]>image.shape[1] or yy+size[1]>image.shape[0]:
+                        continue
+                    patch=image[yy:yy+size[1],xx:xx+size[0]]
+                    rs=(rank_bank@vector(patch,RANK_ROI)).reshape(4,13).max(axis=0)
+                    ss=(suit_bank@vector(patch,SUIT_ROI)).reshape(4,13).max(axis=1)
+                    rank_max=np.maximum(rank_max,rs)
+                    suit_max=np.maximum(suit_max,ss)
+                    joint=np.minimum(np.tile(rs,4),np.repeat(ss,13))
+                    for index in np.where(joint>best)[0]:
+                        best[index]=joint[index]
+                        locations[int(index)]=(xx,yy,patch.copy())
+            order=np.argsort(-best)
+            winner,runner=int(order[0]),int(order[1])
+            card=CARDS[winner]
+            margin=float(best[winner]-best[runner])
+            ri,si=RANKS.index(card[0]),SUITS.index(card[1])
+            rank_margin=float(rank_max[ri]-max(v for i,v in enumerate(rank_max) if i!=ri))
+            suit_margin=float(suit_max[si]-max(v for i,v in enumerate(suit_max) if i!=si))
+            xx,yy,patch=locations[winner]
+            raw=patch.astype(np.float32).ravel()
+            raw-=raw.mean()
+            raw/=max(float(cv2.norm(raw)),1e-6)
+            whole_score=float((whole_bank@raw)[winner])
+            white=(templates[winner]>=235).all(axis=2)
+            retention=float(((patch>=220).all(axis=2))[white].mean())
+            gates={"score":float(best[winner])>=MIN_SCORE,"identity_margin":margin>=MIN_MARGIN,
+                   "rank_margin":rank_margin>=MIN_MARGIN,"suit_margin":suit_margin>=MIN_MARGIN,
+                   "whole_corner_score":whole_score>=MIN_SCORE,"white_retention":retention>=MIN_WHITE,
+                   "whole_corner_top1_agreement":card==old["best_card"]}
+            detail={"version":VERSION,"best_card":card,"joint_score":float(best[winner]),
+                "identity_margin":margin,"rank_margin":rank_margin,"suit_margin":suit_margin,
+                "whole_corner_score":whole_score,"white_retention":retention,"gates":gates,
+                "rank_roi_local":list(RANK_ROI),"suit_roi_local":list(SUIT_ROI),
+                "roi_xyxy":[xx,yy,xx+size[0],yy+size[1]],"roi_bgr_sha256":hashlib.sha256(patch.tobytes()).hexdigest()}
+            if not all(gates.values()):
+                remaining.append(dict(item,factor_diagnostic=detail))
+                continue
+            receipt=dict(old,fallback_original_receipt=old,factor_diagnostic=detail,
+                roi_xyxy=detail["roi_xyxy"],roi_bgr_sha256=detail["roi_bgr_sha256"],
+                best_card=card,best_score=detail["joint_score"],margin=margin)
+            result["cards"].append({"card":card,"confidence":round(min(float(best[winner]),whole_score,old["best_score"]),4),
+                "box":{"x":x,"y":y,"w":109,"h":147},"receipt":receipt})
+        result["unknown"]=remaining
+        result["fallback_version"]=VERSION
+        result["canonical_promotion_allowed"]=False
+        return result

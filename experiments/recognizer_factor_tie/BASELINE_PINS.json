@@ -1,0 +1,7 @@
+{
+  "frozen_source_sha256": "a042a376b54b9dfb0faabc270cebf175ccce3206da17360035cf814bc13afec3",
+  "fixed_source_sha256": "76bc2692a28a2f0ee668e2a84e71a4fed79bd65fe6a377fd576bb28f43a71938",
+  "helper_sha256": "f404dcb53f8b53236f2e50eb9e2f5dc2ac5482dde7580edb88b0e75cbb748f2d",
+  "patch_sha256": "baa562d349639a02f1a87d6d0b331f5cce6476f6f383c075b6bc0998edaf1752",
+  "scope": "SOURCE_ONLY_NOT_INSTALLED_NOT_WIRED_TO_MAIN_OBSERVER"
+}

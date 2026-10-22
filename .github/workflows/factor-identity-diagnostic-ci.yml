@@ -1,0 +1,34 @@
+name: Factor identity diagnostic CI
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_vision/factor_identity_diagnostic.py'
+      - 'tests/test_factor_identity_diagnostic.py'
+      - 'experiments/recognizer_factor_tie/**'
+      - '.github/workflows/factor-identity-diagnostic-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: factor-identity-diagnostic-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  offline-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify tested commit
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Run offline standard-library regressions
+        run: python3 -B -m unittest discover -s tests -p test_factor_identity_diagnostic.py -v
