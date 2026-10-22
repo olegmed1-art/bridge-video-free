@@ -112,6 +112,12 @@ def audit_tasks(tasks: list[dict]) -> dict:
         else:
             by_task_id[task_id] = task
     for task in tasks:
+        if ("source_root_split" in task and task.get("split") != "derived"
+                and task["source_root_split"] != task.get("split")):
+            ancestry_errors.append({
+                "task_id": task.get("task_id"),
+                "reason": "source_root_split contradicts actual split on a non-derived task",
+            })
         if "crossfit_fold" not in task or "root_deal_id" not in task:
             missing.append(task.get("task_id"))
             continue

@@ -115,6 +115,24 @@ class ConsumerAncestryRegressionTests(unittest.TestCase):
         tasks = self.tasks()
         self.assertEqual(self.load(tasks), {row["task_id"]: row for row in tasks})
 
+    def test_source_root_split_cannot_hide_actual_train_validation_crossing(self):
+        tasks = self.tasks()
+        tasks[0]["split"] = "validation"
+        tasks[1]["source_root_split"] = "validation"
+        with self.assertRaises(ValueError):
+            self.load(tasks)
+
+    def test_source_root_split_is_only_an_override_for_derived_rows(self):
+        for split in ("train", "validation", "sealed_test"):
+            tasks = self.tasks()
+            tasks[0].update(split=split, source_root_split="other")
+            tasks[1].update(split=split, source_root_split="other")
+            with self.subTest(split=split), self.assertRaises(ValueError):
+                self.load(tasks)
+        tasks = self.tasks()
+        tasks[1].update(split="derived", source_root_split="train")
+        self.assertEqual(self.load(tasks), {row["task_id"]: row for row in tasks})
+
 
 def main() -> None:
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
