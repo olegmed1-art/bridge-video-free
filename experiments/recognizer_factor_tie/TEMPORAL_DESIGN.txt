@@ -1,0 +1,58 @@
+Minimal temporal stability contract - DESIGN ONLY - 2026-10-22
+
+Goal: preserve useful repeated observations without moving card hypotheses
+across unproved scene/deal boundaries. Stability never makes a machine card
+human-verified, canonical, or part of a complete hand.
+
+Input evidence
+Keep source byte verification separate from a supplied source SHA claim.
+Each immutable observation has frame SHA, actual PTS and timebase, sequence,
+code/model/layout pins, coordinate space, ROI bytes/pixels SHA and raw output.
+scene_epoch, deal_epoch and slot association start UNKNOWN. A screen side is
+not a canonical seat or a person. A local unknown_index is provenance, not a
+track ID: the same pixel crop can move from index 8 to 9 in adjacent samples.
+
+Boundary policy
+No propagation until source, PTS, scene/deal scope and assignment evidence
+are present. Source/assignment/layout change, a scene/deal boundary, seek,
+PTS discontinuity or an unproved gap closes scope BEFORE the next sample.
+Pause and occlusion do not add votes; continuity across them needs evidence.
+A repeated board number alone does not prove the same deal occurrence.
+Do not carry the last readable board ID through an unreadable observation.
+max_gap_ms is UNCALIBRATED, not a silently invented constant. Sparse saved
+samples with gaps up to 60 seconds cannot qualify temporal continuity.
+
+State and evidence
+Use states CLOSED_UNKNOWN, SCOPED_OBSERVATIONS and CONFLICT_UNKNOWN. Retain
+raw per-frame history, alternatives, association evidence, vetoes and reasons.
+Every track key includes an evidence-bound scope and explicit slot association.
+Identical ROI pixel hashes are one visual evidence unit even at different PTS;
+keep both historical events. Different pixels alone do not prove independence.
+Exact redelivery is idempotent; changed payload under the same event identity
+is a conflict. Replay output depends on pinned inputs/policy, not wall clock or
+delivery order. A conflict or uncertain slot remains UNKNOWN; do not vote a
+disagreement away, move a card across occlusion, fill 13/52 by exclusion, or
+infer physical-card identity from the same screen coordinate.
+
+Bounded future evaluation
+Start with the seven saved observations in sequence 55-61 and one isolated
+earlier control: eight events but seven unique ROI pixel hashes. Freeze human
+card/legibility/slot and scene/deal boundary labels independently. UNKNOWN
+boundary labels keep propagation closed; unreadable cards are unscorable.
+Use separate controls for new scene/deal, pause, seek, UI/layout change,
+source/assignment change, redelivery, conflicting payload and occlusion when
+existing evidence for them is available. Do not synthesize human labels.
+
+Acceptance
+- Zero evidence crosses an unproved scene/deal/source boundary.
+- The duplicate-pixel pair remains two events with one visual evidence unit.
+- Unknown indices do not define tracks; uncertain associations stay UNKNOWN.
+- Frozen inputs and policy reproduce the same history and result.
+- Disagreement/occlusion never completes a hidden hand or promotes authority.
+- Evaluate boundary errors, association errors, abstention and card errors
+  separately on frozen real labels. Current development data cannot measure
+  temporal accuracy, general false positives, full hands or production E2E.
+
+Gates: genuine source/PTS and assignment evidence, scene/deal/slot labels,
+calibrated association and gap policy, implementation review and a separately
+authorized bounded integration. No temporal algorithm is enabled here.

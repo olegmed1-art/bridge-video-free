@@ -1,0 +1,32 @@
+--- a/offline/diagnose_saved37.py
++++ b/offline/diagnose_saved37.py
+@@ -353,17 +353,27 @@
+         delta=abs(original_rebuilt[k]-old[k]);deltas['whole_'+k]=delta;checks['whole_'+k]=delta<=TOLERANCE
+     eligible=(unknown['reason'] in ('CARD_UNCERTAIN','CORNER_OCCLUDED') and old['best_score']>=.78)
+     stored=unknown.get('factor_diagnostic')
++    tie_view=None
++    if stored is not None:
++        from bridge_vision.factor_identity_compat import factor_parity_views
++        tie_view=factor_parity_views(stored,rebuilt,at['rank_scores'],at['suit_scores'])
++        if tie_view['check'] is not None:
++            checks['factor_tie_protocol']=tie_view['check']
++        stored=tie_view['stored_legacy']
+     checks['factor_presence_matches_eligibility']=(stored is not None)==eligible
+-    if stored is not None:
++    if stored is not None and tie_view['check'] is not False:
+         for k in ('best_card','gates','roi_xyxy','roi_bgr_sha256'):checks['factor_'+k]=rebuilt[k]==stored[k]
+         for k in ('joint_score','identity_margin','rank_margin','suit_margin','whole_corner_score','white_retention'):
+             delta=abs(rebuilt[k]-stored[k]);deltas['factor_'+k]=delta;checks['factor_'+k]=delta<=TOLERANCE
+-    return dict(schema='diana20-saved-roi-registration-diagnostic/v1',observation_ref=ref,original_unknown=unknown,
++    result=dict(schema='diana20-saved-roi-registration-diagnostic/v1',observation_ref=ref,original_unknown=unknown,
+         legacy_parity=dict(status='PASS' if all(checks.values()) else 'FAIL',checks=checks,absolute_deltas=deltas,tolerance=TOLERANCE),
+         original_whole_recomputed=original_rebuilt,legacy_factor_recomputed=rebuilt,
+         per_identity_max_joint_scores=best.tolist(),per_identity_winning_registration_indices=locations,
+         per_identity_max_whole_scores=whole_best.tolist(),per_identity_whole_winning_registration_indices=whole_locations,
+         global_rank_max=rank_max.tolist(),global_suit_max=suit_max.tolist(),registrations=regs)
++    if tie_view is not None and tie_view['current_recomputed'] is not None:
++        result['current_recomputed_diagnostic']=tie_view['current_recomputed']
++    return result
+
+
+ def write_new(output,name,value):

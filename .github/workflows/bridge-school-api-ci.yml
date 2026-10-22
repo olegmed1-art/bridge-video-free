@@ -11,6 +11,7 @@ on:
       - 'database/source_identity_persistence.py'
       - 'database/runtime_worker_preflight.py'
       - 'tests/test_api_runtime_bundle.py'
+      - 'tests/test_l1_api_smoke.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_smoke_workflow_contract.py'
       - 'tools/api_smoke_session.py'
