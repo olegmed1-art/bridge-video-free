@@ -49,34 +49,48 @@ def _task_loss(task: dict, prediction: dict, result: dict) -> float:
     raise ValueError(f"Unsupported task type: {task['task_type']}")
 
 
+def _require_complete_cohort(
+    tasks: dict[str, dict],
+    predictions: dict[str, dict],
+    results: dict[str, dict],
+) -> None:
+    """Every model must be evaluated on the complete requested task cohort."""
+    if not tasks:
+        raise ValueError("Evaluation requires a nonempty task cohort")
+    missing_predictions = sorted(task_id for task_id in tasks if predictions.get(task_id) is None)
+    missing_results = sorted(task_id for task_id in tasks if results.get(task_id) is None)
+    if missing_predictions or missing_results:
+        raise ValueError(
+            "Incomplete evaluation cohort: "
+            f"missing predictions={len(missing_predictions)} {missing_predictions[:5]}; "
+            f"missing DDS results={len(missing_results)} {missing_results[:5]}"
+        )
+
+
 def per_task_losses(
     tasks: dict[str, dict],
     predictions: dict[str, dict],
     results: dict[str, dict],
 ) -> dict[str, dict[str, float]]:
+    _require_complete_cohort(tasks, predictions, results)
     out: dict[str, dict[str, float]] = {"contract_tricks": {}, "opening_lead": {}}
     for task_id, task in tasks.items():
-        pred = predictions.get(task_id)
-        result = results.get(task_id)
-        if pred is None or result is None:
-            continue
+        pred = predictions[task_id]
+        result = results[task_id]
         out[task["task_type"]][task_id] = _task_loss(task, pred, result)
     return out
 
 
 def evaluate(tasks: dict[str, dict], predictions: dict[str, dict], results: dict[str, dict]) -> dict:
+    _require_complete_cohort(tasks, predictions, results)
     ct_total = ct_exact = ct_over = ct_under = 0
     ct_abs = 0.0
     ol_total = ol_opt = ol_illegal = ol_regret2 = 0
     ol_regret = 0.0
-    missing = []
 
     for task_id, task in tasks.items():
-        pred = predictions.get(task_id)
-        result = results.get(task_id)
-        if pred is None or result is None:
-            missing.append(task_id)
-            continue
+        pred = predictions[task_id]
+        result = results[task_id]
         if task["task_type"] == "contract_tricks":
             actual = int(result["dds_tricks"])
             guessed = int(pred["tricks"])
@@ -97,7 +111,7 @@ def evaluate(tasks: dict[str, dict], predictions: dict[str, dict], results: dict
                 best = max(scores.values())
                 regret = float(best - scores[card])
                 ol_opt += int(regret == 0)
-                ol_regret2 += int(regret >= 2)
+            ol_regret2 += int(regret >= 2)
             ol_regret += regret
 
     return {
@@ -117,8 +131,8 @@ def evaluate(tasks: dict[str, dict], predictions: dict[str, dict], results: dict
             "regret_2plus": ol_regret2,
             "illegal": ol_illegal,
         },
-        "missing": len(missing),
-        "missing_first": missing[:5],
+        "missing": 0,
+        "missing_first": [],
     }
 
 
@@ -137,7 +151,9 @@ def paired_bootstrap_difference(
     repetitions: int = 2000,
     seed: int = BOOTSTRAP_SEED,
 ) -> dict:
-    ids = sorted(set(candidate) & set(baseline))
+    if set(candidate) != set(baseline):
+        raise ValueError("Paired comparison requires identical candidate and baseline task cohorts")
+    ids = sorted(baseline)
     if not ids:
         return {"n": 0, "mean_candidate_minus_baseline": None, "ci95": [None, None]}
     diffs = [candidate[x] - baseline[x] for x in ids]
@@ -202,14 +218,17 @@ def write_selected_predictions(
     selected_by_task_type: dict[str, str],
     out_path: Path,
 ) -> None:
+    # Validate coverage before opening or truncating the selected output.
+    for task_id, task in tasks.items():
+        selected_name = selected_by_task_type[task["task_type"]]
+        if prediction_sets[selected_name].get(task_id) is None:
+            raise ValueError(f"Selected model {selected_name} lacks prediction {task_id}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
         for task_id in sorted(tasks):
             task = tasks[task_id]
             selected_name = selected_by_task_type[task["task_type"]]
-            pred = prediction_sets[selected_name].get(task_id)
-            if pred is None:
-                raise ValueError(f"Selected model {selected_name} lacks prediction {task_id}")
+            pred = prediction_sets[selected_name][task_id]
             row = dict(pred)
             row["selection_model"] = selected_name
             row["selection_task_type"] = task["task_type"]
