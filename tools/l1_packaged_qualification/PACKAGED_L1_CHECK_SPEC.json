@@ -1,0 +1,166 @@
+{
+  "schema": "packaged-l1-qualification-spec-v1",
+  "status": "PREPARED_NOT_IMPLEMENTED_NOT_RUN",
+  "proposed_source_commit": "2eec5ba690057463e0c5e89b2a429f46521c640c",
+  "source_pin_evidence": "Exact2bb sources plus complete compare2bb→2eec; all listed files unchanged.",
+  "future_selected_image_id": null,
+  "driver_sha256": null,
+  "execution_authorization_created": false,
+  "target": {
+    "dockerfile": "Dockerfile.api",
+    "ASGI_object": "bridge_school_api.main:app",
+    "code_root": "/app",
+    "no_source_mount": true,
+    "import_files_required_under": "/app/bridge_school_api",
+    "driver_mount_only": "reviewed driver mounted read-only under/tmp; must not supply or replace packaged source",
+    "no_external_listener_required": true
+  },
+  "immutable_expectations": {
+    "engine_version": "l1-canonical-runtime-v4-observation-safe-v1",
+    "system_profile": "SCHOOL_L1_DB_V1",
+    "registry_fingerprint": "143d7387734a721ebedd6cab78af21278f7b250d963ee2c82562e50dc3bbfd33",
+    "formal_db_activation_asserted": false,
+    "fallback_performed": false,
+    "authority_lane": "SCHOOL_CANON",
+    "lifecycle": "RUNTIME_SNAPSHOT",
+    "registry_count": 111,
+    "executable_count": 110
+  },
+  "packaged_source_sha256": {
+    "bridge_school_api/__init__.py": "d8d1edecff6e8a3b1eda3c3ecd22fa80ce9708a3ce41fffecc80aca48b12ee32",
+    "bridge_school_api/main.py": "a0dcbe8890a4cce33ca82f9e504d8ae9d93e7aa41290f1059b428f4ce5c35d25",
+    "bridge_school_api/knowledge.py": "52b4c6c57b2fcf7005401858e4a6d369409e2cc49335ac9523a294d4e5bf222d",
+    "bridge_school_api/db.py": "1c391cd0bfde393994db6b3b2f71af7843f5ed48b79e5476eced02113338234a",
+    "bridge_school_api/l1_canonical_registry.py": "4f724aa0b4c350b1ed36b77c5d39da5a217c9b17e7369a29201a3fe4fa61679b",
+    "bridge_school_api/l1_canonical_runtime.py": "fb2a6b5e9f98525edda370edd33bb14c0ae1f0b6650e7e2110023eb8016e2a25",
+    "bridge_school_api/l1_canonical_runtime_v2.py": "9b4bc446e1bed8bc578cbfcc16200915a4c1d2127734f345e06b32b7e10c2001",
+    "bridge_school_api/l1_canonical_runtime_v3.py": "ea9e2d80de9c5187827e918a5e91d2441da70cf4042f91f42afeea673e11d443",
+    "bridge_school_api/l1_canonical_runtime_v4.py": "cff18e792d934f5a1a2442c2450c78adce6fb92dd1e79916330840e37a33eee5"
+  },
+  "cases": [
+    {
+      "id": "P1",
+      "method": "GET",
+      "path": "/v1/knowledge/runtime/l1",
+      "query": {
+        "system_profile": "SCHOOL_L1_DB_V1"
+      },
+      "auth": "missing",
+      "expect_status": 401
+    },
+    {
+      "id": "P2",
+      "method": "GET",
+      "path": "/v1/knowledge/runtime/l1",
+      "query": {
+        "system_profile": "SCHOOL_L1_DB_V1"
+      },
+      "auth": "wrong_local_synthetic",
+      "expect_status": 403
+    },
+    {
+      "id": "P3",
+      "method": "GET",
+      "path": "/v1/knowledge/runtime/l1",
+      "query": {
+        "system_profile": "SCHOOL_L1_DB_V1",
+        "limit": 200,
+        "offset": 0
+      },
+      "auth": "valid_local_synthetic",
+      "expect_status": 200,
+      "expect": "Exact pinned snapshot fields;111distinct stable_keys and110executable; public contract shape; cacheprivate/no-store; no extra answer/learner identity fields"
+    },
+    {
+      "id": "P4",
+      "method": "GET",
+      "path": "/v1/knowledge/runtime/l1",
+      "query": {
+        "system_profile": "SCHOOL_L1_DB_V1",
+        "rule_id": "RULE-L1-COMPETITIVE-STRENGTH-PRINCIPLE"
+      },
+      "auth": "valid_local_synthetic",
+      "expect_status": 200,
+      "expect_rules": [
+        {
+          "stable_key": "RULE-L1-COMPETITIVE-STRENGTH-PRINCIPLE",
+          "executable": false
+        }
+      ],
+      "expect_count": 1
+    },
+    {
+      "id": "P5",
+      "method": "GET",
+      "path": "/v1/knowledge/runtime/l1",
+      "query": {
+        "system_profile": "SCHOOL_TOURNAMENT_CURRENT_V1"
+      },
+      "auth": "valid_local_synthetic",
+      "expect_status": 404,
+      "expect_code": "RUNTIME_PROFILE_GAP"
+    },
+    {
+      "id": "P6",
+      "method": "POST",
+      "path": "/v1/knowledge/runtime/l1",
+      "query": {
+        "system_profile": "SCHOOL_L1_DB_V1"
+      },
+      "auth": "valid_local_synthetic",
+      "expect_status": 405
+    }
+  ],
+  "proposed_bounds": {
+    "requests": 6,
+    "per_request_seconds": 3,
+    "driver_wall_seconds": 45,
+    "outer_watchdog_seconds": 50,
+    "network": "none",
+    "read_only": true,
+    "user": "65532:65532",
+    "cpus": 1,
+    "memory": "512m",
+    "pids": 64,
+    "no_new_privileges": true,
+    "dependency_overrides": 0,
+    "actual_DB_connections": 0,
+    "DSN_present": false,
+    "DB_network_process_write_denial": true
+  },
+  "required_new_receipt": [
+    "Exact image ID/source commit/tree and all packaged file hashes before/after",
+    "Module file locations in/app; no source overlay/sys.path source fallback",
+    "Actual6responses/status/headers, launch/object identity, request budget/timeouts and zero forbidden I/O counters",
+    "Actual installed dependency versions; underlying import closure manifest from chosen source/build",
+    "Independent response check against this narrow static contract, without repeating382/25old suites"
+  ],
+  "negative_evidence_controls": [
+    {
+      "artifact": "same engine version but different file hash",
+      "expected": "STOP_SOURCE_IDENTITY_MISMATCH"
+    },
+    {
+      "artifact": "correct response served from/source overlay",
+      "expected": "STOP_NOT_PACKAGED_TARGET"
+    },
+    {
+      "artifact": "dependency override or successful fakeDB seam",
+      "expected": "STOP_QUALIFICATION_BOUNDARY_CHANGED"
+    },
+    {
+      "artifact": "old image ID from deleted ephemeral CI image without current target proof",
+      "expected": "STOP_IMAGE_UNVERIFIED"
+    },
+    {
+      "artifact": "production health/overview PASS offered instead of P1-P6",
+      "expected": "NOT_L1_PACKAGING_PROOF"
+    },
+    {
+      "artifact": "DDS ordinary smoke PASS offered as historical L1 acceptance",
+      "expected": "NOT_L1_VERSION_ACCEPTANCE"
+    }
+  ],
+  "acceptance_scope": "Packaged L1 ASGI object and its six finite catalog/auth/method cases only. Does not qualify actual uvicorn CMD process startup, public/deployed transport, real credential, user/session/attempt binding, persistence, educational effect, production DB, new Canon or FULL_CALL.",
+  "authorized_effects_now": "JSON specification/artifact writes only;0runtime/API/container/CI/SQL/deploy calls."
+}

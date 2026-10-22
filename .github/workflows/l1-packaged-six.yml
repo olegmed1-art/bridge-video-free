@@ -1,0 +1,38 @@
+name: L1 packaged six
+
+on:
+  push:
+    branches: ['codex/l1-packaged-six-20261022']
+    paths:
+      - '.github/workflows/l1-packaged-six.yml'
+      - 'tools/l1_packaged_qualification/**'
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-six:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch public revisions without a credential
+        timeout-minutes: 1
+        shell: bash
+        env:
+          CI_REVISION: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_ASKPASS: /bin/false
+        run: |
+          set -euo pipefail
+          [[ "$CI_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          git init .
+          git remote add origin https://github.com/olegmed1-art/bridge-video-free.git
+          git -c credential.helper= -c http.extraHeader= fetch --no-tags --depth=1 origin "$CI_REVISION"
+          git checkout --detach FETCH_HEAD
+          git -c credential.helper= -c http.extraHeader= fetch --no-tags --depth=1 origin 2eec5ba690057463e0c5e89b2a429f46521c640c
+      - name: Build once and verify six packaged responses
+        timeout-minutes: 4
+        shell: bash
+        run: python3 -I -B tools/l1_packaged_qualification/run_ci.py --execute

@@ -1,0 +1,238 @@
+{
+  "schema": "l1-linux-amd64-cp312-wheel-pins-v1",
+  "target": "CPython3.12 linux/amd64 glibc",
+  "source_requirements": {
+    "path": "requirements-api.txt",
+    "git_blob": "fa338e1176cc449b6b88241f72a03cf4f8b38750",
+    "complete_transitive_lock_existed": false,
+    "direct": [
+      "fastapi==0.141.1",
+      "uvicorn[standard]==0.52.2",
+      "psycopg[binary]==3.3.4"
+    ]
+  },
+  "resolved_version_and_filename_evidence": {
+    "source_commit": "2eec5ba690057463e0c5e89b2a429f46521c640c",
+    "CI_run": 39786162538,
+    "job": 119849817230,
+    "layer": "#9 Docker pip install",
+    "log_url": "https://github.com/olegmed1-art/bridge-video-free/actions/runs/39786162538/job/119849817230"
+  },
+  "metadata_checked_utc": "2026-10-22T14:32:00Z",
+  "metadata_hashes_are_actual_wheel_checksums": true,
+  "actual_wheel_bytes_verified_now": false,
+  "signature_or_attestation_verified": false,
+  "require_actual_byte_hash_verification_during_future_build": true,
+  "wheels": [
+    {
+      "name": "annotated-doc",
+      "version": "0.0.5",
+      "filename": "annotated_doc-0.0.5-py3-none-any.whl",
+      "sha256": "117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101",
+      "metadata_source": "https://pypi.org/pypi/annotated-doc/0.0.5/json",
+      "bytes": 5302,
+      "yanked": false,
+      "upload_time": "2026-07-28T13:50:57.239109Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.8.0",
+      "filename": "annotated_types-0.8.0-py3-none-any.whl",
+      "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+      "metadata_source": "https://pypi.org/pypi/annotated-types/0.8.0/json",
+      "bytes": 13427,
+      "yanked": false,
+      "upload_time": "2026-07-23T20:16:12.938651Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.1",
+      "filename": "anyio-4.15.1-py3-none-any.whl",
+      "sha256": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101",
+      "metadata_source": "https://pypi.org/pypi/anyio/4.15.1/json",
+      "bytes": 132079,
+      "yanked": false,
+      "upload_time": "2026-09-05T10:42:37.923487Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "click",
+      "version": "8.5.0",
+      "filename": "click-8.5.0-py3-none-any.whl",
+      "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
+      "metadata_source": "https://pypi.org/pypi/click/8.5.0/json",
+      "bytes": 125251,
+      "yanked": false,
+      "upload_time": "2026-08-26T13:33:12.928043Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "fastapi",
+      "version": "0.141.1",
+      "filename": "fastapi-0.141.1-py3-none-any.whl",
+      "sha256": "bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3",
+      "metadata_source": "https://pypi.org/pypi/fastapi/0.141.1/json",
+      "bytes": 131954,
+      "yanked": false,
+      "upload_time": "2026-07-29T17:18:04.364385Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "filename": "h11-0.16.0-py3-none-any.whl",
+      "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+      "metadata_source": "https://pypi.org/pypi/h11/0.16.0/json",
+      "bytes": 37515,
+      "yanked": false,
+      "upload_time": "2025-04-24T03:35:24.344199Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "httptools",
+      "version": "0.9.0",
+      "filename": "httptools-0.9.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "3e3201fe4d46e0d15d7ff9fafc94a605da9eb82d2c5b9837f0368acb325481f1",
+      "metadata_source": "https://pypi.org/project/httptools/0.9.0/",
+      "metadata_level": "Official PyPI release file detail SHA256; wheel bytes not downloaded"
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "filename": "idna-3.20-py3-none-any.whl",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "metadata_source": "https://pypi.org/pypi/idna/3.20/json",
+      "bytes": 69583,
+      "yanked": false,
+      "upload_time": "2026-09-17T14:11:03.168153Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "psycopg",
+      "version": "3.3.4",
+      "filename": "psycopg-3.3.4-py3-none-any.whl",
+      "sha256": "b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a",
+      "metadata_source": "https://pypi.org/pypi/psycopg/3.3.4/json",
+      "bytes": 213001,
+      "yanked": false,
+      "upload_time": "2026-05-01T23:20:50.816614Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "psycopg-binary",
+      "version": "3.3.4",
+      "filename": "psycopg_binary-3.3.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "e7510c37550f91a187e3660a8cc50d4b760f8c3b8b2f89ebc5698cd2c7f2c85d",
+      "metadata_source": "https://pypi.org/project/psycopg-binary/3.3.4/",
+      "metadata_level": "Official PyPI release file detail SHA256; wheel bytes not downloaded"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.14.1",
+      "filename": "pydantic-2.14.1-py3-none-any.whl",
+      "sha256": "9195d967ec791692a04438115466764fb8b9a27b31f14a760437694f40d6b454",
+      "metadata_source": "https://pypi.org/pypi/pydantic/2.14.1/json",
+      "bytes": 488106,
+      "yanked": false,
+      "upload_time": "2026-10-11T18:37:53.437059Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.50.1",
+      "filename": "pydantic_core-2.50.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "93ba4e9d8210d941c200431a56b2c0400b131865947903937ed3ec5404307d2e",
+      "metadata_source": "https://pypi.org/project/pydantic-core/2.50.1/",
+      "metadata_level": "Official PyPI release file detail SHA256; wheel bytes not downloaded"
+    },
+    {
+      "name": "python-dotenv",
+      "version": "1.2.4",
+      "filename": "python_dotenv-1.2.4-py3-none-any.whl",
+      "sha256": "42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc",
+      "metadata_source": "https://pypi.org/pypi/python-dotenv/1.2.4/json",
+      "bytes": 23266,
+      "yanked": false,
+      "upload_time": "2026-10-01T05:36:08.633003Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "pyyaml",
+      "version": "6.0.3",
+      "filename": "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+      "metadata_source": "https://pypi.org/project/PyYAML/6.0.3/",
+      "metadata_level": "Official PyPI release file detail SHA256; wheel bytes not downloaded"
+    },
+    {
+      "name": "starlette",
+      "version": "1.9.0",
+      "filename": "starlette-1.9.0-py3-none-any.whl",
+      "sha256": "fd3f159936e882d06c1108f84688f7cda2cf85fc6a592a50edbd175e882c2ddc",
+      "metadata_source": "https://pypi.org/pypi/starlette/1.9.0/json",
+      "bytes": 80335,
+      "yanked": false,
+      "upload_time": "2026-10-18T15:50:31.526548Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "metadata_source": "https://pypi.org/pypi/typing-extensions/4.16.0/json",
+      "bytes": 45571,
+      "yanked": false,
+      "upload_time": "2026-07-02T08:40:04.659120Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.4",
+      "filename": "typing_inspection-0.4.4-py3-none-any.whl",
+      "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+      "metadata_source": "https://pypi.org/pypi/typing-inspection/0.4.4/json",
+      "bytes": 14750,
+      "yanked": false,
+      "upload_time": "2026-08-12T12:37:24.648475Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.52.2",
+      "filename": "uvicorn-0.52.2-py3-none-any.whl",
+      "sha256": "0b916d247cf5500b320638ea11abf0fed7f348e8e1c7fde53a0e6b6319803512",
+      "metadata_source": "https://pypi.org/pypi/uvicorn/0.52.2/json",
+      "bytes": 79912,
+      "yanked": false,
+      "upload_time": "2026-08-13T07:03:55.658749Z",
+      "metadata_level": "Official PyPI release JSON; wheel bytes not downloaded"
+    },
+    {
+      "name": "uvloop",
+      "version": "0.23.0",
+      "filename": "uvloop-0.23.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "090865d8ce7a03986755a3ce711b7dd0d4b44eb14ab74368b717f3fad1180208",
+      "metadata_source": "https://pypi.org/project/uvloop/0.23.0/",
+      "metadata_level": "Official PyPI release file detail SHA256; wheel bytes not downloaded"
+    },
+    {
+      "name": "watchfiles",
+      "version": "1.3.0",
+      "filename": "watchfiles-1.3.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "b5768b49e426fd5b550b012c866db347cdf15c398ef98dc557b6e6b72fa74cd1",
+      "metadata_source": "https://pypi.org/project/watchfiles/1.3.0/",
+      "metadata_level": "Official PyPI release file detail SHA256; wheel bytes not downloaded"
+    },
+    {
+      "name": "websockets",
+      "version": "17.3",
+      "filename": "websockets-17.3-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "a7f391838e8adcf1f2fe71561d9e5a9f74ea7ffa5052eb2db329aac677383136",
+      "metadata_source": "https://pypi.org/project/websockets/17.3/",
+      "metadata_level": "Official PyPI release file detail SHA256; wheel bytes not downloaded"
+    }
+  ]
+}
