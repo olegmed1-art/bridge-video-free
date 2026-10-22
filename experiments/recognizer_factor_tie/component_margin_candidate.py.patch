@@ -1,0 +1,32 @@
+--- a/geometry/component_margin_candidate.py
++++ b/geometry/component_margin_candidate.py
+@@ -10,7 +10,7 @@
+ import math
+ import struct
+
+-VERSION = 'diana20-same-roi-component-margin-candidate-r1'
++VERSION = 'diana20-same-roi-component-margin-candidate-r2-tie-v1'
+ RANKS = tuple('AKQJT98765432')
+ SUITS = tuple('CDHS')
+ CARDS = tuple(r+s for s in SUITS for r in RANKS)
+@@ -87,6 +87,10 @@
+         return refuse('FROZEN_FALLBACK_INELIGIBLE')
+     if type(factor) is not dict:
+         return refuse('FROZEN_FACTOR_DIAGNOSTIC_ABSENT')
++    current=diagnostic.get('current_recomputed_diagnostic')
++    if (factor.get('identity_status')=='TIE' or
++            (type(current) is dict and current.get('identity_status')=='TIE')):
++        return refuse('FACTOR_IDENTITY_TIE')
+     gates=factor.get('gates')
+     need(type(gates) is dict and set(gates)==GATES and all(type(v) is bool for v in gates.values()),'INVALID_LEGACY_GATE_VECTOR')
+     result['legacy_identity_margin_gate_passed']=gates['identity_margin']
+@@ -168,6 +172,9 @@
+                 continue
+             d=copy.deepcopy(by_ref[key]);used.add(key)
+             need(d.get('original_unknown')==u,'DECISION_ORIGINAL_UNKNOWN_CHANGED')
++            if d['status']=='ADDITIONAL_MACHINE_CANDIDATE':
++                need(d.get('card') in CARDS and u.get('factor_diagnostic',{}).get('identity_status')!='TIE',
++                     'NULL_OR_TIE_CANNOT_BE_ADDITIONAL_CARD')
+             (pending if d['status']=='ADDITIONAL_MACHINE_CANDIDATE' else unknown_decisions).append(d)
+         counts=Counter(d['card'] for d in pending);baseline={c['card'] for c in cards}
+         accepted=[]

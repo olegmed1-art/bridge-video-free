@@ -1,0 +1,26 @@
+{
+  "schema": "factor-compatibility-independent-review-summary/v1",
+  "verdict": "PASS_LIMITED_LOCAL_SOURCE_AND_PACKAGE_REVIEW",
+  "exact_private_review_sha256": "d510b6a6c6c07931f89448dc24813160389535bcef11e960d18ebe60f9cb8da1",
+  "closed_findings": [
+    "CF1",
+    "CF2"
+  ],
+  "targeted_case_observations": 77,
+  "strict_patch_forks": 4,
+  "git_operations": 16,
+  "original_guard_AST_preserved": true,
+  "source_bundle_raw_SHA_and_payload_pins_verified": true,
+  "schema_engine": "NOT_RUN_LOCALLY_REQUIRED_IN_CI",
+  "full_unified_fixture": "PRIVATE_ONLY_NOT_PUBLISHED",
+  "full_unified_reader_tests": "TWO_PRIVATE_TESTS_PASS_PLUS_INDEPENDENT_TARGETED_CHECKER",
+  "public_fixture_and_CI_scope": "Margin and diagnostic fixtures only; narrow unified patch retained",
+  "activation_allowed": false,
+  "geometry_enabled": false,
+  "human_labels": false,
+  "limits": [
+    "No runtime, worker construction, pixel/NCC inference or full launcher qualification",
+    "Independent archive review is distinct from the builder import-only proof",
+    "Actual owner bridge, enrolled caller, pinned sprite and later bounded runtime remain gates"
+  ]
+}

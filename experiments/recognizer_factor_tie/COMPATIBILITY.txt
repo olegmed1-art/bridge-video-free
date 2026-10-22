@@ -1,0 +1,77 @@
+Factor diagnostic compatibility checkpoint - 2026-10-22
+
+Source-only scope
+The audit covers 31 saved source files, 14 consumer groups and 36 references.
+It covers the frozen factor writer, diagnostic JSON export and parity readers,
+Margin decisions and overlays, unified adaptation, composed effective cards,
+worker/vendor pins, the saved IPC boundary and prepared-frame adapter pins.
+There is no active main caller for the frozen fallback. No current server
+state, full pixel scoring, transport, owner authority or production E2E is
+qualified by these checks.
+
+Protocol
+factor_identity_compat.py defines legacy and TIE TypedDict shapes. The JSON
+Schema uses Draft 2020-12 and explicitly separates those two representations.
+Schema validation checks shape; the strict runtime codec also verifies exact
+legacy field preservation, typed JSON values, policy version, original gates,
+ROI/hash and the existing numeric parity tolerance. Saved same-ROI rank and
+suit arrays bind the current view. A diagnostic component_candidate is never
+a positive card. In TIE: best_card=null, status=UNKNOWN, card_for_acceptance=null
+and automatic_acceptance_allowed=false.
+
+Historical export compatibility
+The original diagnostic schema name is retained with one optional field:
+current_recomputed_diagnostic, present only for the eight corrected conflicts.
+Legacy receipts and original UNKNOWN objects remain unchanged. Existing
+parity comparisons still inspect the authenticated legacy view; malformed,
+future-policy or mismatched inputs fail parity. The full export's global
+parity-failure veto remains unchanged. No broad parity exception is added.
+Among 137 saved factor records, 129 exports remain byte-equal under canonical
+JSON encoding. Eight have the explicit current TIE view and remain UNKNOWN.
+All 227 archived diagnostics serialize and round-trip without parity failure.
+The saved 37-row overlay preserves 974 original card records and complete
+source rows; its historical 73 additions remain machine candidates only.
+
+Prepared consumers
+consumer_forks.py accepts only exact old source hashes. CONSUMER_PINS.json
+records original, prepared and patch hashes for four reversible source forks.
+Margin rejects TIE before legacy card validation and prevents null/invalid/TIE
+positive overlays. The unified reader recognizes the new rejection reason at
+one new exact producer pin and rejects contradictory positive TIE DTOs.
+The composed layer has the same positive-card/TIE boundary guard.
+
+Two independent-review findings are covered by regression tests: malformed
+TIE envelopes must return failed parity without KeyError, and a contradictory
+legacy-shaped TIE must not enter the positive unified route.
+
+Deliberate pin incompatibilities
+The matching new worker, vendor inventory and IPC sources are assembled as a
+new code-only candidate. Old caller/new bundle and new caller/old bundle must
+reject. The old prepared-frame component descriptor is not silently retargeted.
+The historical diagnose_saved37 full launcher retains its old source/UID/
+manifest admission guards; only its score_unknown consumer fork is qualified
+here. Its full launcher needs separate exact enrollment before later use.
+No UID1001 owner bridge, provider, receipt reader or transport is fabricated.
+
+Release bundle
+The offline builder verifies raw input SHA before JSON parsing, copies no
+media or credentials, and writes a new directory/archive without overwriting.
+The verifier checks all payload hashes and actual import/API closure with
+network blocked, without constructing a worker or loading pixels/models.
+See bundle/README.txt and SOURCE_BUNDLE_CHECKPOINT.json for exact pins.
+
+Remaining gates
+Coordinate this branch before merge. Release HOLD and Geometry OFF remain.
+Later runtime needs the matching enrolled caller, genuine owner bridge and
+authority, the separately pinned sprite, and an explicitly bounded replay.
+No accuracy, false-positive, complete-hand or temporal-stability claim is made.
+Human labels do not exist yet. The blind packet has 59 blank records and 58
+unique existing PNGs; the 12 unavailable baseline PNGs are not synthesized.
+
+Public/private test boundary
+The full historical unified module contains a separate Geometry branch.
+It is retained and tested locally, not published as a code fixture in this
+PR. Public sources contain only its narrow Margin-reader fork/patch and
+source hashes. Two exact unified-reader tests and the independent targeted
+checker remain private; 27 offline tests are executable in public CI.
+See COMPATIBILITY_REVIEW.json for the bounded independent verdict.

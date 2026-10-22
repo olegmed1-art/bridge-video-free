@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bridge:factor-diagnostic:tie-v1",
+  "description": "Shape only: validate_tie_diagnostic also enforces exact legacy field preservation; factor_parity_views binds recomputed scores/ROI. This schema never authorizes card acceptance.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/legacy"
+    },
+    {
+      "$ref": "#/$defs/tie"
+    }
+  ],
+  "$defs": {
+    "legacy": {
+      "type": "object",
+      "required": [
+        "best_card",
+        "identity_margin"
+      ],
+      "properties": {
+        "best_card": {
+          "enum": [
+            "AC",
+            "KC",
+            "QC",
+            "JC",
+            "TC",
+            "9C",
+            "8C",
+            "7C",
+            "6C",
+            "5C",
+            "4C",
+            "3C",
+            "2C",
+            "AD",
+            "KD",
+            "QD",
+            "JD",
+            "TD",
+            "9D",
+            "8D",
+            "7D",
+            "6D",
+            "5D",
+            "4D",
+            "3D",
+            "2D",
+            "AH",
+            "KH",
+            "QH",
+            "JH",
+            "TH",
+            "9H",
+            "8H",
+            "7H",
+            "6H",
+            "5H",
+            "4H",
+            "3H",
+            "2H",
+            "AS",
+            "KS",
+            "QS",
+            "JS",
+            "TS",
+            "9S",
+            "8S",
+            "7S",
+            "6S",
+            "5S",
+            "4S",
+            "3S",
+            "2S"
+          ]
+        },
+        "identity_margin": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "identity_status"
+            ]
+          },
+          {
+            "required": [
+              "status"
+            ]
+          },
+          {
+            "required": [
+              "component_candidate"
+            ]
+          },
+          {
+            "required": [
+              "card_for_acceptance"
+            ]
+          },
+          {
+            "required": [
+              "automatic_acceptance_allowed"
+            ]
+          },
+          {
+            "required": [
+              "tie_policy_version"
+            ]
+          },
+          {
+            "required": [
+              "legacy_factor_diagnostic"
+            ]
+          }
+        ]
+      },
+      "additionalProperties": true
+    },
+    "tie": {
+      "type": "object",
+      "required": [
+        "best_card",
+        "identity_margin",
+        "identity_status",
+        "status",
+        "component_candidate",
+        "card_for_acceptance",
+        "automatic_acceptance_allowed",
+        "tie_policy_version",
+        "legacy_factor_diagnostic"
+      ],
+      "properties": {
+        "best_card": {
+          "type": "null"
+        },
+        "identity_margin": {
+          "const": 0,
+          "type": "number"
+        },
+        "identity_status": {
+          "const": "TIE"
+        },
+        "status": {
+          "const": "UNKNOWN"
+        },
+        "component_candidate": {
+          "enum": [
+            "AC",
+            "KC",
+            "QC",
+            "JC",
+            "TC",
+            "9C",
+            "8C",
+            "7C",
+            "6C",
+            "5C",
+            "4C",
+            "3C",
+            "2C",
+            "AD",
+            "KD",
+            "QD",
+            "JD",
+            "TD",
+            "9D",
+            "8D",
+            "7D",
+            "6D",
+            "5D",
+            "4D",
+            "3D",
+            "2D",
+            "AH",
+            "KH",
+            "QH",
+            "JH",
+            "TH",
+            "9H",
+            "8H",
+            "7H",
+            "6H",
+            "5H",
+            "4H",
+            "3H",
+            "2H",
+            "AS",
+            "KS",
+            "QS",
+            "JS",
+            "TS",
+            "9S",
+            "8S",
+            "7S",
+            "6S",
+            "5S",
+            "4S",
+            "3S",
+            "2S"
+          ]
+        },
+        "card_for_acceptance": {
+          "type": "null"
+        },
+        "automatic_acceptance_allowed": {
+          "const": false,
+          "type": "boolean"
+        },
+        "tie_policy_version": {
+          "const": "same-roi-factor-tie-diagnostic-v1"
+        },
+        "legacy_factor_diagnostic": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/legacy"
+            },
+            {
+              "properties": {
+                "identity_margin": {
+                  "const": 0,
+                  "type": "number"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
