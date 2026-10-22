@@ -167,12 +167,13 @@ def test_weak3_fit_game():
 
 
 def test_distribution_long_hand():
-    ctx = {"trump_fit": True, "combined_trumps": 9, "hand_role": "long_trump", "singleton": 1}
+    # Synthetic complete counters: omitted shortness is not a measured zero.
+    ctx = {"trump_fit": True, "combined_trumps": 9, "hand_role": "long_trump", "singleton": 1, "void": 0, "doubleton": 0}
     assert evaluate("RULE-L1-DISTRIBUTION-POINTS-AFTER-FIT", ctx).action == 2
 
 
 def test_distribution_short_hand_void():
-    ctx = {"trump_fit": True, "combined_trumps": 8, "hand_role": "short_trump", "void": 1}
+    ctx = {"trump_fit": True, "combined_trumps": 8, "hand_role": "short_trump", "void": 1, "singleton": 0, "doubleton": 0}
     assert evaluate("RULE-L1-DISTRIBUTION-POINTS-AFTER-FIT", ctx).action == 5
 
 

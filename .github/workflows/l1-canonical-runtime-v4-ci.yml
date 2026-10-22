@@ -3,7 +3,15 @@ name: L1 canonical runtime v4
 on:
   pull_request:
     paths:
+      - 'bridge_school_api/l1_canonical_runtime.py'
+      - 'bridge_school_api/l1_canonical_runtime_v2.py'
+      - 'bridge_school_api/l1_canonical_runtime_v3.py'
+      - 'bridge_school_api/l1_canonical_registry.py'
       - 'bridge_school_api/l1_canonical_runtime_v4.py'
+      - 'tests/test_l1_canonical_runtime.py'
+      - 'tests/test_l1_canonical_registry.py'
+      - 'tests/test_l1_canonical_runtime_v3.py'
+      - 'tests/test_l1_observation_contract.py'
       - 'tests/test_l1_canonical_runtime_v4.py'
       - 'tools/l1_runtime_coverage_audit.py'
       - 'tests/test_l1_runtime_coverage_audit.py'
@@ -12,7 +20,15 @@ on:
   push:
     branches: [main]
     paths:
+      - 'bridge_school_api/l1_canonical_runtime.py'
+      - 'bridge_school_api/l1_canonical_runtime_v2.py'
+      - 'bridge_school_api/l1_canonical_runtime_v3.py'
+      - 'bridge_school_api/l1_canonical_registry.py'
       - 'bridge_school_api/l1_canonical_runtime_v4.py'
+      - 'tests/test_l1_canonical_runtime.py'
+      - 'tests/test_l1_canonical_registry.py'
+      - 'tests/test_l1_canonical_runtime_v3.py'
+      - 'tests/test_l1_observation_contract.py'
       - 'tests/test_l1_canonical_runtime_v4.py'
       - 'tools/l1_runtime_coverage_audit.py'
       - 'tests/test_l1_runtime_coverage_audit.py'
@@ -43,6 +59,7 @@ jobs:
             tests/test_l1_canonical_registry.py \
             tests/test_l1_canonical_runtime_v3.py \
             tests/test_l1_canonical_runtime_v4.py \
+            tests/test_l1_observation_contract.py \
             tests/test_l1_runtime_coverage_audit.py
       - name: Print final bounded coverage snapshot
         run: python tools/l1_runtime_coverage_audit.py
