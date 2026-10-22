@@ -8,12 +8,16 @@ import sqlite3
 from collections import defaultdict
 from pathlib import Path
 
+from stage2b_v24 import opening_lead_loss
+
 CONFIDENCE_ORDER = ("low", "medium", "high")
 
 
 def _success(task_type: str, prediction: dict, result: dict) -> bool:
     if task_type == "contract_tricks":
         return int(prediction["tricks"]) == int(result["dds_tricks"])
+    if task_type == "opening_lead":
+        return opening_lead_loss(prediction, result) == 0.0
     regret = result.get("dd_regret")
     return regret is not None and float(regret) == 0.0
 
@@ -21,6 +25,8 @@ def _success(task_type: str, prediction: dict, result: dict) -> bool:
 def _loss(task_type: str, prediction: dict, result: dict) -> float:
     if task_type == "contract_tricks":
         return float(abs(int(prediction["tricks"]) - int(result["dds_tricks"])))
+    if task_type == "opening_lead":
+        return opening_lead_loss(prediction, result)
     regret = result.get("dd_regret")
     return 13.0 if regret is None else float(regret)
 
