@@ -120,6 +120,12 @@ class FactorIdentityDiagnosticTests(unittest.TestCase):
 
 
 class SourcePatchPackagingTests(unittest.TestCase):
+    def test_patch_text_has_no_trailing_whitespace(self):
+        patch = MODULE.parents[1] / 'experiments/recognizer_factor_tie/rank-suit-tie-source.patch'
+        for number, line in enumerate(patch.read_text(encoding='utf-8').splitlines(), 1):
+            with self.subTest(line=number):
+                self.assertEqual(line, line.rstrip(' \t'))
+
     def test_patch_applies_exactly_and_reverses_without_runtime_imports(self):
         root = MODULE.parents[1]
         package = root / 'experiments/recognizer_factor_tie'

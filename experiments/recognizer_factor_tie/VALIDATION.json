@@ -4,7 +4,7 @@
   "base_main": "a993b69d931f88f84fac0c2dd3d02592f3d2e5ee",
   "release_status": "HOLD_NOT_INSTALLED",
   "public_regressions": {
-    "tests": 11,
+    "tests": 12,
     "generic_rank_suit_subcases": 52,
     "result": "PASS",
     "dependencies": "stdlib and git; no pixels"
@@ -46,5 +46,12 @@
     "No precision, false-positive, temporal or full-hand claim",
     "No Geometry enable, thresholds, authority, queue/lifecycle, server or DB change",
     "CI status is tracked separately against the published commit"
-  ]
+  ],
+  "packaging_revision": {
+    "revision": 2,
+    "cause": "Two space-only patch context lines failed outer git diff --check",
+    "regression": "12 public tests include trailing-whitespace rejection",
+    "algorithm_and_postimage_unchanged": true,
+    "first_commit": "2cc1af22ad8b72ba02f56383bbb1a08f500aff17"
+  }
 }

@@ -2,11 +2,11 @@
 +++ b/bridge_vision/bridgit_rank_suit_candidate.py
 @@ -7,6 +7,8 @@
  from __future__ import annotations
- 
+
  import hashlib
 +
 +from bridge_vision.factor_identity_diagnostic import mark_factor_identity_tie
- 
+
  from bridge_vision.bridgit_partial_pixel_observer import (
      GamblerPartialPixelObserver, _bgr_cell, _normalized_bank,
 @@ -78,7 +80,7 @@
