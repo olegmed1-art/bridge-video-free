@@ -6,6 +6,8 @@ The caller verifies this delivery's hashes and independent review before use.
 from __future__ import annotations
 
 import argparse
+import ast
+import builtins
 from dataclasses import dataclass
 import hashlib
 import importlib.util
@@ -32,11 +34,87 @@ LABEL = 'school.qualification-run'
 
 @dataclass
 class Captured:
-    returncode: int
+    returncode: int | None
     stdout: bytes
     stderr: bytes
     timed_out: bool = False
     overflow: bool = False
+
+
+class CaptureFailure(driver.Rejected):
+    """Keep observed partial pipes/exit internally; never print exception text."""
+    def __init__(self, code, captured):
+        super().__init__(code)
+        self.captured = captured
+
+
+# Only source-literal codes and exception classes may survive sanitization.
+# No environment values, command arguments, source lines or arbitrary messages.
+SAFE_CODES = frozenset(node.value for path in (Path(__file__), Path(driver.__file__))
+    for node in ast.walk(ast.parse(path.read_bytes())) if isinstance(node, ast.Constant)
+    and type(node.value) is str and re.fullmatch('[A-Z][A-Z0-9_]{1,95}', node.value)) | {
+        'FORBIDDEN_NETWORK', 'FORBIDDEN_DATABASE', 'FORBIDDEN_WRITE', 'FORBIDDEN_PROCESS'}
+SAFE_EXCEPTIONS = frozenset(name for name, value in vars(builtins).items()
+    if isinstance(value, type) and issubclass(value, BaseException)) | {'Rejected', 'CaptureFailure'}
+
+
+def failure_code(exc):
+    if isinstance(exc, driver.Rejected):
+        code = str(exc)
+        if code in SAFE_CODES or code in {'CONTAINER_LIMIT_' + key for key in
+                ('Memory', 'MemorySwap', 'NanoCpus', 'PidsLimit', 'ReadonlyRootfs',
+                 'NetworkMode', 'Privileged', 'PublishAllPorts', 'CgroupnsMode')}:
+            return code
+        return 'REJECTED_CODE_WITHHELD'
+    return 'UNEXPECTED_FAILURE'
+
+
+def stream_diagnostic(raw, limit):
+    """Bounded evidence, not raw log replay. Unknown text is withheld by default."""
+    data = raw[:limit]
+    safe = []
+    used = 0
+    try:
+        value = driver.strict_json(data)
+        if (type(value) is dict and set(value) == {'status', 'code'}
+                and value['status'] == 'FAIL_CLOSED' and value['code'] in SAFE_CODES):
+            safe.append(json.dumps(value, sort_keys=True))
+            used = len(safe[0].encode())
+    except Exception:
+        pass
+    for line in data.decode('utf-8', 'replace').splitlines():
+        if len(line) > 4096:
+            continue
+        text = None
+        frame = re.fullmatch(r'\s*File "([^"]+)", line ([0-9]{1,7}), in .*', line)
+        if frame:
+            # Paths/function names can themselves contain secrets: map known paths.
+            path, number = frame.groups()
+            label = 'other-source'
+            if path == '/qualification/driver.py':
+                label = 'driver.py'
+            elif path.startswith('<frozen importlib.'):
+                label = 'frozen-importlib'
+            elif path.startswith('/usr/local/lib/python3.12/'):
+                label = 'python-stdlib-or-dependency'
+            text = label + ':' + number
+        elif line == 'Traceback (most recent call last):':
+            text = 'Traceback'
+        else:
+            exception = re.fullmatch(r'(?:[A-Za-z_][A-Za-z0-9_]*\.)*([A-Za-z_][A-Za-z0-9_]*)(?:: (.*))?', line)
+            if exception and exception[1] in SAFE_EXCEPTIONS:
+                text = exception[1]
+                if exception[1] in ('Rejected', 'CaptureFailure') and exception[2] in SAFE_CODES:
+                    text += ': ' + exception[2]
+        if text is not None:
+            size = len(text.encode()) + (1 if safe else 0)
+            if used + size > 2048:
+                break
+            safe.append(text)
+            used += size
+    return dict(text='\n'.join(safe), captured_bytes=len(data),
+        sha256_captured_prefix=hashlib.sha256(data).hexdigest(),
+        source_exceeded_cap=len(raw) > limit, arbitrary_text_withheld=True)
 
 
 def capture(argv, timeout=5, out_limit=262144, err_limit=65536, env=None):
@@ -46,10 +124,14 @@ def capture(argv, timeout=5, out_limit=262144, err_limit=65536, env=None):
     deadline = time.monotonic() + timeout
     run_deadline = deadline - min(0.25, timeout / 4)
     flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, shell=False, env=env, creationflags=flags)
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, shell=False, env=env, creationflags=flags)
+    except OSError:
+        raise CaptureFailure('CHILD_START_FAILED', Captured(None, b'', b'')) from None
     buffers = [bytearray(), bytearray()]
     overflow = threading.Event()
+    read_failed = threading.Event()
     def read(pipe, index, limit):
         try:
             while True:
@@ -60,27 +142,56 @@ def capture(argv, timeout=5, out_limit=262144, err_limit=65536, env=None):
                 buffers[index].extend(chunk[:max(0, remaining)])
                 if len(chunk) > remaining:
                     overflow.set()
+        except Exception:
+            read_failed.set()
         finally:
-            pipe.close()
-    readers = [threading.Thread(target=read, args=(proc.stdout, 0, out_limit), daemon=True),
-               threading.Thread(target=read, args=(proc.stderr, 1, err_limit), daemon=True)]
-    for thread in readers:
-        thread.start()
+            try:
+                pipe.close()
+            except Exception:
+                read_failed.set()
+    readers = []
     expired = False
-    while proc.poll() is None:
-        expired = time.monotonic() >= run_deadline
-        if expired or overflow.is_set():
-            proc.kill()
-            break
-        time.sleep(min(0.01, max(0.001, run_deadline - time.monotonic())))
+    def partial():
+        try:
+            code = proc.poll()
+        except Exception:
+            code = None
+        return Captured(code, bytes(buffers[0]), bytes(buffers[1]), expired, overflow.is_set())
     try:
-        proc.wait(timeout=max(0.001, deadline - time.monotonic()))
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        raise driver.Rejected('CHILD_STOP_UNCONFIRMED')
-    for index, thread in enumerate(readers):
-        thread.join(timeout=max(0, deadline-time.monotonic())/(len(readers)-index))
-    driver.require(not any(thread.is_alive() for thread in readers), 'CHILD_PIPE_NOT_CLOSED')
+        readers = [threading.Thread(target=read, args=(proc.stdout, 0, out_limit), daemon=True),
+                   threading.Thread(target=read, args=(proc.stderr, 1, err_limit), daemon=True)]
+        for thread in readers:
+            thread.start()
+        while proc.poll() is None:
+            expired = time.monotonic() >= run_deadline
+            if expired or overflow.is_set() or read_failed.is_set():
+                proc.kill()
+                break
+            time.sleep(min(0.01, max(0.001, run_deadline - time.monotonic())))
+        try:
+            proc.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            expired = True
+            proc.kill()
+            raise CaptureFailure('CHILD_STOP_UNCONFIRMED', partial()) from None
+        for index, thread in enumerate(readers):
+            thread.join(timeout=max(0, deadline-time.monotonic())/(len(readers)-index))
+        if any(thread.is_alive() for thread in readers):
+            raise CaptureFailure('CHILD_PIPE_NOT_CLOSED', partial())
+        if read_failed.is_set():
+            raise CaptureFailure('CHILD_PIPE_READ_FAILED', partial())
+    except CaptureFailure:
+        raise
+    except Exception:
+        # Unexpected local capture failure: stop only this owned CLI, in budget.
+        try:
+            proc.kill()
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                proc.wait(timeout=remaining)
+        except Exception:
+            pass
+        raise CaptureFailure('CHILD_CAPTURE_UNCONFIRMED', partial()) from None
     return Captured(proc.returncode, bytes(buffers[0]), bytes(buffers[1]),
                     expired or time.monotonic() > deadline, overflow.is_set())
 
@@ -218,12 +329,39 @@ class DockerRun:
         self.active_deadline = None
         self.preflight_deadline = None
         self.cleanup_deadline = None
+        self.diagnostics = []
+        self.diagnostic_overflow = False
 
     def invoke(self, command, timeout):
-        deadline = self.active_deadline or self.cleanup_deadline or self.preflight_deadline
-        remaining = deadline - time.monotonic()
-        driver.require(remaining > 0, 'TOTAL_DEADLINE_EXHAUSTED')
-        return self.call(command, timeout=min(timeout, remaining))
+        captured, error = None, None
+        phase = 'cleanup' if self.cleanup_deadline is not None else (
+            'active' if self.active_deadline is not None else 'preflight')
+        verb = command[0]
+        label = 'start-attach' if verb == 'start' else ('image-inspect' if verb == 'image' else verb)
+        label = label if label in ('info', 'image-inspect', 'create', 'inspect', 'start-attach', 'kill', 'rm') else 'other'
+        try:
+            deadline = self.active_deadline or self.cleanup_deadline or self.preflight_deadline
+            remaining = deadline - time.monotonic()
+            driver.require(remaining > 0, 'TOTAL_DEADLINE_EXHAUSTED')
+            captured = self.call(command, timeout=min(timeout, remaining))
+            return captured
+        except Exception as exc:
+            error = failure_code(exc)
+            if isinstance(exc, CaptureFailure):
+                captured = exc.captured
+            raise
+        finally:
+            row = dict(phase=phase, command=label, failure=error,
+                exit_code=captured.returncode if captured is not None and type(captured.returncode) is int else None,
+                timed_out=captured.timed_out if captured is not None else None,
+                overflow=captured.overflow if captured is not None else None,
+                stdout=stream_diagnostic(captured.stdout if captured is not None else b'', 262144),
+                stderr=stream_diagnostic(captured.stderr if captured is not None else b'', 65536))
+            if len(self.diagnostics) == 16:
+                self.diagnostic_overflow = True
+                self.diagnostics[-1] = row
+            else:
+                self.diagnostics.append(row)
 
     def inspect_owned(self, identifier):
         value = decode_one(self.invoke(['inspect', identifier], timeout=1))
@@ -266,36 +404,42 @@ class DockerRun:
             outcome = {'status': 'PASS_PACKAGED_ASGI_ONLY', 'driver': value,
                        'image_id': self.admission['image_id'], 'container_id': cid}
         except Exception as exc:
-            outcome = {'status': 'FAIL_CLOSED', 'code': str(exc) if isinstance(exc, driver.Rejected) else 'UNEXPECTED_FAILURE'}
+            outcome = {'status': 'FAIL_CLOSED', 'code': failure_code(exc)}
         finally:
+            outcome['primary_code'] = outcome.get('code')
             # One readonly lookup after an uncertain create. Never repeat create.
             # Cleanup by exact ID only after fresh matching token/name/image proof.
             try:
                 if not self.create_attempted:
-                    outcome['cleanup'] = 'NOT_CREATED'
-                    return outcome
-                self.cleanup_deadline = time.monotonic() + 5
-                current = self.inspect_owned(self.cid or name)
-                self.cid = current['Id']
-                if current.get('State', {}).get('Running') is True:
-                    killed = self.invoke(['kill', self.cid], timeout=1)
-                    driver.require(killed.returncode == 0 and not killed.timed_out and not killed.overflow,
-                                   'STOP_UNCONFIRMED')
-                current = self.inspect_owned(self.cid)
-                driver.require(current.get('State', {}).get('Running') is False, 'STOP_UNCONFIRMED')
-                removed = self.invoke(['rm', self.cid], timeout=1)
-                driver.require(removed.returncode == 0 and not removed.timed_out and not removed.overflow,
-                               'CLEANUP_UNCONFIRMED')
-                self.cleanup = 'OWNED_STOPPED_CONTAINER_REMOVED'
-            except Exception:
+                    self.cleanup = 'NOT_CREATED'
+                else:
+                    self.cleanup_deadline = time.monotonic() + 5
+                    current = self.inspect_owned(self.cid or name)
+                    self.cid = current['Id']
+                    if current.get('State', {}).get('Running') is True:
+                        killed = self.invoke(['kill', self.cid], timeout=1)
+                        driver.require(killed.returncode == 0 and not killed.timed_out and not killed.overflow,
+                                       'STOP_UNCONFIRMED')
+                    current = self.inspect_owned(self.cid)
+                    driver.require(current.get('State', {}).get('Running') is False, 'STOP_UNCONFIRMED')
+                    removed = self.invoke(['rm', self.cid], timeout=1)
+                    driver.require(removed.returncode == 0 and not removed.timed_out and not removed.overflow,
+                                   'CLEANUP_UNCONFIRMED')
+                    self.cleanup = 'OWNED_STOPPED_CONTAINER_REMOVED'
+            except Exception as exc:
                 self.cleanup = 'NO_CONFIRMED_OWNED_CLEANUP'
+                outcome['cleanup_code'] = failure_code(exc)
                 if self.cid is not None:
-                    outcome = {'status': 'FAIL_CLOSED', 'code': 'CLEANUP_OR_STOP_UNCONFIRMED',
-                               'container_id': self.cid, 'previous_status': outcome['status']}
+                    outcome.update(status='FAIL_CLOSED', code='CLEANUP_OR_STOP_UNCONFIRMED',
+                                   container_id=self.cid, previous_status=outcome['status'])
             outcome['cleanup'] = self.cleanup
             outcome['owned_name'] = name
             outcome['create_attempted'] = self.create_attempted
             outcome['uncertain_outcome'] = self.create_attempted and self.cleanup != 'OWNED_STOPPED_CONTAINER_REMOVED'
+            outcome['diagnostics'] = dict(policy='literal-trace-markers-only-v1', commands=self.diagnostics,
+                                         record_cap_exceeded=self.diagnostic_overflow)
+            if self.diagnostic_overflow:
+                outcome.update(status='FAIL_CLOSED', code='DIAGNOSTIC_RECORD_CAP')
             if self.active_started is not None:
                 elapsed = time.monotonic() - self.active_started
                 outcome['active_and_cleanup_elapsed_seconds'] = round(elapsed, 6)
@@ -341,5 +485,5 @@ if __name__ == '__main__':
     try:
         raise SystemExit(main())
     except driver.Rejected as exc:
-        print(json.dumps({'status': 'FAIL_CLOSED', 'code': str(exc)}), file=sys.stderr)
+        print(json.dumps({'status': 'FAIL_CLOSED', 'code': failure_code(exc)}), file=sys.stderr)
         raise SystemExit(2)

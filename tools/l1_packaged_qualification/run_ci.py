@@ -29,7 +29,7 @@ D = W.driver
 BASE = 'python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2'
 OWNER = 'school.qualification-build'
 FROZEN = {'packaged_l1_driver.py': '1c41d6d052247091af7e8bdc94fbb243f9b5598287a3db1cdac2684a9fc766a6',
-          'packaged_l1_watchdog.py': 'c551dec28b29af229bb8406b3c8ed8c22796074066d598b7992132c757295823',
+          'packaged_l1_watchdog.py': '7b9e792f172d2952d3f0b708e843a74ca2c696458ac536db864d5c09f1171ea0',
           'PACKAGED_L1_CHECK_SPEC.json': D.SPEC_SHA}
 SCOPE = ['bridge_school_api', 'bridge_contracts', 'requirements-api.txt', 'Dockerfile.api'] + [
     'database/' + name + '.py' for name in ('video_staging_read', 'video_staging_lineage',
