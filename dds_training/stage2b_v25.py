@@ -34,12 +34,34 @@ from stage2b_v24 import (
 CANDIDATE_ALGORITHM_VERSION = "dds-learning-v2.5-stage2b-candidate"
 STRATIFIED_COMPARISON_SCHEMA = "dds-stage2b-stratified-oof-comparison-v2"
 CALIBRATION_DIAGNOSTICS_SCHEMA = "dds-stage2b-calibration-diagnostics-v2"
+CROSSFIT_CALIBRATION_DIAGNOSTICS_SCHEMA = "dds-stage2b-crossfit-calibration-diagnostics-v1"
 FAMILY_POLICY_SCHEMA = "dds-stage2b-family-selection-policy-v1"
 OOF_INPUT_POLICY = "explicit-train-oof-family-fold-v1"
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
+
+
+def _finite_prediction_number(prediction: Mapping[str, object], key: str, default: float) -> float:
+    """Only an absent field may use its policy default; explicit null is invalid."""
+    value = prediction.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Prediction {key} must be a finite number")
+    try:
+        number = float(value)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(f"Prediction {key} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"Prediction {key} must be a finite number")
+    return number
+
+
+def _prediction_support(prediction: Mapping[str, object]) -> int:
+    support = _finite_prediction_number(prediction, "model_evidence_count", 0)
+    if support < 0 or not support.is_integer():
+        raise ValueError("Prediction model_evidence_count must be a nonnegative integer")
+    return int(support)
 
 
 def support_aware_contract_probability(prediction: Mapping[str, object]) -> float:
@@ -49,13 +71,17 @@ def support_aware_contract_probability(prediction: Mapping[str, object]) -> floa
     stored variance and zero correction, so that formula incorrectly returned
     one even though the supporting sample count was zero.  v2.5 makes support a
     mandatory multiplicative term and assigns a deliberately low prior to an
-    unsupported fallback.
+    unsupported fallback. Missing support/variance/correction default to zero;
+    provided values must be finite, with nonnegative integral support and
+    nonnegative variance. Correction is signed. Null is not a missing field.
     """
 
-    support = max(0, int(prediction.get("model_evidence_count", 0) or 0))
+    support = _prediction_support(prediction)
     backoff = str(prediction.get("model_backoff_level", "baseline"))
-    variance = max(0.0, float(prediction.get("residual_variance", 0.0) or 0.0))
-    correction = abs(float(prediction.get("correction", 0.0) or 0.0))
+    variance = _finite_prediction_number(prediction, "residual_variance", 0.0)
+    if variance < 0:
+        raise ValueError("Prediction residual_variance must be nonnegative")
+    correction = abs(_finite_prediction_number(prediction, "correction", 0.0))
 
     if support == 0 or backoff == "baseline":
         return 0.18
@@ -138,7 +164,11 @@ def rewrite_oof_raw_probabilities(rows: Sequence[Mapping[str, object]]) -> list[
 
     Opening-lead models already estimate the empirical probability that a card
     is equal-optimal.  Their probability is retained unless the record has no
-    support, in which case a conservative family prior is used.
+    support, in which case a conservative family prior is used. Every provided
+    raw/confidence probability must be finite in [0, 1], even when superseded.
+    Only absent raw probability may use confidence_probability; if both are
+    absent the explicit missing-evidence prior is 0.25. Missing support is zero.
+    Valid boundary probabilities still follow the existing [0.02, 0.98] policy.
     """
 
     validate_oof_rows(rows)
@@ -146,16 +176,20 @@ def rewrite_oof_raw_probabilities(rows: Sequence[Mapping[str, object]]) -> list[
     for raw in rows:
         row = dict(raw)
         prediction = dict(row["prediction"])
+        for key in ("raw_confidence_probability", "confidence_probability"):
+            if key in prediction:
+                provided = _finite_prediction_number(prediction, key, 0.25)
+                if not 0.0 <= provided <= 1.0:
+                    raise ValueError(f"Prediction {key} must be in [0, 1]")
         if str(row["task_type"]) == "contract_tricks":
             probability = support_aware_contract_probability(prediction)
         else:
-            support = max(0, int(prediction.get("model_evidence_count", 0) or 0))
+            support = _prediction_support(prediction)
             probability = float(
                 prediction.get(
                     "raw_confidence_probability",
                     prediction.get("confidence_probability", 0.25),
                 )
-                or 0.0
             )
             if support == 0:
                 probability = min(probability, 0.25)
@@ -348,6 +382,7 @@ def _ece(probabilities: Sequence[float], outcomes: Sequence[int], *, bins: int =
 
 
 def calibration_diagnostics(rows: Sequence[Mapping[str, object]]) -> dict:
+    """Describe final-calibrator fit rows; this is resubstitution, not evaluation."""
     grouped: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
     for row in rows:
         family = task_family(str(row["task_type"]), row.get("strain"))
@@ -385,7 +420,104 @@ def calibration_diagnostics(rows: Sequence[Mapping[str, object]]) -> dict:
         "schema": CALIBRATION_DIAGNOSTICS_SCHEMA,
         "algorithm_version": CANDIDATE_ALGORITHM_VERSION,
         "opening_lead_outcome_policy": OPENING_LEAD_OUTCOME_POLICY,
+        "evaluation_sample": "fit_sample",
+        "sampling": "in_sample",
+        "calibrator_fit_family_disjoint": False,
+        "independent_evaluation": False,
+        "upstream_model_training_lineage_verified": False,
+        "full_pipeline_quality": False,
+        "full_pipeline_quality_evidence": False,
+        "promotion": False,
         "groups": groups,
+    }
+
+
+def _identifier_set_sha256(rows: Sequence[Mapping[str, object]], key: str) -> str:
+    identities = sorted({row[key] for row in rows})
+    payload = json.dumps(identities, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def crossfit_calibration_diagnostics(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    minimum_support: int = 50,
+    review_threshold: float = 0.65,
+) -> dict:
+    """Assess direct calibrator fit-family exclusion on supplied TRAIN OOF rows.
+
+    Each calibrator excludes the families whose predictions it scores. This
+    is conditional on supplied base predictions, not a nested pipeline test:
+    another fold's base model may have trained on the evaluated families.
+    Upstream fits and hyperparameter selection require a separate outer-family
+    holdout before any full-pipeline quality or promotion claim is possible.
+    Input evidence and the final all-row application calibrator are untouched.
+    """
+    rewritten = sorted(rewrite_oof_raw_probabilities(rows), key=lambda row: row["task_id"])
+    folds = sorted({row["heldout_fold"] for row in rewritten})
+    if len(folds) < 2:
+        raise ValueError("Calibration assessment requires at least two nonempty family folds")
+
+    evaluated = []
+    fold_reports = []
+    for fold in folds:
+        fit_rows = [row for row in rewritten if row["heldout_fold"] != fold]
+        heldout = [row for row in rewritten if row["heldout_fold"] == fold]
+        fit_families = {row["family_id"] for row in fit_rows}
+        heldout_families = {row["family_id"] for row in heldout}
+        family_overlap = fit_families & heldout_families
+        task_overlap = {row["task_id"] for row in fit_rows} & {row["task_id"] for row in heldout}
+        if family_overlap or task_overlap:
+            raise ValueError("Calibrator fit and evaluation families/tasks must be disjoint")
+        calibrator = fit_segmented_oof_calibrator(
+            fit_rows, minimum_support=minimum_support,
+            maximum_bins=12, review_threshold=review_threshold,
+        )
+        calibrator["algorithm_version"] = CANDIDATE_ALGORITHM_VERSION
+        calibrator["raw_probability_policy"] = "support-aware-v2"
+        calibrator["oof_input_policy"] = OOF_INPUT_POLICY
+        calibrated = [
+            {**row, "prediction": {**row["prediction"], **apply_segmented_calibration(row, calibrator)}}
+            for row in heldout
+        ]
+        evaluated.extend(calibrated)
+        fold_reports.append({
+            "heldout_fold": fold,
+            "fit_folds": [value for value in folds if value != fold],
+            "fit_rows": len(fit_rows),
+            "heldout_rows": len(heldout),
+            "fit_families": len(fit_families),
+            "heldout_families": len(heldout_families),
+            "family_overlap": len(family_overlap),
+            "task_overlap": len(task_overlap),
+            "fit_task_ids_sha256": _identifier_set_sha256(fit_rows, "task_id"),
+            "heldout_task_ids_sha256": _identifier_set_sha256(heldout, "task_id"),
+            "fit_family_ids_sha256": _identifier_set_sha256(fit_rows, "family_id"),
+            "heldout_family_ids_sha256": _identifier_set_sha256(heldout, "family_id"),
+            "calibrator_sha256": hashlib.sha256(json.dumps(
+                calibrator, sort_keys=True, ensure_ascii=False,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")).hexdigest(),
+            "groups": calibration_diagnostics(calibrated)["groups"],
+        })
+    return {
+        "schema": CROSSFIT_CALIBRATION_DIAGNOSTICS_SCHEMA,
+        "algorithm_version": CANDIDATE_ALGORITHM_VERSION,
+        "opening_lead_outcome_policy": OPENING_LEAD_OUTCOME_POLICY,
+        "scope": "calibrator_fit_only",
+        "conditional_on_supplied_base_predictions": True,
+        "evaluation_sample": "heldout_train_families",
+        "calibrator_fit_family_disjoint": True,
+        "upstream_model_training_lineage_verified": False,
+        "full_pipeline_quality": False,
+        "full_pipeline_quality_evidence": False,
+        "promotion": False,
+        "limitation": "Base models for calibrator-fit rows may have trained on evaluated families; no nested pipeline qualification.",
+        "identity_hash_format": "sha256-sorted-unique-ids-compact-utf8-json-v1",
+        "rows": len(evaluated),
+        "families": len({row["family_id"] for row in evaluated}),
+        "folds": fold_reports,
+        "groups": calibration_diagnostics(evaluated)["groups"],
     }
 
 

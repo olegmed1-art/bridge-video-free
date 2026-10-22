@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from itertools import product
@@ -271,7 +272,233 @@ def check_oof_input_admission() -> None:
     recalibrate_oof_rows([base, sibling], minimum_support=1)
 
 
+def calibration_partition_rows() -> list[dict]:
+    # Same raw probability, opposite outcomes in the two family partitions.
+    # Each family has two tasks so task exclusion alone is insufficient.
+    rows = []
+    for index in range(8):
+        row = make_row(
+            index=index, task_type="opening_lead", strain=0,
+            source_version="bridge-adaptive-v0.2", old_loss=1,
+            new_loss=0 if index < 4 else 1, backoff="exact", support=250,
+        )
+        row["heldout_fold"] = index // 4
+        row["family_id"] = f"CF-{index // 2}"
+        rows.append(row)
+    return rows
+
+
+def check_fit_sample_diagnostics_label() -> None:
+    calibrated, _ = recalibrate_oof_rows(calibration_partition_rows(), minimum_support=1)
+    report = calibration_diagnostics(calibrated)
+    assert report["evaluation_sample"] == "fit_sample"
+    assert report["sampling"] == "in_sample"
+    assert report["calibrator_fit_family_disjoint"] is False
+    assert report["independent_evaluation"] is False
+    assert report["full_pipeline_quality_evidence"] is False
+    assert report["promotion"] is False
+
+
+def check_crossfit_calibration_independence() -> None:
+    from stage2b_v25 import crossfit_calibration_diagnostics
+
+    rows = calibration_partition_rows()
+    before = deepcopy(rows)
+    final_rows, final_model = recalibrate_oof_rows(rows, minimum_support=1)
+    final_before = deepcopy((final_rows, final_model))
+    report = crossfit_calibration_diagnostics(rows, minimum_support=1)
+    assert report["schema"] == "dds-stage2b-crossfit-calibration-diagnostics-v1"
+    assert report["scope"] == "calibrator_fit_only"
+    assert report["conditional_on_supplied_base_predictions"] is True
+    assert report["calibrator_fit_family_disjoint"] is True
+    assert report["upstream_model_training_lineage_verified"] is False
+    assert report["full_pipeline_quality"] is False
+    assert report["full_pipeline_quality_evidence"] is False
+    assert report["promotion"] is False
+    assert report["evaluation_sample"] == "heldout_train_families"
+    assert report["rows"] == 8 and report["families"] == 4
+    assert report["groups"]["opening_lead_suit:exact"]["calibrated_brier"] == 1.0
+    assert report["groups"]["opening_lead_suit:exact"]["calibrated_ece"] == 1.0
+    assert len(report["folds"]) == 2
+    for fold_report in report["folds"]:
+        fold = fold_report["heldout_fold"]
+        assert fold_report["fit_folds"] == [1 - fold]
+        assert fold_report["fit_rows"] == fold_report["heldout_rows"] == 4
+        assert fold_report["fit_families"] == fold_report["heldout_families"] == 2
+        assert fold_report["family_overlap"] == fold_report["task_overlap"] == 0
+        metrics = fold_report["groups"]["opening_lead_suit:exact"]
+        # An independent analytic oracle: fitting homogeneous outcomes gives
+        # the opposite fold's constant label, hence every held-out error is 1.
+        assert metrics["mean_calibrated_probability"] == fold
+        assert metrics["calibrated_brier"] == 1.0
+        for sample, selected in (
+            ("fit", [row for row in rows if row["heldout_fold"] != fold]),
+            ("heldout", [row for row in rows if row["heldout_fold"] == fold]),
+        ):
+            for kind in ("task", "family"):
+                ids = sorted({row[f"{kind}_id"] for row in selected})
+                expected_hash = hashlib.sha256(
+                    json.dumps(ids, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
+                assert fold_report[f"{sample}_{kind}_ids_sha256"] == expected_hash
+        assert len(fold_report["calibrator_sha256"]) == 64
+    assert report == crossfit_calibration_diagnostics(list(reversed(rows)), minimum_support=1)
+    assert report == crossfit_calibration_diagnostics(final_rows, minimum_support=1)
+    assert rows == before and (final_rows, final_model) == final_before
+    assert recalibrate_oof_rows(rows, minimum_support=1) == final_before
+
+    # Inspect the actual fit/apply calls, not only the report's assertions.
+    from stage2b_v24 import apply_segmented_calibration, fit_segmented_oof_calibrator
+    current_fit = []
+    fit_calls = []
+    evaluated = []
+
+    def observed_fit(fit_rows, **kwargs):
+        current_fit[:] = fit_rows
+        fit_calls.append({row["heldout_fold"] for row in fit_rows})
+        return fit_segmented_oof_calibrator(fit_rows, **kwargs)
+
+    def observed_apply(row, calibrator):
+        assert row["task_id"] not in {item["task_id"] for item in current_fit}
+        assert row["family_id"] not in {item["family_id"] for item in current_fit}
+        evaluated.append(row["task_id"])
+        return apply_segmented_calibration(row, calibrator)
+
+    with patch("stage2b_v25.fit_segmented_oof_calibrator", side_effect=observed_fit), \
+         patch("stage2b_v25.apply_segmented_calibration", side_effect=observed_apply):
+        assert crossfit_calibration_diagnostics(rows, minimum_support=1) == report
+    assert fit_calls == [{1}, {0}]
+    assert sorted(evaluated) == sorted(row["task_id"] for row in rows)
+
+
+def check_crossfit_calibration_rejections() -> None:
+    from stage2b_v25 import crossfit_calibration_diagnostics
+
+    rows = calibration_partition_rows()
+    invalid_batches = [[], rows[:4], [*rows, deepcopy(rows[0])]]
+    for key, value in (("split", "sealed_test"), ("out_of_fold", False),
+                       ("heldout_fold", True), ("family_id", rows[0]["family_id"])):
+        invalid = deepcopy(rows)
+        invalid[-1][key] = value
+        invalid_batches.append(invalid)
+    missing = deepcopy(rows)
+    missing[-1].pop("heldout_fold")
+    invalid_batches.append(missing)
+    for invalid in invalid_batches:
+        before = deepcopy(invalid)
+        with patch("stage2b_v25.fit_segmented_oof_calibrator",
+                   side_effect=AssertionError("Fit ran before partition admission")):
+            try:
+                crossfit_calibration_diagnostics(invalid, minimum_support=1)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Invalid crossfit partition admitted")
+        assert invalid == before
+
+
+def check_probability_numeric_admission() -> None:
+    from stage2b_v25 import crossfit_calibration_diagnostics
+
+    failures = []
+    for key in ("raw_confidence_probability", "confidence_probability"):
+        for value in (None, float("nan"), float("inf"), float("-inf"),
+                      -1.0, 2.0, True, False, "0.5", "", [], {}):
+            rows = calibration_partition_rows()
+            # Check an invalid fallback field even when a valid raw field exists.
+            rows[-1]["prediction"][key] = value
+            before = json.dumps(rows, sort_keys=True)
+            for entry in (rewrite_oof_raw_probabilities, recalibrate_oof_rows,
+                          crossfit_calibration_diagnostics):
+                with patch("stage2b_v25.fit_segmented_oof_calibrator",
+                           side_effect=AssertionError("Fit received invalid numeric evidence")):
+                    try:
+                        entry(rows)
+                    except ValueError:
+                        pass
+                    except Exception as exc:
+                        failures.append((entry.__name__, key, repr(value), type(exc).__name__))
+                    else:
+                        failures.append((entry.__name__, key, repr(value), "admitted"))
+                assert json.dumps(rows, sort_keys=True) == before
+    assert not failures, f"Invalid probabilities not rejected before fit: {failures}"
+
+
+def check_contract_numeric_admission() -> None:
+    from stage2b_v25 import crossfit_calibration_diagnostics
+
+    failures = []
+    base = make_row(index=20, task_type="contract_tricks", strain=0,
+                    source_version="baseline", old_loss=1, new_loss=0,
+                    backoff="exact", support=250)
+    for key in ("model_evidence_count", "residual_variance", "correction"):
+        invalid = [None, float("nan"), float("inf"), float("-inf"), True, "1", "", [], {}]
+        if key != "correction":
+            invalid.append(-1)
+        if key == "model_evidence_count":
+            invalid.append(1.5)
+        for value in invalid:
+            row = deepcopy(base)
+            row["prediction"][key] = value
+            rows = [row, calibration_partition_rows()[-1]]
+            before = json.dumps(rows, sort_keys=True)
+            for entry in (rewrite_oof_raw_probabilities, recalibrate_oof_rows,
+                          crossfit_calibration_diagnostics):
+                with patch("stage2b_v25.fit_segmented_oof_calibrator",
+                           side_effect=AssertionError("Fit received invalid contract evidence")):
+                    try:
+                        entry(rows)
+                    except ValueError:
+                        pass
+                    except Exception as exc:
+                        failures.append((entry.__name__, key, repr(value), type(exc).__name__))
+                    else:
+                        failures.append((entry.__name__, key, repr(value), "admitted"))
+            # The public support-aware helper must reject malformed evidence
+            # even for a zero-support/baseline fallback that ignores its value.
+            row["prediction"]["model_backoff_level"] = "baseline"
+            try:
+                support_aware_contract_probability(row["prediction"])
+            except ValueError:
+                pass
+            except Exception as exc:
+                failures.append(("support_aware_contract_probability", key, repr(value), type(exc).__name__))
+            else:
+                failures.append(("support_aware_contract_probability", key, repr(value), "admitted"))
+            row["prediction"]["model_backoff_level"] = base["prediction"]["model_backoff_level"]
+            assert json.dumps(rows, sort_keys=True) == before
+    assert not failures, f"Invalid contract evidence not rejected before fit: {failures}"
+
+
+def check_missing_probability_policy() -> None:
+    row = calibration_partition_rows()[0]
+    row["prediction"].pop("raw_confidence_probability")
+    row["prediction"].pop("confidence_probability", None)
+    before = deepcopy(row)
+    assert rewrite_oof_raw_probabilities([row])[0]["prediction"]["raw_confidence_probability"] == 0.25
+    assert row == before
+    row["prediction"]["confidence_probability"] = 0.6
+    assert rewrite_oof_raw_probabilities([row])[0]["prediction"]["raw_confidence_probability"] == 0.6
+    for provided, expected in ((0.0, 0.02), (1.0, 0.98)):
+        row["prediction"]["raw_confidence_probability"] = provided
+        assert rewrite_oof_raw_probabilities([row])[0]["prediction"]["raw_confidence_probability"] == expected
+    row["prediction"].pop("model_evidence_count")
+    assert rewrite_oof_raw_probabilities([row])[0]["prediction"]["raw_confidence_probability"] == 0.25
+    assert support_aware_contract_probability({}) == 0.18
+    assert support_aware_contract_probability({"model_evidence_count": 0}) == 0.18
+    positive = {"model_backoff_level": "exact", "model_evidence_count": 1.0,
+                "residual_variance": 0.0, "correction": 2.0}
+    negative = {**positive, "correction": -2.0}
+    assert support_aware_contract_probability(positive) == support_aware_contract_probability(negative)
+
+
 def main() -> None:
+    check_probability_numeric_admission()
+    check_contract_numeric_admission()
+    check_missing_probability_policy()
+    check_fit_sample_diagnostics_label()
+    check_crossfit_calibration_independence()
+    check_crossfit_calibration_rejections()
     check_oof_input_admission()
     check_prediction_bound_lead_evidence()
     unsupported = {

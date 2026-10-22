@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tarfile
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from stage2b_prepare import lead_candidates, write_jsonl
 from stage2b_prepare_v25 import prepare_stage2b_v25
@@ -34,7 +36,63 @@ def make_task(index: int, task_type: str) -> dict:
     }
 
 
+def check_calibration_assessment_artifacts() -> None:
+    """Exercise report wiring with tiny arrays; no SQL or upstream model fit."""
+    from stage2b_v25_selftest import calibration_partition_rows
+
+    rows = calibration_partition_rows()
+    expected_rows, expected_calibrator = recalibrate_oof_rows(rows)
+    connection = Mock()
+    connection.execute.return_value.fetchone.return_value = (len(rows),)
+
+    def blueprint(_tasks, path, **_kwargs):
+        write_jsonl(path, [])
+        return {"tasks": 20, "dds_called": False}
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "training.sqlite3").touch()  # Empty placeholder; never opened as SQL.
+        with patch("stage2b_prepare_v25.load_tasks", return_value={}), \
+             patch("stage2b_prepare_v25.load_train_facts", return_value=rows), \
+             patch("stage2b_prepare_v25.prepare_oof_candidate", return_value={
+                 "oof_rows": rows, "full_candidate_model": {"synthetic": True}, "folds": [],
+             }) as producer, \
+             patch("stage2b_prepare_v25.stratified_oof_comparison", return_value={
+                 "family_policy": {"families": {}, "automatic_promotion": False},
+             }), \
+             patch("stage2b_prepare_v25._line_wave_and_curriculum", return_value=([], [], {})), \
+             patch("stage2b_prepare_v25.extract_counterexample_candidates", return_value=[]), \
+             patch("stage2b_prepare_v25.write_multi_contract_blueprint", side_effect=blueprint), \
+             patch("stage2b_prepare_v25.sqlite3.connect", return_value=connection), \
+             patch("stage2b_prepare_v25.classify_investigations", return_value=[]), \
+             patch("stage2b_prepare_v25._review_source_rows", return_value=[]):
+            summary = prepare_stage2b_v25(
+                work=root, task_paths=[], out_dir=root / "out",
+                main_tasks_path=root / "unused.jsonl", blueprint_families=1,
+            )
+        producer.assert_called_once_with(rows)
+        out = root / "out"
+        crossfit = summary["crossfit_calibration_diagnostics"]
+        assert crossfit["scope"] == "calibrator_fit_only"
+        assert crossfit["calibrator_fit_family_disjoint"] is True
+        assert crossfit["full_pipeline_quality_evidence"] is False
+        assert summary["calibration_diagnostics"]["evaluation_sample"] == "fit_sample"
+        report_path = out / "crossfit_calibration_diagnostics_v25.json"
+        assert json.loads(report_path.read_text(encoding="utf-8")) == crossfit
+        manifest = json.loads((out / "CURRENT_STAGE_MANIFEST.json").read_text(encoding="utf-8"))
+        assert manifest["canonical_files"]["crossfit_calibration_diagnostics"]["path"] == report_path.name
+        assert json.loads((out / "oof_calibration_v25.json").read_text(encoding="utf-8")) == expected_calibrator
+        exported = [json.loads(line) for line in (out / "oof_predictions_v03_refined.jsonl").read_text().splitlines()]
+        assert [row["prediction"] for row in exported] == [row["prediction"] for row in expected_rows]
+        with tarfile.open(out / "dds-stage2b-v25-prepared-compact.tgz") as archive:
+            assert f"stage2b-v25/{report_path.name}" in archive.getnames()
+        assert summary["readiness"]["validation_opened"] is False
+        assert summary["readiness"]["sealed_opened"] is False
+        assert summary["readiness"]["dds_called"] is False
+
+
 def main() -> None:
+    check_calibration_assessment_artifacts()
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         work = root / "work"

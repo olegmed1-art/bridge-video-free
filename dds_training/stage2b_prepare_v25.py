@@ -37,6 +37,7 @@ from stage2b_v24 import (
 from stage2b_v25 import (
     CANDIDATE_ALGORITHM_VERSION,
     calibration_diagnostics,
+    crossfit_calibration_diagnostics,
     enrich_review_rows,
     exact_balanced_curriculum,
     recalibrate_oof_rows,
@@ -142,6 +143,11 @@ def prepare_stage2b_v25(
     rows = load_train_facts(db_path, tasks)
 
     base_oof = prepare_oof_candidate(rows)
+    crossfit_diagnostics = crossfit_calibration_diagnostics(
+        base_oof["oof_rows"],
+        minimum_support=50,
+        review_threshold=0.65,
+    )
     oof_rows, calibrator = recalibrate_oof_rows(
         base_oof["oof_rows"],
         minimum_support=50,
@@ -186,6 +192,7 @@ def prepare_stage2b_v25(
     model_path = out_dir / "candidate_model_v03_refined.json"
     calibration_path = out_dir / "oof_calibration_v25.json"
     diagnostics_path = out_dir / "calibration_diagnostics_v25.json"
+    crossfit_diagnostics_path = out_dir / "crossfit_calibration_diagnostics_v25.json"
     comparison_path = out_dir / "oof_comparison_v03_stratified.json"
     family_policy_path = out_dir / "family_selection_policy.json"
     lines_path = out_dir / "line_wave_sources_v25.jsonl"
@@ -193,6 +200,7 @@ def prepare_stage2b_v25(
     write_json(model_path, full_candidate_model)
     write_json(calibration_path, calibrator)
     write_json(diagnostics_path, diagnostics)
+    write_json(crossfit_diagnostics_path, crossfit_diagnostics)
     write_json(comparison_path, comparison)
     write_json(family_policy_path, family_policy)
     write_jsonl(lines_path, line_rows)
@@ -271,6 +279,7 @@ def prepare_stage2b_v25(
             "candidate_model": model_path,
             "oof_calibration": calibration_path,
             "calibration_diagnostics": diagnostics_path,
+            "crossfit_calibration_diagnostics": crossfit_diagnostics_path,
             "oof_comparison": comparison_path,
             "family_selection_policy": family_policy_path,
             "line_wave": lines_path,
@@ -300,6 +309,7 @@ def prepare_stage2b_v25(
         model_path,
         calibration_path,
         diagnostics_path,
+        crossfit_diagnostics_path,
         comparison_path,
         family_policy_path,
         oof_path,
@@ -325,6 +335,7 @@ def prepare_stage2b_v25(
         "readiness": readiness,
         "comparison": comparison,
         "calibration_diagnostics": diagnostics,
+        "crossfit_calibration_diagnostics": crossfit_diagnostics,
         "artifacts": {
             "manifest": str(manifest_path),
             "archive": str(archive_path),
