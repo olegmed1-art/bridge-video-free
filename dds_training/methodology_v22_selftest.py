@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 from compare_predictors import _select_family
@@ -49,10 +50,11 @@ def _write_manifest_tasks(root: Path) -> list[dict]:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory() as td, ExitStack() as resources:
         root = Path(td)
         tasks = _write_manifest_tasks(root)
         con = connect(root / "training.sqlite3")
+        resources.callback(con.close)
 
         for i, task in enumerate(tasks):
             code = task["expected_error_code"]
