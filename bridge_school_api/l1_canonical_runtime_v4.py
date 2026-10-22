@@ -356,4 +356,6 @@ def resolve_registered(evaluations: Iterable[RuleEvaluation]) -> RuleEvaluation:
 
 
 def evaluate(rule_id: str, context: dict[str, Any], *, system_version: str = SYSTEM_VERSION) -> RuleEvaluation:
+    if rule_id not in EXTRA_PROCEDURAL_RULE_IDS:
+        return _evaluate_v3(rule_id, context, system_version=system_version)
     return _evaluate_observed(rule_id, context, _evaluate_unchecked, system_version=system_version)

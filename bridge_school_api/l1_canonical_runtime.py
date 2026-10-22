@@ -270,8 +270,10 @@ def _evaluate_unchecked(rule_id: str, context: dict[str, Any], *, system_version
         score = 20 * level if strain in {"C", "D"} else 30 * level if strain in {"H", "S"} else 40 + 30 * (level - 1)
         return _match(rule_id, score, evidence=("FACT-L1-SKILL-0114",))
     if rule_id == "RULE-L1-SCORING-GAME-SLAM-CLASS":
-        level, score = int(c.get("level", 0)), int(c.get("contract_trick_score", 0))
-        return _match(rule_id, "GRAND_SLAM" if level == 7 else "SMALL_SLAM" if level == 6 else "GAME" if score >= 100 else "PARTSCORE", evidence=("FACT-L1-SKILL-0115",))
+        level = int(c.get("level", 0))
+        classification = ("GRAND_SLAM" if level == 7 else "SMALL_SLAM" if level == 6
+                          else "GAME" if int(c.get("contract_trick_score", 0)) >= 100 else "PARTSCORE")
+        return _match(rule_id, classification, evidence=("FACT-L1-SKILL-0115",))
     if rule_id == "RULE-L1-SCORING-VUL-BONUS-UNDERTRICKS":
         vul = bool(c.get("vulnerable"))
         if "undertricks" in c:

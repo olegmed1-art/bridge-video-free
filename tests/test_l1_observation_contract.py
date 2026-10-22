@@ -14,6 +14,36 @@ RuleEvaluation = RUNTIMES[0].RuleEvaluation
 STOPPER_RULE = 'RULE-L1-NT-STOPPER-REQUIRED-COMPETITION'
 
 
+@pytest.mark.parametrize('api', RUNTIMES, ids=API_IDS)
+@pytest.mark.parametrize('level,action', [(6, 'SMALL_SLAM'), (7, 'GRAND_SLAM')])
+@pytest.mark.parametrize('unused_score', [{}, {'contract_trick_score': None},
+                                          {'contract_trick_score': False},
+                                          {'contract_trick_score': 'invalid'}])
+def test_review_slam_classification_requires_only_level(api, level, action, unused_score):
+    result = api.evaluate('RULE-L1-SCORING-GAME-SLAM-CLASS', {'level': level, **unused_score})
+    assert (result.status, result.action) == ('MATCH', action)
+
+
+@pytest.mark.parametrize('api', RUNTIMES, ids=API_IDS)
+@pytest.mark.parametrize('level', [1, 5])
+def test_review_non_slam_classification_still_requires_score(api, level):
+    result = api.evaluate('RULE-L1-SCORING-GAME-SLAM-CLASS', {'level': level})
+    assert (result.status, result.action) == ('NO_MATCH', None)
+
+
+@pytest.mark.parametrize('api', RUNTIMES[1:], ids=API_IDS[1:])
+@pytest.mark.parametrize('context', [None, [], 'invalid', 42])
+def test_review_unknown_registry_rule_blocks_before_context_validation(api, context):
+    result = api.evaluate('SYNTHETIC_UNKNOWN', context)
+    assert (result.status, result.action) == ('BLOCK', 'UNKNOWN_RULE_ID')
+
+
+@pytest.mark.parametrize('api', RUNTIMES[1:], ids=API_IDS[1:])
+def test_review_unknown_registry_rule_keeps_profile_isolation_first(api):
+    result = api.evaluate('SYNTHETIC_UNKNOWN', None, system_version='SCHOOL_TOURNAMENT_CURRENT_V1')
+    assert (result.status, result.action) == ('NO_MATCH', None)
+
+
 def resolve(api, values):
     return (api.resolve if api is RUNTIMES[0] else api.resolve_registered)(values)
 
