@@ -106,6 +106,20 @@
       "description": "OOF calibration monotonicity and abstention."
     },
     {
+      "id": "confidence-calibration-outcome",
+      "path": "confidence_calibration_outcome_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 15,
+      "description": "Legacy confidence uses the predicted card's DDS loss, rejects incomplete outcomes and preserves continuation/contract semantics."
+    },
+    {
+      "id": "compare-predictors-consistency",
+      "path": "compare_predictors_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 15,
+      "description": "Complete paired cohorts, explicit missing-ID rejection, illegal-card tail accounting and output preflight; no DDS or fitting."
+    },
+    {
       "id": "continuation-tasks",
       "path": "continuation_tasks_selftest.py",
       "suite": "fast",
@@ -369,10 +383,12 @@
         "experience-memory"
       ],
       "compare_predictors.py": [
-        "methodology-v22"
+        "methodology-v22",
+        "compare-predictors-consistency"
       ],
       "confidence_calibration.py": [
-        "confidence-calibration"
+        "confidence-calibration",
+        "confidence-calibration-outcome"
       ],
       "config.py": [
         "stage2-readiness",
@@ -506,7 +522,8 @@
         "stage2b-prepare"
       ],
       "stage2b_prepare.py": [
-        "stage2b-prepare"
+        "stage2b-prepare",
+        "crossfit"
       ],
       "stage2b_v25.py": [
         "stage2b-v25-core",

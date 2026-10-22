@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .dds3.service import (
     DDS3_HAND_ORDER,
@@ -19,6 +19,9 @@ from .dds3.service import (
     canonical_dds3_table_request,
     dds3_table_request_sha256,
 )
+
+if TYPE_CHECKING:
+    from .ai_auction_rollout import AuctionState
 
 
 SEATS = ("N", "E", "S", "W")
@@ -30,9 +33,17 @@ class AuctionScoringError(ValueError):
 
 
 def normalize_vulnerability(raw: Any) -> str:
-    value = str(raw or "").strip().upper().replace("-", "").replace("_", "")
+    """Normalize known strings; an explicit blank string is the legacy NONE alias.
+
+    Missing values and other types carry no vulnerability evidence and fail closed.
+    """
+    if not isinstance(raw, str):
+        raise AuctionScoringError("vulnerability is invalid")
+    value = raw.strip().upper()
+    if not value:
+        return "NONE"
+    value = value.replace("-", "").replace("_", "")
     aliases = {
-        "": "NONE",
         "NONE": "NONE",
         "LOVE": "NONE",
         "NS": "NS",
@@ -155,6 +166,40 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _validated_auction_state(row: dict[str, Any], dealer: Any) -> AuctionState:
+    # Rollout imports the vulnerability normalizer; defer this reverse dependency.
+    from .ai_auction_rollout import AuctionRolloutError, analyze_auction
+
+    if not isinstance(dealer, str) or dealer.upper() not in SEATS:
+        raise AuctionScoringError("BEN rollout dealer is invalid or missing")
+    auction = row.get("auction")
+    if not isinstance(auction, (list, tuple)) or any(not isinstance(call, str) for call in auction):
+        raise AuctionScoringError("BEN rollout auction is invalid")
+    try:
+        state = analyze_auction(dealer, auction)
+    except AuctionRolloutError as exc:
+        raise AuctionScoringError("BEN rollout auction is invalid") from exc
+    if not state.complete:
+        raise AuctionScoringError("BEN rollout auction is incomplete")
+    passed_out = state.contract is None
+    if row.get("passed_out") is not passed_out:
+        raise AuctionScoringError("BEN rollout passed_out does not match auction")
+    if passed_out:
+        if row.get("contract") is not None or row.get("declarer") is not None:
+            raise AuctionScoringError("BEN rollout contract or declarer does not match auction")
+    else:
+        try:
+            contract_matches = _contract_parts(row.get("contract")) == _contract_parts(state.contract)
+        except AuctionScoringError as exc:
+            raise AuctionScoringError("BEN rollout contract does not match auction") from exc
+        if not contract_matches:
+            raise AuctionScoringError("BEN rollout contract does not match auction")
+        declarer = row.get("declarer")
+        if not isinstance(declarer, str) or declarer.strip().upper() != state.declarer:
+            raise AuctionScoringError("BEN rollout declarer does not match auction")
+    return state
+
+
 def score_rollout_with_dds3(
     *,
     rollout: Any,
@@ -188,24 +233,24 @@ def score_rollout_with_dds3(
         raise AuctionScoringError("BEN rollout vulnerability is missing")
     if normalize_vulnerability(source.get("vulnerability")) != vul:
         raise AuctionScoringError("BEN rollout vulnerability does not match scoring input")
+    states = [_validated_auction_state(_mapping(row, "BEN rollout world"), source.get("dealer"))
+              for row in rows]
     required_dds = {
         str(row["world_fingerprint"])
-        for row in rows
-        if isinstance(row, Mapping) and not row.get("passed_out")
+        for row, state in zip(rows, states, strict=True)
+        if state.contract is not None
     }
     if set(dds3_results) != required_dds:
         raise AuctionScoringError("DDS3 result set does not match non-passed-out worlds")
 
     scored: list[dict[str, Any]] = []
-    for raw_row in rows:
+    for raw_row, state in zip(rows, states, strict=True):
         row = _mapping(raw_row, "BEN rollout world")
         fingerprint = str(row["world_fingerprint"])
         deal_pbn_sha256 = str(row.get("deal_pbn_sha256") or "")
         if not re.fullmatch(r"[0-9a-f]{64}", deal_pbn_sha256):
             raise AuctionScoringError("BEN rollout deal PBN hash is invalid")
-        if row.get("passed_out"):
-            if row.get("contract") is not None or row.get("declarer") is not None:
-                raise AuctionScoringError("passed-out world contains a contract")
+        if state.contract is None:
             scored.append({
                 "world_index": row.get("world_index"),
                 "world_fingerprint": fingerprint,
@@ -253,8 +298,8 @@ def score_rollout_with_dds3(
         if dds.get("strain_order") != list(DDS3_STRAIN_ORDER):
             raise AuctionScoringError("DDS3 strain order is invalid")
         table = _mapping(dds.get("dd_table"), "DDS3 table")
-        level, strain, _ = _contract_parts(row.get("contract"))
-        declarer = str(row.get("declarer") or "").upper()
+        _, strain, _ = _contract_parts(state.contract)
+        declarer = state.declarer
         if declarer not in SEATS:
             raise AuctionScoringError("BEN rollout declarer is invalid")
         table_strain = "NT" if strain == "N" else strain
@@ -263,7 +308,7 @@ def score_rollout_with_dds3(
             raise AuctionScoringError("DDS3 strain row is invalid")
         tricks = values[SEATS.index(declarer)]
         score = score_duplicate_contract(
-            contract=row["contract"],
+            contract=state.contract,
             declarer=declarer,
             tricks=tricks,
             vulnerability=vul,

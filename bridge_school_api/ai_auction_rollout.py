@@ -257,6 +257,7 @@ def rollout_worlds(
         "fallback_used": False,
         "evidence_class": "BEN_AUCTION_ROLLOUT",
         "candidate_call": candidate,
+        "dealer": initial.dealer,
         "vulnerability": normalized_vulnerability,
         "requested_worlds": len(worlds),
         "completed_worlds": len(results),

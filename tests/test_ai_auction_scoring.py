@@ -73,6 +73,8 @@ def test_duplicate_scoring_golden_matrix(contract, tricks, vulnerability, expect
 
 
 def test_vulnerability_and_contract_inputs_fail_closed():
+    # An explicit empty string is the legacy spelling for known non-vulnerability.
+    assert normalize_vulnerability("") == "NONE"
     assert normalize_vulnerability("all") == "BOTH"
     assert normalize_vulnerability("n-s") == "NS"
     with pytest.raises(AuctionScoringError, match="vulnerability"):
@@ -83,13 +85,23 @@ def test_vulnerability_and_contract_inputs_fail_closed():
         score_duplicate_contract(contract="1S", declarer="N", tricks=True, vulnerability="NONE")
 
 
+@pytest.mark.parametrize("vulnerability", [None, False, 0, 0.0, [], {}, True, 1, 1.5])
+def test_unknown_vulnerability_cannot_be_scored_as_none(vulnerability):
+    with pytest.raises(AuctionScoringError, match="vulnerability"):
+        normalize_vulnerability(vulnerability)
+    with pytest.raises(AuctionScoringError, match="vulnerability"):
+        score_duplicate_contract(contract="4S", declarer="N", tricks=10,
+                                 vulnerability=vulnerability)
+
+
 def _rollout(*, passed_out=False, vulnerability="NONE"):
     fingerprint = "a" * 64
     return {
         "engine": "BEN",
         "fallback_used": False,
         "evidence_class": "BEN_AUCTION_ROLLOUT",
-        "candidate_call": "4S",
+        "candidate_call": "PASS" if passed_out else "4S",
+        "dealer": "N",
         "vulnerability": vulnerability,
         "requested_worlds": 1,
         "completed_worlds": 1,
@@ -99,7 +111,7 @@ def _rollout(*, passed_out=False, vulnerability="NONE"):
             "world_index": 0,
             "world_fingerprint": fingerprint,
             "deal_pbn_sha256": TEST_PBN_SHA256,
-            "auction": ["4S", "PASS", "PASS", "PASS"],
+            "auction": ["PASS"] * 4 if passed_out else ["4S", "PASS", "PASS", "PASS"],
             "contract": None if passed_out else "4S",
             "declarer": None if passed_out else "N",
             "passed_out": passed_out,
@@ -130,8 +142,8 @@ def _dds(*, request, fallback=False, engine_version=DDS_UPSTREAM, input_validate
     }
 
 
-def _dds_envelope(*, fallback=False, fingerprint=None, pbn=TEST_PBN, **dds_overrides):
-    request = canonical_dds3_table_request(pbn=pbn, dealer="N", vulnerability="None")
+def _dds_envelope(*, fallback=False, fingerprint=None, pbn=TEST_PBN, dealer="N", **dds_overrides):
+    request = canonical_dds3_table_request(pbn=pbn, dealer=dealer, vulnerability="None")
     return {
         "world_fingerprint": fingerprint or "a" * 64,
         "request": request,
@@ -165,6 +177,91 @@ def test_passed_out_world_needs_no_dds3_and_scores_zero():
     assert result["dds_evaluated"] is False
     assert result["dds_required_worlds"] == 0
     assert result["worlds"][0]["score_ns"] == 0
+
+
+@pytest.mark.parametrize("vulnerability", [None, False, 0, 0.0, [], {}])
+def test_rollout_binding_rejects_unknown_vulnerability(vulnerability):
+    with pytest.raises(AuctionScoringError, match="vulnerability"):
+        score_rollout_with_dds3(
+            rollout=_rollout(vulnerability=vulnerability),
+            dds3_results={"a" * 64: _dds_envelope()},
+            vulnerability=vulnerability,
+        )
+
+
+def test_rollout_binding_rejects_missing_vulnerability():
+    rollout = _rollout()
+    del rollout["vulnerability"]
+    with pytest.raises(AuctionScoringError, match="vulnerability"):
+        score_rollout_with_dds3(rollout=rollout,
+                                dds3_results={"a" * 64: _dds_envelope()},
+                                vulnerability="NONE")
+
+
+def test_old_contradictory_passed_out_fixture_is_rejected():
+    rollout = _rollout(passed_out=True)
+    rollout["worlds"][0]["auction"] = ["4S", "PASS", "PASS", "PASS"]
+    with pytest.raises(AuctionScoringError, match="auction"):
+        score_rollout_with_dds3(rollout=rollout, dds3_results={}, vulnerability="NONE")
+
+
+@pytest.mark.parametrize("overrides", [
+    {"contract": "3N"},
+    {"contract": "4SX"},
+    {"declarer": "S"},
+    {"auction": ["PASS"] * 4},
+    {"auction": ["4S", "PASS"]},
+    {"auction": ["4S", "4H", "PASS", "PASS", "PASS"]},
+    {"auction": None},
+    {"auction": "4S PASS PASS PASS"},
+    {"passed_out": 0},
+    {"passed_out": None},
+])
+def test_rollout_binding_rejects_contradictory_auction_metadata(overrides):
+    rollout = _rollout()
+    rollout["worlds"][0].update(overrides)
+    with pytest.raises(AuctionScoringError, match="auction"):
+        score_rollout_with_dds3(rollout=rollout,
+                                dds3_results={"a" * 64: _dds_envelope()},
+                                vulnerability="NONE")
+
+
+@pytest.mark.parametrize("dealer", [None, False, 0, "", "invalid", "S"])
+def test_rollout_binding_requires_dealer_consistent_with_auction(dealer):
+    rollout = _rollout()
+    rollout["dealer"] = dealer
+    with pytest.raises(AuctionScoringError, match="dealer|auction"):
+        score_rollout_with_dds3(rollout=rollout,
+                                dds3_results={"a" * 64: _dds_envelope()},
+                                vulnerability="NONE")
+
+
+def test_rollout_binding_rejects_missing_dealer():
+    rollout = _rollout()
+    del rollout["dealer"]
+    with pytest.raises(AuctionScoringError, match="dealer"):
+        score_rollout_with_dds3(rollout=rollout,
+                                dds3_results={"a" * 64: _dds_envelope()},
+                                vulnerability="NONE")
+
+
+@pytest.mark.parametrize(("dealer", "auction", "contract", "declarer", "score_ns"), [
+    ("N", ["4S", "X", "PASS", "PASS", "PASS"], "4SX", "N", 590),
+    ("N", ["4S", "X", "XX", "PASS", "PASS", "PASS"], "4SXX", "N", 880),
+    ("E", ["PASS", "1N", "PASS", "3NT", "PASS", "PASS", "PASS"], "3NT", "S", 400),
+    ("E", ["3NT", "PASS", "PASS", "PASS"], "3N", "E", 250),
+])
+def test_rollout_binding_preserves_legal_auctions_and_first_strain_declarer(
+    dealer, auction, contract, declarer, score_ns,
+):
+    rollout = _rollout()
+    rollout["dealer"] = dealer
+    rollout["worlds"][0].update(auction=auction, contract=contract, declarer=declarer)
+    result = score_rollout_with_dds3(rollout=rollout,
+                                     dds3_results={"a" * 64: _dds_envelope(dealer=dealer)},
+                                     vulnerability="NONE")
+    assert result["worlds"][0]["score_ns"] == score_ns
+    assert result["worlds"][0]["declarer"] == declarer
 
 
 @pytest.mark.parametrize("dds_results", [
