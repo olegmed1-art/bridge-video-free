@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from crossfit import _resolve_family, annotate_file, audit_tasks, fold_for_family
+from stage2b_prepare import load_tasks
 
 
 class AncestryRegressionTests(unittest.TestCase):
@@ -68,8 +69,57 @@ class AncestryRegressionTests(unittest.TestCase):
         self.assertEqual(_resolve_family(root_only, {"C": root_only}), "R1")
 
 
+class ConsumerAncestryRegressionTests(unittest.TestCase):
+    def load(self, tasks):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "tasks.jsonl"
+            path.write_text("\n".join(json.dumps(x) for x in tasks), encoding="utf-8")
+            return load_tasks([path])
+
+    def tasks(self):
+        return [
+            {"task_id": "P", "deal_id": "BASE", "root_deal_id": "R1", "crossfit_fold": 0, "split": "train"},
+            {"task_id": "C", "deal_id": "CHILD", "root_deal_id": "R1", "derived_from_task_id": "P",
+             "crossfit_fold": 0, "split": "train"},
+        ]
+
+    def test_prepare_loader_rejects_false_root_and_fold(self):
+        tasks = self.tasks()
+        tasks[1].update(root_deal_id="R2", crossfit_fold=1)
+        with self.assertRaises(ValueError):
+            self.load(tasks)
+
+    def test_prepare_loader_rejects_missing_root_consumed_as_own_deal(self):
+        tasks = self.tasks()
+        del tasks[1]["root_deal_id"]
+        with self.assertRaises(ValueError):
+            self.load(tasks)
+
+    def test_prepare_loader_rejects_same_root_different_folds(self):
+        tasks = self.tasks()
+        tasks[1]["crossfit_fold"] = 1
+        with self.assertRaises(ValueError):
+            self.load(tasks)
+
+    def test_prepare_loader_rejects_missing_parent_or_fold(self):
+        for missing in ("parent", "crossfit_fold"):
+            tasks = self.tasks()
+            if missing == "parent":
+                tasks = tasks[1:]
+            else:
+                del tasks[1][missing]
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                self.load(tasks)
+
+    def test_prepare_loader_preserves_matching_graph(self):
+        tasks = self.tasks()
+        self.assertEqual(self.load(tasks), {row["task_id"]: row for row in tasks})
+
+
 def main() -> None:
-    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(AncestryRegressionTests))
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
+                               for case in (AncestryRegressionTests, ConsumerAncestryRegressionTests))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():
         raise SystemExit(1)
     tasks = [

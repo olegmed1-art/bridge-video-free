@@ -26,6 +26,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from crossfit import audit_tasks, root_deal_id
 from stage2b_v24 import (
     CANDIDATE_ALGORITHM_VERSION,
     aggregate_review_queue,
@@ -69,11 +70,30 @@ def load_tasks(paths: Sequence[Path]) -> dict[str, dict]:
     tasks: dict[str, dict] = {}
     for path in paths:
         for row in read_jsonl(path):
-            task_id = str(row["task_id"])
+            task_id = row.get("task_id")
+            if type(task_id) is not str or not task_id.strip() or task_id != task_id.strip():
+                raise ValueError("Task IDs must be nonempty canonical strings")
             existing = tasks.get(task_id)
             if existing is not None and existing != row:
                 raise ValueError(f"Conflicting task definition: {task_id}")
             tasks[task_id] = row
+    # Validate the family/fold values actually consumed by load_train_facts,
+    # before opening SQL or fitting any model. Audit copies avoid silently
+    # relabelling incomplete or contradictory input manifests.
+    audit_rows = []
+    for task_id, row in tasks.items():
+        family = row.get("root_deal_id") or row.get("deal_id")
+        if type(family) is not str or not family.strip() or family != family.strip():
+            raise ValueError(f"Invalid consumed family for {task_id}")
+        if family != root_deal_id(row):
+            raise ValueError(f"Consumed family contradicts explicit root for {task_id}")
+        fold = row.get("crossfit_fold")
+        if type(fold) is not int or fold < 0:
+            raise ValueError(f"Invalid or missing crossfit_fold for {task_id}")
+        audit_rows.append({**row, "root_deal_id": family})
+    audit = audit_tasks(audit_rows)
+    if audit["status"] != "ok":
+        raise ValueError(f"Task family ancestry/fold admission failed: {json.dumps(audit, sort_keys=True)}")
     return tasks
 
 
