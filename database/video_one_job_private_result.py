@@ -124,7 +124,7 @@ def _private_load_embedded_master(token: str, done: dict, *, return_raw: bool):
 
 def stage_private_result_on_connection(connection, *, admission, master_json_text,
                                        ai_done_json_text, ai_done_drive_id,
-                                       receipt_id=None):
+                                       receipt_id=None, assignment=None):
     """Commit one immutable private bundle through the exact SQL lease gate."""
     scope = _scope(admission)
     master_sha, done_sha = _payload(master_json_text, ai_done_json_text,
@@ -134,24 +134,30 @@ def stage_private_result_on_connection(connection, *, admission, master_json_tex
             (scope[0], scope[1], master_sha, ai_done_drive_id, done_sha))))
     if receipt_id is not None and str(UUID(str(receipt_id))) != expected_receipt:
         raise ValueError('ONE_JOB_PRIVATE_RECEIPT_ID_CHANGED')
-    with connection.transaction():
-        with connection.cursor() as cursor:
-            cursor.execute(
-                'SELECT video_queue.stage_one_job_private_result_v1('
-                '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                (*scope, expected_receipt, master_json_text,
-                 ai_done_drive_id, ai_done_json_text),
-            )
-            row = cursor.fetchone()
-            result = row[0] if row else None
-            if (not isinstance(result, dict)
-                    or result.get('status') != 'PRIVATE_RESULT_STAGED'
-                    or result.get('receipt_id') != expected_receipt
-                    or result.get('master_json_sha256') != master_sha
-                    or result.get('ai_done_sha256') != done_sha
-                    or not isinstance(result.get('bundle_sha256'), str)
-                    or len(result['bundle_sha256']) != 64):
-                raise ValueError('ONE_JOB_PRIVATE_STAGE_NOT_CONFIRMED')
+    from universal_video.owner_effects import admission_terminal_effect, assert_admission_authorized
+    with admission_terminal_effect(admission):
+        with connection.transaction():
+            if assignment is not None:
+                from .video_post_finish_receipt import assert_enrolled_assignment_on_connection
+                assert_enrolled_assignment_on_connection(connection,assignment,for_stage=True)
+            with connection.cursor() as cursor:
+                params = (*scope, expected_receipt, master_json_text, ai_done_drive_id, ai_done_json_text)
+                assert_admission_authorized(admission)
+                cursor.execute(
+                    'SELECT video_queue.stage_one_job_private_result_v1('
+                    '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', params,
+                )
+                row = cursor.fetchone()
+                result = row[0] if row else None
+                if (not isinstance(result, dict)
+                        or result.get('status') != 'PRIVATE_RESULT_STAGED'
+                        or result.get('receipt_id') != expected_receipt
+                        or result.get('master_json_sha256') != master_sha
+                        or result.get('ai_done_sha256') != done_sha
+                        or not isinstance(result.get('bundle_sha256'), str)
+                        or len(result['bundle_sha256']) != 64):
+                    raise ValueError('ONE_JOB_PRIVATE_STAGE_NOT_CONFIRMED')
+            assert_admission_authorized(admission)  # Before transaction COMMIT.
     return result
 
 
@@ -160,12 +166,16 @@ def read_committed_private_result_on_connection(connection, *, admission,
     """Check the committed row from a new connection under the same live lease."""
     scope = _scope(admission)
     receipt = str(UUID(str(receipt_id)))
-    with connection.cursor() as cursor:
-        cursor.execute(
-            'SELECT video_queue.read_one_job_private_result_v1('
-            '%s,%s,%s,%s,%s,%s,%s)', (*scope, receipt),
-        )
-        row = cursor.fetchone()
+    from universal_video.owner_effects import admission_terminal_effect, assert_admission_authorized
+    with admission_terminal_effect(admission):
+        with connection.cursor() as cursor:
+            params = (*scope, receipt)
+            assert_admission_authorized(admission)
+            cursor.execute(
+                'SELECT video_queue.read_one_job_private_result_v1('
+                '%s,%s,%s,%s,%s,%s,%s)', params,
+            )
+            row = cursor.fetchone()
     result = row[0] if row else None
     if (not isinstance(result, dict)
             or result.get('status') != 'COMMITTED_PRIVATE_RESULT'
@@ -177,19 +187,26 @@ def read_committed_private_result_on_connection(connection, *, admission,
 
 def stage_and_read_private_result(open_connection: Callable, *, admission,
                                   master_json_text, ai_done_json_text,
-                                  ai_done_drive_id):
+                                  ai_done_drive_id, assignment=None):
     """Two physical connections; stage commit must precede durable readback."""
     with open_connection() as writer:
         staged = stage_private_result_on_connection(
             writer, admission=admission, master_json_text=master_json_text,
             ai_done_json_text=ai_done_json_text,
-            ai_done_drive_id=ai_done_drive_id)
+            ai_done_drive_id=ai_done_drive_id,assignment=assignment)
     with open_connection() as reader:
         if reader is writer:
             raise ValueError('ONE_JOB_PRIVATE_SEPARATE_READBACK_REQUIRED')
-        read_committed_private_result_on_connection(
-            reader, admission=admission, receipt_id=staged['receipt_id'],
-            bundle_sha256=staged['bundle_sha256'])
+        if assignment is not None:
+            from .video_post_finish_receipt import assert_enrolled_assignment_on_connection
+            with reader.transaction():
+                assert_enrolled_assignment_on_connection(reader,assignment,for_stage=True)
+                read_committed_private_result_on_connection(
+                    reader,admission=admission,receipt_id=staged['receipt_id'],bundle_sha256=staged['bundle_sha256'])
+        else:
+            read_committed_private_result_on_connection(
+                reader, admission=admission, receipt_id=staged['receipt_id'],
+                bundle_sha256=staged['bundle_sha256'])
     return staged
 
 
@@ -210,10 +227,13 @@ def stage_completed_drive_result_private(open_connection: Callable, *, token,
     load_done = _private_load_done if load_done is None else load_done
     load_embedded_master = (_private_load_embedded_master if load_embedded_master is None
                             else load_embedded_master)
+    from universal_video.owner_effects import assert_admission_authorized
+    assert_admission_authorized(admission)
     done, done_drive_id, done_raw_text = load_done(
         token, stable_job_key, return_raw=True,
         output_folder_id=output_folder_id)
     master, raw_text = load_embedded_master(token, done, return_raw=True)
+    assert_admission_authorized(admission)
     if (not isinstance(master, dict) or not isinstance(done, dict)
             or master.get('job_id') != stable_job_key
             or done.get('job_id') != stable_job_key

@@ -1,0 +1,182 @@
+-- PREPARED, UNEXECUTED statements for an EXISTING trusted owner driver.
+-- Not a migration, issuer, standalone script or authorization artifact.
+-- No BEGIN/COMMIT: the driver must validate each exact returned row before
+-- proceeding, roll back on refusal, and reconcile UNKNOWN without retry.
+-- Named parameters are psycopg parameters, never interpolated SQL strings.
+-- All writes remain BLOCKED:0063 absent; genuine issuer/target/workerLOGIN,
+-- native policy and owner approval are not bound. Do not run this file.
+-- Assignment must come from the original authenticated post-COMMIT issuer;
+-- neither a caller JSON object nor its hash authorizes these statements.
+
+-- A: ONE future assignment-enrollment transaction, after real claim COMMIT.
+-- Open a separate existing owner connection, verified to the accepted target.
+-- Pin its current_database/session_user/current_user to the accepted target,
+-- DB-owner LOGIN and NO role switch. Verify actual ownership/ACL beforehand.
+-- Reconcile signed policy, original native context and journal freshly.
+SET LOCAL statement_timeout='3000ms';
+SET LOCAL lock_timeout='1000ms';
+SET LOCAL transaction_timeout='10000ms';
+SET LOCAL idle_in_transaction_session_timeout='5000ms';
+SET LOCAL search_path=pg_catalog;
+
+-- A1: lock job FIRST. Require exactly one row and compare every value against
+-- genuine Assignment.video and original committed claim/journal evidence.
+-- This metadata lookup does not establish native/autopilot authority.
+SELECT job_id,batch_id,source_file_id,stable_job_key,attempt_count,
+       lease_owner,lease_token,lease_expires_at
+FROM video_queue.job
+WHERE job_id=%(job_id)s::uuid AND batch_id=%(batch_id)s::uuid
+  AND status='LEASED' AND attempt_count=%(attempt_count)s
+  AND source_file_id=%(source_file_id)s AND stable_job_key=%(stable_job_key)s
+  AND lease_owner=%(worker_key)s AND lease_token=%(lease_token)s::uuid
+  AND lease_expires_at>clock_timestamp()
+FOR SHARE NOWAIT;
+
+-- A2: lock batch SECOND. Require exactly one row and exact expected fields.
+SELECT batch_id,processing_profile,algorithm_revision,output_folder_id
+FROM video_queue.batch
+WHERE batch_id=%(batch_id)s::uuid AND status='RUNNING'
+  AND processing_profile=%(processing_profile)s
+  AND algorithm_revision=%(algorithm_revision)s
+  AND output_folder_id=%(output_folder_id)s
+FOR SHARE NOWAIT;
+
+-- A3: client has verified A1/A2 plus the GENUINE approved issuance source.
+-- Principal is the separately verified existing worker LOGIN from accepted
+-- Intent, NOT the DB-owner LOGIN or group video_subset_worker_v2.
+-- Expiry is the earliest of original authority/policy/accepted lifetime;
+-- never renew native authority here. No ON CONFLICT or automatic reissue.
+WITH stamp AS MATERIALIZED (SELECT clock_timestamp() AS issued),
+     approved AS MATERIALIZED (
+       SELECT video_queue.post_finish_assignment_v1(%(assignment_text)s) AS a)
+INSERT INTO video_queue.terminal_assignment_v1
+ (selector_sha256,assignment_sha256,assignment_text,principal,issued_at,expires_at)
+SELECT video_queue.post_finish_selector_v1(%(assignment_text)s),
+       video_queue.post_finish_sha_v1(approved.a),%(assignment_text)s,
+       %(worker_login)s::name,stamp.issued,%(approved_expires_at)s::timestamptz
+FROM approved CROSS JOIN stamp
+WHERE current_database()=%(database_name)s
+  AND session_user::text=%(owner_login)s AND current_user=session_user
+  AND %(worker_login)s::text=(%(worker_login)s::name)::text
+  AND %(worker_login)s<>%(owner_login)s
+  AND EXISTS (SELECT 1 FROM pg_catalog.pg_roles AS role
+              WHERE role.rolname=%(worker_login)s::name AND role.rolcanlogin)
+  AND approved.a#>>'{video,job_id}'=%(job_id)s::text
+  AND approved.a#>>'{video,batch_id}'=%(batch_id)s::text
+  AND approved.a#>>'{video,source_file_id}'=%(source_file_id)s
+  AND approved.a#>>'{video,stable_job_key}'=%(stable_job_key)s
+  AND (approved.a#>>'{video,attempt_count}')::integer=%(attempt_count)s
+  AND approved.a#>>'{video,worker_key}'=%(worker_key)s
+  AND approved.a#>>'{video,lease_token}'=%(lease_token)s::text
+  AND approved.a#>>'{video,algorithm_revision}'=%(algorithm_revision)s
+  AND approved.a#>>'{video,output_folder_id}'=%(output_folder_id)s
+  -- SH locks prevent row mutation, not wall-clock lease expiry. Recheck the
+  -- SAME already-locked job at INSERT; this acquires no new out-of-order lock.
+  AND EXISTS (SELECT 1 FROM video_queue.job AS j
+              WHERE j.job_id=%(job_id)s::uuid AND j.batch_id=%(batch_id)s::uuid
+                AND j.source_file_id=%(source_file_id)s
+                AND j.stable_job_key=%(stable_job_key)s
+                AND j.status='LEASED' AND j.attempt_count=%(attempt_count)s
+                AND j.lease_owner=%(worker_key)s
+                AND j.lease_token=%(lease_token)s::uuid
+                AND j.lease_expires_at>clock_timestamp())
+  AND %(approved_expires_at)s::timestamptz>stamp.issued
+  AND %(approved_expires_at)s::timestamptz<=stamp.issued+interval '1 hour'
+RETURNING selector_sha256,assignment_sha256,assignment_text,principal,
+          to_char(issued_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS issued_at_utc,
+          to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS expires_at_utc;
+-- Require one exact row, canonical UTF-8 bytes and selector/SHA/principal/date
+-- binding. Only the trusted driver may COMMIT. Lost COMMIT response -> UNKNOWN:
+-- a fresh owner read reconciles the exact selector, never retries INSERT.
+-- Then a separate worker connection calls the UNCHANGED
+-- assert_enrolled_assignment_on_connection(), under actual worker LOGIN.
+-- No BIND_JOB or compute until committed enrollment is independently verified.
+
+-- B: a DISTINCT future READ_RESULT-grant transaction, close to terminal
+-- read/ACK, NOT automatically issued with assignment before long compute.
+-- Requires a fresh authenticated owner's explicit READ_RESULT decision and
+-- committed assignment, no authority extension. This is not a GRANT statement
+-- or a new role; the row itself grants application authority and is NOT
+-- authorized for execution by the diagnostic approval.
+-- Acquire job -> batch -> assignment -> grant -> event locks in source order.
+-- Use the retained exact Assignment and independent committed finish/selector
+-- evidence; verify terminal metadata, revocation, policy and source afresh.
+-- Do not acquire event first or mint a grant merely to make a failing read pass.
+-- B uses a new transaction; A's LOCAL settings ended at A's COMMIT.
+SET LOCAL statement_timeout='3000ms';
+SET LOCAL lock_timeout='1000ms';
+SET LOCAL transaction_timeout='10000ms';
+SET LOCAL idle_in_transaction_session_timeout='5000ms';
+SET LOCAL search_path=pg_catalog;
+
+-- B1: require one exact terminal job row, on a different physical connection
+-- from the finish writer. Source/attempt come from the SAME retained Assignment.
+SELECT job_id,batch_id,source_file_id,stable_job_key,attempt_count
+FROM video_queue.job
+WHERE job_id=%(job_id)s::uuid AND batch_id=%(batch_id)s::uuid
+  AND source_file_id=%(source_file_id)s AND stable_job_key=%(stable_job_key)s
+  AND attempt_count=%(attempt_count)s AND status='REVIEW_READY'
+  AND lease_owner IS NULL AND lease_token IS NULL AND lease_expires_at IS NULL
+FOR SHARE NOWAIT;
+
+-- B2: require one exact batch row; finish can leave RUNNING or REVIEW.
+SELECT batch_id,processing_profile,algorithm_revision,output_folder_id
+FROM video_queue.batch
+WHERE batch_id=%(batch_id)s::uuid AND status IN ('RUNNING','REVIEW')
+  AND processing_profile=%(processing_profile)s
+  AND algorithm_revision=%(algorithm_revision)s
+  AND output_folder_id=%(output_folder_id)s
+FOR SHARE NOWAIT;
+
+-- For assignment lock use the following exact query after job/batch locks:
+SELECT selector_sha256,assignment_sha256,assignment_text,principal,expires_at
+FROM video_queue.terminal_assignment_v1
+WHERE selector_sha256=%(selector_sha256)s
+  AND assignment_sha256=%(assignment_sha256)s
+  AND assignment_text=%(assignment_text)s AND principal=%(worker_login)s::name
+  AND revoked_at IS NULL AND issued_at<=clock_timestamp()
+  AND expires_at>clock_timestamp()
+FOR SHARE NOWAIT;
+
+-- Require one exact row. Existing unrevoked grant (even expired) must REFUSE;
+-- renewal/revocation is a separate owner decision, no automatic UPDATE/DELETE.
+WITH stamp AS MATERIALIZED (SELECT clock_timestamp() AS issued)
+INSERT INTO video_queue.terminal_read_grant_v1
+ (read_grant_id,selector_sha256,principal,purpose,issued_at,expires_at)
+SELECT %(read_grant_id)s::uuid,a.selector_sha256,a.principal,'READ_RESULT',
+       stamp.issued,LEAST(%(approved_read_expires_at)s::timestamptz,
+                          stamp.issued+interval '5 minutes',a.expires_at)
+FROM video_queue.terminal_assignment_v1 AS a CROSS JOIN stamp
+WHERE current_database()=%(database_name)s
+  AND session_user::text=%(owner_login)s AND current_user=session_user
+  AND %(worker_login)s::text=(%(worker_login)s::name)::text
+  AND %(worker_login)s<>%(owner_login)s
+  AND EXISTS (SELECT 1 FROM pg_catalog.pg_roles AS role
+              WHERE role.rolname=%(worker_login)s::name AND role.rolcanlogin)
+  AND a.selector_sha256=%(selector_sha256)s
+  AND a.assignment_sha256=%(assignment_sha256)s
+  AND a.assignment_text=%(assignment_text)s AND a.principal=%(worker_login)s::name
+  AND a.revoked_at IS NULL AND a.issued_at<=stamp.issued
+  AND a.expires_at>stamp.issued
+  AND %(approved_read_expires_at)s::timestamptz>stamp.issued
+  AND NOT EXISTS (SELECT 1 FROM video_queue.terminal_read_grant_v1 AS old
+                  WHERE old.selector_sha256=a.selector_sha256
+                    AND old.principal=a.principal AND old.revoked_at IS NULL)
+RETURNING read_grant_id,selector_sha256,principal,purpose,issued_at,expires_at;
+-- B5: event lock LAST; require one row and exact selector/attempt/lease/worker,
+-- a well-formed receipt hash, and a backend different from the finish writer.
+-- Returns only receipt metadata. Any refusal rolls back the UNCOMMITTED grant.
+SELECT event_id,details#>>'{terminal_finish_v1,selector_sha256}' AS selector_sha256,
+       details#>>'{terminal_finish_v1,receipt_sha256}' AS receipt_sha256
+FROM video_queue.job_event
+WHERE job_id=%(job_id)s::uuid AND batch_id=%(batch_id)s::uuid
+  AND lease_token=%(lease_token)s::uuid AND worker_key=%(worker_key)s
+  AND event_type='REVIEW_READY' AND details->>'attempt'=%(attempt_count)s::text
+  AND details#>>'{terminal_finish_v1,selector_sha256}'=%(selector_sha256)s
+  AND details#>>'{terminal_finish_v1,attempt_count}'=%(attempt_count)s::text
+  AND details#>>'{terminal_finish_v1,receipt_sha256}'~'^[0-9a-f]{64}$'
+  AND (details#>>'{terminal_finish_v1,writer_backend_pid}')::integer<>pg_backend_pid()
+FOR SHARE NOWAIT;
+-- Require one exact row; retain owner decision and commit before fresh worker
+-- read/ACK authority check. No generic authorized callback, no receipt-as-grant,
+-- no work retry, no legacy finish fallback, no native context serialization.

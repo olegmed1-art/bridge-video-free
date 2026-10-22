@@ -48,15 +48,27 @@ def _connect_subset(database_url: str):
 def _execute(
     database_url: str, sql: str, params: tuple[Any, ...], *,
     connection_validator: Callable[[Any], None] | None = None,
+    effect_claim: Mapping[str, Any] | None = None,
+    effect_required: bool = False,
 ) -> dict[str, Any]:
-    with _connect_subset(database_url) as conn:
-        if connection_validator is not None:
-            connection_validator(conn)
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            row = cur.fetchone()
-            if row is None:
-                raise SubsetWorkerError("VIDEO_SUBSET_RESPONSE_MISSING")
+    from contextlib import nullcontext
+    from .owner_effects import terminal_effect, assert_terminal_authorized
+    if effect_required and effect_claim is None:
+        assert_terminal_authorized(effect_claim, required=True)
+    guard = terminal_effect(effect_claim, required=effect_required) if effect_claim is not None else nullcontext()
+    with guard:
+        with _connect_subset(database_url) as conn:
+            if connection_validator is not None:
+                connection_validator(conn)
+            with conn.cursor() as cur:
+                if effect_claim is not None:
+                    assert_terminal_authorized(effect_claim)
+                cur.execute(sql, params)
+                row = cur.fetchone()
+                if row is None:
+                    raise SubsetWorkerError("VIDEO_SUBSET_RESPONSE_MISSING")
+            if effect_claim is not None:
+                assert_terminal_authorized(effect_claim)  # Before connection COMMIT.
     # Do not report success before the connection context commits.
     if not isinstance(row, Mapping):
         raise SubsetWorkerError("VIDEO_SUBSET_RESPONSE_INVALID")
@@ -76,11 +88,13 @@ class SubsetWorkerAdapter:
         self.connection_validator = connection_validator
 
     def _execute(self, database_url: str, sql: str,
-                 params: tuple[Any, ...]) -> dict[str, Any]:
+                 params: tuple[Any, ...], *, effect_claim=None, effect_required=False) -> dict[str, Any]:
+        options = {} if effect_claim is None and not effect_required else dict(
+            effect_claim=effect_claim, effect_required=effect_required)
         if self.connection_validator is None:
-            return _execute(database_url, sql, params)
+            return _execute(database_url, sql, params, **options)
         return _execute(database_url, sql, params,
-                        connection_validator=self.connection_validator)
+                        connection_validator=self.connection_validator, **options)
 
     def _observe(
         self, claim: Mapping[str, Any], worker_key: str,
@@ -169,6 +183,7 @@ class SubsetWorkerAdapter:
             "SELECT * FROM video_queue.finish_subset_job(%s, %s, %s, %s, %s::jsonb, %s, %s)",
             (str(claim["job_id"]), str(claim["lease_token"]), worker_key, outcome,
              json.dumps(dict(output), allow_nan=False), observation_id, error_code),
+            effect_claim=claim,
         )
         canary_status = "CANARY_REVIEW" if outcome == "REVIEW_READY" else "CANARY_BLOCKED"
         allowed_batch = {canary_status, "RUNNING", "REVIEW"}
@@ -204,6 +219,8 @@ class SubsetWorkerAdapter:
         if (not isinstance(source_fingerprint, str) or len(source_fingerprint) != 64
                 or any(c not in "0123456789abcdef" for c in source_fingerprint)):
             raise SubsetWorkerError("VIDEO_PRIVATE_FINISH_SOURCE_INVALID")
+        from .owner_effects import assert_terminal_authorized
+        assert_terminal_authorized(claim, required=True)
         observation_id = self._observe(claim, worker_key, "before_finish")
         if UUID(observation_id) == UUID(before_work_observation_id):
             raise SubsetWorkerError("VIDEO_SUBSET_DISTINCT_OBSERVATION_REQUIRED")
@@ -214,6 +231,8 @@ class SubsetWorkerAdapter:
             (admission_id, str(claim["job_id"]), str(claim["lease_token"]),
              worker_key, claim["attempt_count"], source_fingerprint, receipt_id,
              observation_id, json.dumps(dict(output), allow_nan=False)),
+            effect_claim=claim,
+            effect_required=True,
         )
         if (set(row) != {"job_status", "batch_status", "released_jobs"}
                 or row["job_status"] != "REVIEW_READY"
@@ -223,3 +242,33 @@ class SubsetWorkerAdapter:
             # COMMIT may already have succeeded; never resubmit automatically.
             raise SubsetWorkerError("VIDEO_PRIVATE_FINISH_RESPONSE_INVALID")
         return row
+
+    def finish_private_job_v2(self,database_url,claim,worker_key,*,
+                              before_work_observation_id,admission_id,source_fingerprint,
+                              receipt_id,outcome,output,assignment,selected_output):
+        """Opt-in 0063 finish+immutable receipt in one transaction; never retry."""
+        from .terminal_finish_contract import Assignment,require,project_private_output,checked_queue_result
+        from .receipt_encoding import canonical_bytes
+        require(type(assignment) is Assignment,'VIDEO_FINISH_ASSIGNMENT_UNBOUND')
+        assignment.check_claim(claim,worker_key)
+        a=assignment.value
+        require(self.connection_validator is not None and outcome=='REVIEW_READY'
+                and admission_id==a['admission_id'] and source_fingerprint==a['source_fingerprint']
+                and receipt_id==output.get('private_staging',{}).get('receipt_id'),
+                'VIDEO_FINISH_ASSIGNMENT_BINDING')
+        require(canonical_bytes(project_private_output(dict(selected_output),output['private_staging']))
+                ==canonical_bytes(dict(output)),'VIDEO_FINISH_SELECTED_PROJECTION')
+        from .owner_effects import assert_terminal_authorized
+        assert_terminal_authorized(claim,required=True)
+        observation_id=self._observe(claim,worker_key,'before_finish')
+        require(UUID(observation_id)!=UUID(before_work_observation_id),'VIDEO_FINISH_DISTINCT_OBSERVATION')
+        row=self._execute(database_url,
+            'SELECT * FROM video_queue.finish_one_job_private_result_v2('
+            '%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)',
+            (admission_id,str(claim['job_id']),str(claim['lease_token']),worker_key,
+             claim['attempt_count'],source_fingerprint,receipt_id,observation_id,
+             canonical_bytes(dict(output)).decode('utf-8'),assignment.raw.decode('utf-8'),
+             canonical_bytes(dict(selected_output)).decode('utf-8')),
+            effect_claim=claim,effect_required=True)
+        # Invalid/lost response may follow COMMIT: no automatic resubmission.
+        return checked_queue_result(row)

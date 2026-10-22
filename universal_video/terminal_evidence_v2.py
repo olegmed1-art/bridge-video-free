@@ -8,10 +8,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .drive_adapter import download_file, file_metadata
+from .drive_adapter import download_file, file_metadata, list_folder_files
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CHECKSUM_RE = re.compile(r"^(?:md5:[0-9a-f]{32}|sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$")
+MAX_OBSERVATIONS_BYTES = 32 * 1024 * 1024
+# Full unchanged JSONL is carried by AI_DONE. JSON quoting can double its size;
+# retain room for the pre-existing bounded report metadata as well.
+MAX_AI_DONE_BYTES = 80 * 1024 * 1024
+PRIVATE_AI_DONE_BYTES = 4 * 1024 * 1024
 
 
 class TerminalEvidenceV2Error(RuntimeError):
@@ -23,7 +28,8 @@ class TerminalEvidenceV2Error(RuntimeError):
 
 
 def _canonical_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False)
 
 
 def _canonical_sha256(value: Mapping[str, Any]) -> str:
@@ -110,7 +116,7 @@ def _read_live(
         before["id"] != file_id
         or not before["name"]
         or before["mime_type"] != expected_mime
-        or before["size_bytes"] <= 0
+        or not 0 < before["size_bytes"] <= max_bytes
         or before["parents"] != [expected_parent]
         or not before["modified_time"]
         or not before["version"]
@@ -184,6 +190,238 @@ def _validate_done(claim: Mapping[str, Any], done: Mapping[str, Any]) -> None:
         raise TerminalEvidenceV2Error("UV_AI_DONE_IDENTITY_MISMATCH")
 
 
+def _observation_provenance(claim, binding, sha256, size, frames):
+    from .diana20_route import CLAIM_KEYS
+    from . import diana20_recognizer as frame
+    contract = frame.component()
+    binding.check(claim)
+    if (binding.recognizer_job_id != contract["job_id"]
+            or binding.source_sha256 != contract["source_sha256"]
+            or not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256)
+            or type(size) is not int or not 0 < size <= MAX_OBSERVATIONS_BYTES
+            or type(frames) is not int or not 1 <= frames <= 232):
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_BINDING_INVALID")
+    return {
+        "schema_version": "diana20-sealed-observations/v1",
+        "claim": {key: getattr(binding, key) for key in CLAIM_KEYS},
+        "recognizer_job_id": binding.recognizer_job_id,
+        "source_sha256": binding.source_sha256,
+        "component_sha256": frame.COMPONENT_SHA256,
+        "sha256": sha256, "size_bytes": size, "frame_count": frames,
+        "result_mode": "SHADOW_REVIEW_ONLY",
+        "canonical_promotion_allowed": False, "database_persistence_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+        "report_relationship": "SUPPLEMENT_TO_COMPLETED_REPORT",
+        "master_pdf_recomputed": False,
+    }
+
+
+def _validate_observation_bytes(claim, provenance, raw):
+    """Verify every original envelope; never infer missing cards or canon."""
+    from uuid import UUID
+    from .diana20_route import ClaimBinding, CLAIM_KEYS
+    from . import diana20_recognizer as frame
+    try:
+        if not isinstance(provenance, Mapping) or not isinstance(raw, bytes):
+            raise ValueError()
+        bound = provenance["claim"]
+        if not isinstance(bound, Mapping) or set(bound) != set(CLAIM_KEYS):
+            raise ValueError()
+        for key in ("job_id", "batch_id", "lease_token"):
+            if type(bound[key]) is not str or str(UUID(bound[key])) != bound[key]:
+                raise ValueError()
+        if (type(bound["attempt_count"]) is not int or not 1 <= bound["attempt_count"] <= 3
+                or type(bound["source_file_id"]) is not str or not bound["source_file_id"]):
+            raise ValueError()
+        binding = ClaimBinding(**bound, recognizer_job_id=provenance["recognizer_job_id"],
+                               source_sha256=provenance["source_sha256"])
+        expected = _observation_provenance(claim, binding, provenance["sha256"],
+                    provenance["size_bytes"], provenance["frame_count"])
+        if dict(provenance) != expected:
+            raise ValueError()
+        if (len(raw) != expected["size_bytes"]
+                or hashlib.sha256(raw).hexdigest() != expected["sha256"]
+                or not raw.endswith(b"\n")):
+            raise ValueError()
+        lines = raw.split(b"\n")[:-1]
+        if len(lines) != expected["frame_count"]:
+            raise ValueError()
+        contract = frame.component()
+        seen = set()
+        for line in lines:
+            if not line or len(line) + 1 > frame.MAX_RESPONSE:
+                raise ValueError()
+            value = frame._json(line)
+            if not isinstance(value, dict) or not isinstance(value.get("result"), dict):
+                raise ValueError()
+            key, result = value.get("id"), value["result"]
+            if (type(key) is not str or not 0 < len(key) <= 256 or key in seen
+                    or not isinstance(result.get("frame_sha256"), str)
+                    or not _SHA256_RE.fullmatch(result["frame_sha256"])
+                    or type(result.get("source_timestamp_ms")) is not int
+                    or result["source_timestamp_ms"] < 0):
+                raise ValueError()
+            seen.add(key)
+            frame.validate_response(value, {"id": key,
+                "frame_sha256": result["frame_sha256"],
+                "source_sha256": binding.source_sha256,
+                "timestamp_ms": result["source_timestamp_ms"]}, contract)
+        return expected
+    except TerminalEvidenceV2Error:
+        raise
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_INVALID") from exc
+
+
+def read_sealed_observations(claim, sealed):
+    """Accept only the route's typed, completed receipt and stable private file."""
+    from .diana20_route import ObservationReceipt
+    from . import diana20_recognizer as frame
+    if type(sealed) is not ObservationReceipt:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_RECEIPT_REQUIRED")
+    provenance = _observation_provenance(claim, sealed.claim, sealed.sha256,
+                                         sealed.size, sealed.frames)
+    try:
+        raw = frame._read(sealed.path, MAX_OBSERVATIONS_BYTES, owner=True, private=True)
+        _validate_observation_bytes(claim, provenance, raw)
+        return {"provenance": provenance, "jsonl": raw.decode("utf-8")}
+    except RuntimeError as exc:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_INVALID") from exc
+
+
+def _done_observations(claim, done):
+    payload = done.get("savedFrameObservations")
+    if not isinstance(payload, dict) or set(payload) != {"provenance", "jsonl"}:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_MISSING")
+    if not isinstance(payload["jsonl"], str):
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_INVALID")
+    provenance = _validate_observation_bytes(claim, payload["provenance"],
+                                             payload["jsonl"].encode("utf-8"))
+    original = done.get("original") or {}
+    identity = source_identity_from_claim(claim)
+    if any(original.get(key) != value for key, value in {
+        "driveId": identity["file_id"], "name": identity["name"],
+        "mimeType": identity["mime_type"], "sizeBytes": identity["size_bytes"],
+        "parentFolderId": identity["parent_folder_id"], "sha256": provenance["source_sha256"],
+    }.items()):
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_SOURCE_MISMATCH")
+    return provenance
+
+
+def sealed_ai_done_name(claim):
+    # Distinct from the completed baseline's stable AI_DONE. The exact lease
+    # name is create-only too; a terminal failure cannot be resumed silently.
+    return (f"AI_DONE_{claim['stable_job_key']}_diana20_a{claim['attempt_count']}_"
+            f"{claim['lease_token']}.json")
+
+
+def _baseline_readback(claim, done, token, *, metadata_reader, downloader):
+    """Verify the exact previously completed report, including Drive revision."""
+    expected = done.get("completedReportBaseline")
+    if not isinstance(expected, Mapping):
+        raise TerminalEvidenceV2Error("UV_COMPLETED_REPORT_BASELINE_MISSING")
+    file_id = str(expected.get("drive_id") or "")
+    if not file_id or file_id in {claim.get("source_file_id"), (done.get("masterPdf") or {}).get("driveId")}:
+        raise TerminalEvidenceV2Error("UV_COMPLETED_REPORT_BASELINE_MISMATCH")
+    baseline, raw = _read_live(file_id, token=token,
+        expected_parent=str(claim.get("output_folder_id") or ""),
+        expected_mime="application/json", suffix=".json", max_bytes=8 * 1024 * 1024,
+        metadata_reader=metadata_reader, downloader=downloader)
+    from .diana20_recognizer import _json
+    wanted = {key: value for key, value in done.items()
+              if key not in {"savedFrameObservations", "completedReportBaseline"}}
+    if (baseline != dict(expected)
+            or baseline["name"] != f"AI_DONE_{claim['stable_job_key']}.json"
+            or _canonical_json(_json(raw.removeprefix(b"\xef\xbb\xbf"))) != _canonical_json(wanted)):
+        raise TerminalEvidenceV2Error("UV_COMPLETED_REPORT_BASELINE_MISMATCH")
+    return baseline
+
+
+def consume_sealed_report(claim, completed_done, sealed, token, *,
+                          metadata_reader=file_metadata, downloader=download_file,
+                          folder_lister=list_folder_files, uploader=None,
+                          _private_bytes=False):
+    """Supplement an already completed report, without invoking any media work.
+
+    The supplied mapping must equal the exact live completed AI_DONE. Both it
+    and its PDF must already be in the approved output folder. The existing
+    application scope must serialize this writer: Drive names are not unique
+    and the absence check is not an atomic create primitive. An existing lease
+    supplement is refused. Full observations live in that new AI_DONE, while
+    the PDF remains the previous completed report, explicitly identified as such.
+    """
+    if not isinstance(completed_done, Mapping):
+        raise TerminalEvidenceV2Error("UV_SEALED_REPORT_INPUTS_REQUIRED")
+    _validate_done(claim, completed_done)
+    if "savedFrameObservations" in completed_done or "completedReportBaseline" in completed_done:
+        raise TerminalEvidenceV2Error("UV_SEALED_REPORT_ALREADY_SUPPLEMENTED")
+    done = {**completed_done, "savedFrameObservations": read_sealed_observations(claim, sealed)}
+    _done_observations(claim, done)
+    folder = str(claim.get("output_folder_id") or "")
+    pdf = done.get("masterPdf") or {}
+    master_id = str(pdf.get("driveId") or "")
+    if not folder or not master_id or master_id == claim.get("source_file_id"):
+        raise TerminalEvidenceV2Error("UV_TERMINAL_LOCATOR_INVALID")
+    master, _ = _read_live(master_id, token=token, expected_parent=folder,
+        expected_mime="application/pdf", suffix=".pdf", max_bytes=512 * 1024 * 1024,
+        metadata_reader=metadata_reader, downloader=downloader)
+    if master["sha256"] != pdf.get("sha256"):
+        raise TerminalEvidenceV2Error("UV_MASTER_PDF_READBACK_MISMATCH")
+    from .route_receipt_v2 import discover_route_receipt
+    baseline_route = discover_route_receipt(claim, completed_done, token,
+        folder_lister=folder_lister, metadata_reader=metadata_reader)
+    baseline, _ = _read_live(baseline_route["ai_done_drive_id"], token=token,
+        expected_parent=folder, expected_mime="application/json", suffix=".json",
+        max_bytes=8 * 1024 * 1024, metadata_reader=metadata_reader, downloader=downloader)
+    done["completedReportBaseline"] = baseline
+    _baseline_readback(claim, done, token, metadata_reader=metadata_reader, downloader=downloader)
+    name = sealed_ai_done_name(claim)
+    items = folder_lister(folder, token)
+    if (not isinstance(items, list) or any(not isinstance(item, Mapping) for item in items)
+            or any(item.get("name") == name for item in items)):
+        raise TerminalEvidenceV2Error("UV_SEALED_REPORT_OUTPUT_CONFLICT")
+    # Serialize before any write, including the size bound used by the existing
+    # Drive JSON uploader (indent=2, ensure_ascii=False).
+    payload = json.dumps(done, ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
+    # The sealed supplement is also the private-stage object. Keep the stricter
+    # existing private budget before ANY upload; the ordinary 80 MiB envelope
+    # is not permission to enlarge this payload.
+    if len(payload) > PRIVATE_AI_DONE_BYTES:
+        raise TerminalEvidenceV2Error("UV_AI_DONE_SIZE_INVALID")
+    if read_sealed_observations(claim, sealed) != done["savedFrameObservations"]:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_CHANGED")
+    if uploader is None:
+        import run_drive_3_1_free as io
+        uploader = io.upload_bytes if _private_bytes else io.upload_json
+    from .owner_effects import terminal_effect
+    with terminal_effect(claim, required=True):
+        uploaded = (uploader(token, folder, name, payload, 'application/json')
+                    if _private_bytes else uploader(token, folder, name, done))
+    if (not isinstance(uploaded, Mapping) or not uploaded.get("id")
+            or uploaded["id"] in {claim.get("source_file_id"), master_id}):
+        raise TerminalEvidenceV2Error("UV_AI_DONE_UPLOAD_UNCONFIRMED")
+    if _private_bytes:
+        with terminal_effect(claim,required=True):
+            readback, raw = _read_live(str(uploaded['id']),token=token,expected_parent=folder,
+                expected_mime='application/json',suffix='.json',max_bytes=PRIVATE_AI_DONE_BYTES,
+                metadata_reader=metadata_reader,downloader=downloader)
+            if readback['name'] != name or raw != payload:
+                raise TerminalEvidenceV2Error('UV_PRIVATE_UPLOAD_BYTES_MISMATCH')
+    return done
+
+
+def consume_sealed_report_private(claim, completed_done, sealed, token, *,
+                                  metadata_reader=file_metadata, downloader=download_file,
+                                  folder_lister=list_folder_files, byte_uploader=None):
+    """Private producer: serialize once, check 4 MiB, upload/read exact bytes.
+
+    Explicit source port only; no launcher/policy is enrolled by importing it.
+    """
+    return consume_sealed_report(claim,completed_done,sealed,token,
+        metadata_reader=metadata_reader,downloader=downloader,folder_lister=folder_lister,
+        uploader=byte_uploader,_private_bytes=True)
+
+
 def _build(
     claim: Mapping[str, Any],
     done: Mapping[str, Any],
@@ -193,6 +431,7 @@ def _build(
     *,
     metadata_reader: Callable[[str, str], Mapping[str, Any]],
     downloader: Callable[..., Mapping[str, Any]],
+    max_ai_done_bytes: int = MAX_AI_DONE_BYTES,
 ) -> dict[str, Any]:
     _validate_done(claim, done)
     source = source_identity_from_claim(claim)
@@ -216,13 +455,14 @@ def _build(
         expected_parent=output_folder,
         expected_mime="application/json",
         suffix=".json",
-        max_bytes=8 * 1024 * 1024,
+        max_bytes=max_ai_done_bytes,
         metadata_reader=metadata_reader,
         downloader=downloader,
     )
     try:
-        live_done = json.loads(ai_bytes.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        from .diana20_recognizer import _json
+        live_done = _json(ai_bytes.removeprefix(b"\xef\xbb\xbf"))
+    except RuntimeError as exc:
         raise TerminalEvidenceV2Error("UV_AI_DONE_READBACK_INVALID") from exc
     if not isinstance(live_done, dict) or _canonical_json(live_done) != _canonical_json(dict(done)):
         raise TerminalEvidenceV2Error("UV_AI_DONE_READBACK_MISMATCH")
@@ -248,6 +488,18 @@ def _build(
         "source_identity": source,
         "artifacts": artifacts,
     }
+    observations = None
+    baseline = None
+    if "savedFrameObservations" in done:
+        observations = _done_observations(claim, done)
+        if ai["name"] != sealed_ai_done_name(claim):
+            raise TerminalEvidenceV2Error("UV_OBSERVATIONS_TERMINAL_MISMATCH")
+        baseline = _baseline_readback(claim, done, token,
+            metadata_reader=metadata_reader, downloader=downloader)
+        if baseline["drive_id"] == ai_done_id:
+            raise TerminalEvidenceV2Error("UV_COMPLETED_REPORT_BASELINE_MISMATCH")
+        manifest["saved_frame_observations"] = observations
+        manifest["completed_report_baseline"] = baseline
     manifest_sha = _canonical_sha256(manifest)
     receipt_core = {
         "schema_version": "universal-video-terminal-receipt/v1",
@@ -264,6 +516,10 @@ def _build(
         "database_persistence_allowed": False,
         "publication_state": "NOT_PUBLISHED",
     }
+    if observations is not None:
+        receipt_core["observation_stream_verified"] = True
+        receipt_core["observation_stream_sha256"] = observations["sha256"]
+        receipt_core["completed_report_baseline_sha256"] = baseline["sha256"]
     evidence_sha = _canonical_sha256(receipt_core)
     receipt = {**receipt_core, "evidence_sha256": evidence_sha}
     return {
@@ -283,6 +539,8 @@ def _build(
         "artifact_manifest_sha256": manifest_sha,
         "terminal_receipt": receipt,
         "terminal_evidence_sha256": evidence_sha,
+        **({"saved_frame_observations": observations} if observations is not None else {}),
+        **({"completed_report_baseline": baseline} if baseline is not None else {}),
     }
 
 
@@ -294,6 +552,7 @@ def build_terminal_evidence(
     *,
     metadata_reader: Callable[[str, str], Mapping[str, Any]] = file_metadata,
     downloader: Callable[..., Mapping[str, Any]] = download_file,
+    sealed_observations=None,
 ) -> dict[str, Any]:
     if (
         route_receipt.get("schema_version") != "universal-video-route-receipt/v2"
@@ -302,6 +561,10 @@ def build_terminal_evidence(
         or str(route_receipt.get("output_folder_id") or "") != str(claim.get("output_folder_id") or "")
     ):
         raise TerminalEvidenceV2Error("UV_ROUTE_RECEIPT_BINDING_INVALID")
+    if sealed_observations is not None:
+        expected = read_sealed_observations(claim, sealed_observations)
+        if done.get("savedFrameObservations") != expected:
+            raise TerminalEvidenceV2Error("UV_OBSERVATIONS_CONSUMPTION_MISMATCH")
     return _build(
         claim,
         done,
@@ -358,6 +621,25 @@ def validate_terminal_output(claim: Mapping[str, Any], output: Mapping[str, Any]
         or locators.get("ai_done") != output.get("ai_done_drive_id")
     ):
         raise TerminalEvidenceV2Error("UV_TERMINAL_OUTPUT_BINDING_INVALID")
+    observation_fields = (
+        "saved_frame_observations" in output,
+        "saved_frame_observations" in manifest,
+        "observation_stream_verified" in receipt,
+        "observation_stream_sha256" in receipt,
+        "completed_report_baseline" in output,
+        "completed_report_baseline" in manifest,
+        "completed_report_baseline_sha256" in receipt,
+    )
+    if any(observation_fields):
+        provenance = output.get("saved_frame_observations")
+        if (not all(observation_fields) or not isinstance(provenance, Mapping)
+                or manifest.get("saved_frame_observations") != provenance
+                or receipt.get("observation_stream_verified") is not True
+                or receipt.get("observation_stream_sha256") != provenance.get("sha256")
+                or not isinstance(output.get("completed_report_baseline"), Mapping)
+                or manifest.get("completed_report_baseline") != output["completed_report_baseline"]
+                or receipt.get("completed_report_baseline_sha256") != output["completed_report_baseline"].get("sha256")):
+            raise TerminalEvidenceV2Error("UV_OBSERVATIONS_TERMINAL_MISMATCH")
 
 
 def reverify_terminal_output_live(
@@ -367,7 +649,10 @@ def reverify_terminal_output_live(
     *,
     metadata_reader: Callable[[str, str], Mapping[str, Any]] = file_metadata,
     downloader: Callable[..., Mapping[str, Any]] = download_file,
+    max_ai_done_bytes: int = MAX_AI_DONE_BYTES,
 ) -> dict[str, Any]:
+    if type(max_ai_done_bytes) is not int or not 2 <= max_ai_done_bytes <= MAX_AI_DONE_BYTES:
+        raise TerminalEvidenceV2Error('UV_AI_DONE_SIZE_INVALID')
     validate_terminal_output(claim, output)
     ai_id = str(output.get("ai_done_drive_id") or "")
     try:
@@ -375,8 +660,9 @@ def reverify_terminal_output_live(
         _reject_trashed(ai_raw)
         with tempfile.TemporaryDirectory(prefix="uv-terminal-ai-v2-") as td:
             path = Path(td) / "AI_DONE.json"
-            downloader(ai_id, path, token, max_bytes=8 * 1024 * 1024, metadata=ai_raw)
-            done = json.loads(path.read_text(encoding="utf-8-sig"))
+            downloader(ai_id, path, token, max_bytes=max_ai_done_bytes, metadata=ai_raw)
+            from .diana20_recognizer import _json
+            done = _json(path.read_bytes().removeprefix(b"\xef\xbb\xbf"))
     except TerminalEvidenceV2Error:
         raise
     except Exception as exc:
@@ -391,21 +677,47 @@ def reverify_terminal_output_live(
         token,
         metadata_reader=metadata_reader,
         downloader=downloader,
+        max_ai_done_bytes=max_ai_done_bytes,
     )
     for key in (
         "master_pdf_drive_id", "master_pdf_sha256", "ai_done_drive_id", "ai_done_sha256",
         "artifact_locators", "artifact_manifest", "artifact_manifest_sha256",
         "terminal_receipt", "terminal_evidence_sha256",
+        "saved_frame_observations",
+        "completed_report_baseline",
     ):
         if output.get(key) != rebuilt.get(key):
             raise TerminalEvidenceV2Error("UV_TERMINAL_LIVE_EVIDENCE_MISMATCH")
     return rebuilt
 
 
+def verify_sealed_terminal_output(claim, output, sealed, *, token=None,
+                                  metadata_reader=file_metadata, downloader=download_file):
+    """The route's three-argument verifier, including fresh full-stream readback."""
+    expected = read_sealed_observations(claim, sealed)["provenance"]
+    validate_terminal_output(claim, output)
+    if output.get("saved_frame_observations") != expected:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_CONSUMPTION_MISMATCH")
+    if token is None:
+        from .drive_adapter import access_token
+        token = access_token()
+    rebuilt = reverify_terminal_output_live(claim, output, token,
+        metadata_reader=metadata_reader, downloader=downloader)
+    if rebuilt.get("saved_frame_observations") != expected:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_CONSUMPTION_MISMATCH")
+    if read_sealed_observations(claim, sealed)["provenance"] != expected:
+        raise TerminalEvidenceV2Error("UV_OBSERVATIONS_CHANGED")
+
+
 __all__ = [
     "TerminalEvidenceV2Error",
     "build_terminal_evidence",
+    "consume_sealed_report",
+    "consume_sealed_report_private",
+    "read_sealed_observations",
+    "sealed_ai_done_name",
     "reverify_terminal_output_live",
     "source_identity_from_claim",
     "validate_terminal_output",
+    "verify_sealed_terminal_output",
 ]

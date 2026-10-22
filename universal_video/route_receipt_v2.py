@@ -26,6 +26,7 @@ def discover_route_receipt(
     *,
     folder_lister: Callable[[str, str], list[dict]] = list_folder_files,
     metadata_reader: Callable[[str, str], Mapping[str, Any]] = file_metadata,
+    ai_done_name: str | None = None,
 ) -> dict[str, Any]:
     """Locate exactly the routed master PDF and matching AI_DONE in output folder.
 
@@ -63,7 +64,9 @@ def discover_route_receipt(
         dict(item) for item in items
         if isinstance(item, Mapping) and str(item.get("id") or "") == master_id
     ]
-    ai_name = f"AI_DONE_{job_key}.json"
+    ai_name = ai_done_name if ai_done_name is not None else f"AI_DONE_{job_key}.json"
+    if not isinstance(ai_name, str) or not ai_name or "/" in ai_name or "\\" in ai_name:
+        raise RouteReceiptV2Error("UV_ROUTE_RECEIPT_IDENTITY_INVALID")
     ai_matches = [
         dict(item) for item in items
         if isinstance(item, Mapping) and str(item.get("name") or "") == ai_name

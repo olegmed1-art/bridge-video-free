@@ -132,6 +132,7 @@ class ClaimReceiptJournal:
         self.path = path
         self.binding = dict(binding)
         self.claim: dict[str, Any] | None = None
+        self._published_claim_raw = None
 
     def preflight(self) -> None:
         """Check the journal directory without creating a one-shot state."""
@@ -163,6 +164,8 @@ class ClaimReceiptJournal:
                         batch_id=self.binding['expected_batch_id'])
         if _read_local_json(self.path) != expected:
             raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_MISMATCH')
+        from .receipt_encoding import canonical_bytes
+        self._published_claim_raw = canonical_bytes(dict(claim), max_bytes=16384)
         self.claim = _receipt(claim, worker_key, admission_id, source_fingerprint)
         _replace_json(self.path, dict(self.claim,
                                       claim_state='PRECOMMIT_UNCONFIRMED'))
@@ -176,6 +179,35 @@ class ClaimReceiptJournal:
             raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_MISMATCH')
         _replace_json(self.path, dict(self.claim,
                                       claim_state='COMMIT_ACKNOWLEDGED'))
+
+    def committed_evidence(self, claim: Mapping[str, Any]) -> bytes:
+        """Exact journal readback DATA; never enrollment or a DB capability."""
+        from .receipt_encoding import canonical_bytes
+        from .diana20_transport_protocol import canonical, digest
+        if (self.claim is None or self._published_claim_raw is None
+                or canonical_bytes(dict(claim), max_bytes=16384) != self._published_claim_raw):
+            raise PrivateOneJobConfigurationError('ONE_JOB_COMMIT_NOT_ACKNOWLEDGED')
+        expected = dict(self.claim, claim_state='COMMIT_ACKNOWLEDGED')
+        if (_read_local_json(self.path) != expected or
+                _receipt(claim, self.claim['worker_key'], self.claim['admission_id'],
+                         self.claim['source_fingerprint']) != self.claim):
+            raise PrivateOneJobConfigurationError('ONE_JOB_COMMIT_NOT_ACKNOWLEDGED')
+        return canonical(dict(schema='claim-commit-evidence/v1', state='COMMIT_ACKNOWLEDGED',
+            claim_sha256=digest(canonical_bytes(dict(claim), max_bytes=16384)),
+            journal_sha256=digest(canonical(expected))))
+
+    def inspect_state(self) -> str:
+        """Read-only crash hint, never permission to claim/compute again."""
+        value = _read_local_json(self.path)
+        if value is None:
+            return 'ABSENT'
+        if (value.get('admission_id') != self.binding['admission_id']
+                or value.get('job_id') != self.binding['expected_job_id']
+                or value.get('batch_id') != self.binding['expected_batch_id']
+                or value.get('claim_state') not in
+                ('RESERVED', 'PRECOMMIT_UNCONFIRMED', 'COMMIT_ACKNOWLEDGED')):
+            raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_MISMATCH')
+        return value['claim_state']
 
 
 def wait_for_approval_signal(path: Path, claim: Mapping[str, Any],
@@ -201,8 +233,17 @@ def wait_for_approval_signal(path: Path, claim: Mapping[str, Any],
         time.sleep(min(2, max(0.1, deadline - time.monotonic())))
 
 
-def run_from_binding_file(binding_path: str) -> dict[str, Any]:
-    """Use only the existing restricted queue and collector secret facilities."""
+def run_from_binding_file(binding_path: str, *, parent_api=None,
+                          parent_ports=None) -> dict[str, Any]:
+    """Use the existing queue/journal facilities and optional trusted parent ports.
+
+    The source-bound parent_api and parent_ports come from the authenticated
+    application's source call site, never the binding file. No parent fallback
+    is imported. The default preserves the resident path.
+    """
+    if ((parent_api is None) != (parent_ports is None)
+            or (parent_api is not None and not callable(getattr(parent_api, 'run_one', None)))):
+        raise PrivateOneJobConfigurationError('ONE_JOB_PARENT_SOURCE_BINDING_REQUIRED')
     binding = _read_local_json(_safe_path(binding_path))
     if binding is None or set(binding) != _BINDING_KEYS:
         raise PrivateOneJobConfigurationError('ONE_JOB_BINDING_INVALID')
@@ -221,19 +262,26 @@ def run_from_binding_file(binding_path: str) -> dict[str, Any]:
             raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_DSN_REQUIRED')
         from .video_queue import _read_dsn_file
         queue_dsn = _read_dsn_file(file_name)
-    from .spool_worker import process_private_one_job_once
-
     journal = ClaimReceiptJournal(claim_path, binding)
-    journal.preflight()
-
-    return process_private_one_job_once(
+    queue_arguments = dict(
         queue_dsn=queue_dsn, **binding,
-        claim_reserver=journal.reserve,
-        claim_publisher=journal.publish_precommit,
-        claim_committer=journal.acknowledge_commit,
         approval_waiter=lambda claim, key, admission, fingerprint:
             wait_for_approval_signal(signal_path, claim, key, admission,
                                      fingerprint))
+    if parent_ports is not None:
+        # The parent enters application_scope before journal preflight/reserve
+        # and retains it through this same queue's terminal persistence.
+        return parent_api.run_one(queue_arguments=queue_arguments,
+                                  claim_journal=journal, ports=parent_ports)
+
+    from .spool_worker import process_private_one_job_once
+    journal.preflight()
+
+    return process_private_one_job_once(
+        **queue_arguments,
+        claim_reserver=journal.reserve,
+        claim_publisher=journal.publish_precommit,
+        claim_committer=journal.acknowledge_commit)
 
 
 def main() -> None:

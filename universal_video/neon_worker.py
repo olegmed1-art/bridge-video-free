@@ -25,6 +25,7 @@ from .terminal_evidence_v2 import (
     source_identity_from_claim,
 )
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
+from .owner_effects import terminal_effect
 from .workload_lock import shared_workload_lock
 
 verify_terminal_output_live = reverify_terminal_output_live
@@ -48,9 +49,10 @@ class NeonVideoTimeoutError(NeonVideoWorkerError):
 
 
 @contextmanager
-def _processing_timeout() -> Iterator[None]:
-    seconds = int(os.getenv("UNIVERSAL_VIDEO_JOB_TIMEOUT_SECONDS", "21600"))
-    if not 900 <= seconds <= 86400:
+def _processing_timeout(native_budget=None) -> Iterator[None]:
+    seconds = (native_budget.work_seconds if native_budget is not None
+               else int(os.getenv("UNIVERSAL_VIDEO_JOB_TIMEOUT_SECONDS", "21600")))
+    if (native_budget is None and not 900 <= seconds <= 86400):
         raise NeonVideoWorkerError("VIDEO_QUEUE_TIMEOUT_INVALID")
     if threading.current_thread() is not threading.main_thread():
         raise NeonVideoWorkerError("VIDEO_QUEUE_TIMEOUT_REQUIRES_MAIN_THREAD")
@@ -161,13 +163,17 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
                 os.environ[key] = value
 
 
-def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
+def stable_review_processor(claim: Mapping[str, Any], *, sealed_observations=None,
+                            completed_done=None) -> dict[str, Any]:
     """Run the approved processor and construct v2 evidence from live Drive objects."""
     with _stable_environment(claim):
         import bridge_runtime_hardening_r25_16 as hardening
-        import route_drive_job_outputs
-
-        done = hardening.run(access_token)
+        sealed_mode = sealed_observations is not None or completed_done is not None
+        if sealed_mode:
+            done = hardening.run(access_token, claim=claim,
+                sealed_observations=sealed_observations, completed_done=completed_done)
+        else:
+            done = hardening.run(access_token)
         if (
             not isinstance(done, dict)
             or done.get("status") != "AI_DONE"
@@ -176,11 +182,19 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
             or (done.get("original") or {}).get("driveId") != claim["source_file_id"]
         ):
             raise NeonVideoWorkerError("VIDEO_QUEUE_AI_DONE_MISMATCH")
-        if route_drive_job_outputs.main() != 0:
-            raise NeonVideoWorkerError("VIDEO_QUEUE_OUTPUT_ROUTE_FAILED")
+        if not sealed_mode:
+            import route_drive_job_outputs
+            if route_drive_job_outputs.main() != 0:
+                raise NeonVideoWorkerError("VIDEO_QUEUE_OUTPUT_ROUTE_FAILED")
         terminal_token = access_token()
-        route_receipt = discover_route_receipt(claim, done, terminal_token)
-        terminal = build_terminal_evidence(claim, done, route_receipt, terminal_token)
+        if sealed_mode:
+            from .terminal_evidence_v2 import sealed_ai_done_name
+            route_receipt = discover_route_receipt(claim, done, terminal_token,
+                ai_done_name=sealed_ai_done_name(claim))
+        else:
+            route_receipt = discover_route_receipt(claim, done, terminal_token)
+        terminal = build_terminal_evidence(claim, done, route_receipt, terminal_token,
+            **({"sealed_observations": sealed_observations} if sealed_mode else {}))
 
     master_pdf = done.get("masterPdf") if isinstance(done.get("masterPdf"), dict) else {}
     return {
@@ -214,18 +228,27 @@ def _failure(exc: BaseException) -> tuple[str, str]:
 
 class _Heartbeat:
     def __init__(self, database_url: str, claim: Mapping[str, Any], worker_key: str,
-                 subset_adapter: Any = None) -> None:
+                 subset_adapter: Any = None, *, native_budget=None) -> None:
         self.database_url = database_url
         self.claim = claim
         self.worker_key = worker_key
         self.subset_adapter = subset_adapter
+        self.native_budget = native_budget
+        if native_budget is not None:
+            from .native_video_lease import require_native_budget
+            require_native_budget(claim, worker_key, native_budget)
         self.stop = threading.Event()
         self.error: BaseException | None = None
         self.thread = threading.Thread(target=self._run, name="video-queue-heartbeat", daemon=True)
 
     def _run(self) -> None:
-        while not self.stop.wait(300):
+        while not self.stop.wait(1 if self.native_budget is not None else 300):
             try:
+                if self.native_budget is not None:
+                    # BIND fixes the expiry. Never call legacy renewal to make
+                    # this native lane appear live beyond its admitted window.
+                    self.native_budget.check(self.claim, self.worker_key)
+                    continue
                 heartbeat = (self.subset_adapter.heartbeat_job
                              if self.subset_adapter is not None else heartbeat_job)
                 heartbeat(
@@ -257,11 +280,31 @@ def process_claim(
     subset_adapter: Any = None,
     staging_handoff: ExactLeaseStagingHandoff | PrivateResultStagingHandoff | None = None,
     private_approval_waiter: Callable[[Mapping[str, Any], str, str, str], Mapping[str, Any]] | None = None,
+    private_failure_handler: Callable[[Mapping[str, Any], str], None] | None = None,
+    native_budget=None,
 ) -> dict[str, Any]:
+    """Process a lease; an optional private failure handler must raise.
+
+    The handler runs before retry_job, including post-processor failures.
+    Omitting it preserves the existing retry policy.
+    """
+    from .native_video_lease import require_native_budget
+    require_native_budget(claim, worker_key, native_budget)
     if staging_handoff is not None and not isinstance(
             staging_handoff, (ExactLeaseStagingHandoff, PrivateResultStagingHandoff)):
         raise NeonVideoWorkerError("VIDEO_STAGING_EXACT_LEASE_AUTHORIZATION_REQUIRED")
     private_handoff = isinstance(staging_handoff, PrivateResultStagingHandoff)
+    if native_budget is not None:
+        from .terminal_finish_contract import Assignment
+        assignment = getattr(staging_handoff, 'assignment', None)
+        if (not private_handoff or type(assignment) is not Assignment
+                or not callable(private_failure_handler)):
+            raise NeonVideoWorkerError('NATIVE_PRIVATE_HANDOFF_REQUIRED')
+        bound_task = assignment.value['autopilot']
+        if (assignment.sha256 != native_budget.assignment_sha256
+                or bound_task['task_id'] != native_budget.task_id
+                or bound_task['lease_epoch'] != native_budget.lease_epoch):
+            raise NeonVideoWorkerError('NATIVE_PRIVATE_HANDOFF_BINDING_CHANGED')
     if private_handoff and not callable(getattr(subset_adapter, 'finish_private_job', None)):
         raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_SUBSET_ADAPTER_REQUIRED")
     if private_handoff and not callable(getattr(subset_adapter, 'connection_validator', None)):
@@ -271,6 +314,9 @@ def process_claim(
     if private_approval_waiter is not None and (
             not private_handoff or not callable(private_approval_waiter)):
         raise NeonVideoWorkerError("VIDEO_PRIVATE_APPROVAL_WAITER_INVALID")
+    if private_failure_handler is not None and (
+            not private_handoff or not callable(private_failure_handler)):
+        raise NeonVideoWorkerError("VIDEO_PRIVATE_FAILURE_HANDLER_INVALID")
     if isinstance(staging_handoff, ExactLeaseStagingHandoff) and staging_handoff.writer_dsn == database_url:
         raise NeonVideoWorkerError("VIDEO_STAGING_SEPARATE_WRITER_REQUIRED")
     output = _base_output(claim)
@@ -279,14 +325,27 @@ def process_claim(
     initial_source: dict[str, Any] | None = None
     prework_observation_id: str | None = None
 
-    with _Heartbeat(database_url, claim, worker_key, subset_adapter) as heartbeat:
-        with _processing_timeout():
+    native_options = {'native_budget': native_budget} if native_budget is not None else {}
+    with _Heartbeat(database_url, claim, worker_key, subset_adapter, **native_options) as heartbeat:
+        with _processing_timeout(**native_options):
             try:
                 initial_source = verify_claimed_source(claim, access_token())
                 if subset_adapter is not None:
                     prework_observation_id = subset_adapter.before_work(
                         database_url, claim, worker_key)
+                if native_budget is not None:
+                    native_budget.require_work_window(claim, worker_key)
                 output.update(dict(processor(claim)))
+                if native_budget is not None:
+                    native_budget.check(claim, worker_key)
+                if private_handoff and staging_handoff.assignment is not None:
+                    if (not isinstance(output.get('saved_frame_observations'),Mapping)
+                            or not isinstance(output.get('completed_report_baseline'),Mapping)
+                            or output.get('result_mode')!='SHADOW_REVIEW_ONLY'
+                            or output.get('database_persistence_allowed') is not False
+                            or output.get('canonical_promotion_allowed') is not False
+                            or 'private_staging' in output):
+                        raise PrivateOneJobConfigurationError('ONE_JOB_BOUND_SEALED_OUTPUT_REQUIRED')
                 output.update(_base_output(claim))
                 # Processor output is not proof of a committed staging receipt.
                 output.pop("knowledge_staging", None)
@@ -339,7 +398,18 @@ def process_claim(
                         if heartbeat.error is not None:
                             raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
                     if staging_handoff is not None:
-                        staged = staging_handoff(claim, worker_key, access_token())
+                        staging_token = access_token()
+                        with terminal_effect(claim):
+                            if private_handoff and (staging_handoff.assignment is not None
+                                                    or 'saved_frame_observations' in output):
+                                if not callable(getattr(subset_adapter,'finish_private_job_v2',None)):
+                                    raise PrivateOneJobConfigurationError('ONE_JOB_POST_FINISH_API_UNBOUND')
+                                import copy
+                                selected_for_finish = copy.deepcopy(output)
+                                staged = staging_handoff.stage_selected_terminal(
+                                    claim,worker_key,staging_token,selected_for_finish)
+                            else:
+                                staged = staging_handoff(claim, worker_key, staging_token)
                         if private_handoff:
                             output["private_staging"] = staged
                             output["result_mode"] = "PRIVATE_RESULT_STAGING_ONLY"
@@ -359,36 +429,55 @@ def process_claim(
                 raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
 
             if outcome == "FAILED":
+                # An owning one-job parent can prohibit retry before its SQL
+                # effect, including failures after the processor has returned.
+                if private_failure_handler is not None:
+                    private_failure_handler(dict(claim), error_code or "UV_ITEM_FAILED")
+                    raise PrivateOneJobConfigurationError('ONE_JOB_FAILURE_HANDLER_RETURNED')
                 retry = (subset_adapter.retry_job if subset_adapter is not None
                          else retry_job)
-                return retry(
-                    database_url,
-                    job_id=str(claim["job_id"]),
-                    lease_token=str(claim["lease_token"]),
-                    worker_key=worker_key,
-                    error_code=error_code or "UV_ITEM_FAILED",
-                    max_attempts=3,
-                    base_delay_seconds=60,
-                )
+                with terminal_effect(claim):
+                    return retry(
+                        database_url,
+                        job_id=str(claim["job_id"]),
+                        lease_token=str(claim["lease_token"]),
+                        worker_key=worker_key,
+                        error_code=error_code or "UV_ITEM_FAILED",
+                        max_attempts=3,
+                        base_delay_seconds=60,
+                    )
             if subset_adapter is not None:
                 if prework_observation_id is None:
                     raise NeonVideoWorkerError("VIDEO_SUBSET_PREWORK_OBSERVATION_MISSING")
                 if private_handoff and outcome == "REVIEW_READY":
-                    return subset_adapter.finish_private_job(
+                    with terminal_effect(claim):
+                        if staging_handoff.assignment is not None or 'saved_frame_observations' in output:
+                            staging_handoff.before_terminal_finish()
+                            return subset_adapter.finish_private_job_v2(
+                                database_url,claim,worker_key,
+                                before_work_observation_id=prework_observation_id,
+                                admission_id=staging_handoff.admission_id,
+                                source_fingerprint=staging_handoff.source_fingerprint,
+                                receipt_id=output['private_staging']['receipt_id'],
+                                outcome=outcome,output=output,
+                                assignment=staging_handoff.assignment,selected_output=selected_for_finish)
+                        return subset_adapter.finish_private_job(
+                            database_url, claim, worker_key,
+                            before_work_observation_id=prework_observation_id,
+                            admission_id=staging_handoff.admission_id,
+                            source_fingerprint=staging_handoff.source_fingerprint,
+                            receipt_id=output["private_staging"]["receipt_id"],
+                            outcome=outcome, output=output)
+                with terminal_effect(claim):
+                    return subset_adapter.finish_job(
                         database_url, claim, worker_key,
                         before_work_observation_id=prework_observation_id,
-                        admission_id=staging_handoff.admission_id,
-                        source_fingerprint=staging_handoff.source_fingerprint,
-                        receipt_id=output["private_staging"]["receipt_id"],
-                        outcome=outcome, output=output)
-                return subset_adapter.finish_job(
-                    database_url, claim, worker_key,
-                    before_work_observation_id=prework_observation_id,
-                    outcome=outcome, output=output, error_code=error_code)
-            return finish_job(database_url, job_id=str(claim["job_id"]),
-                              lease_token=str(claim["lease_token"]),
-                              worker_key=worker_key, outcome=outcome,
-                              output=output, error_code=error_code)
+                        outcome=outcome, output=output, error_code=error_code)
+            with terminal_effect(claim):
+                return finish_job(database_url, job_id=str(claim["job_id"]),
+                                  lease_token=str(claim["lease_token"]),
+                                  worker_key=worker_key, outcome=outcome,
+                                  output=output, error_code=error_code)
 
 
 def process_one_neon(
@@ -447,13 +536,26 @@ def process_one_private_neon(
     claim_publisher: Callable[[Mapping[str, Any], str, str, str], None],
     claim_committer: Callable[[Mapping[str, Any]], None],
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
+    private_failure_handler: Callable[[Mapping[str, Any], str], None] | None = None,
+    terminal_recovery=None,
+    native_budget=None,
 ) -> dict[str, Any]:
     """One explicit resident-runtime claim and private finish, never polling.
 
     The waiter coordinates an independently issued exact-lease approval just
     before staging; it does not grant approval. The 0061/0062 SQL remains the
     authority. Ordinary resident polling never invokes this callable.
+    private_failure_handler optionally stops failures before retry SQL; the
+    default None retains the existing worker's failure policy.
     """
+    from .native_video_lease import NATIVE_WORKER_KEY, require_native_budget
+    if worker_key == NATIVE_WORKER_KEY:
+        # This resident adapter still owns a LEGACY claim below. A genuine
+        # native caller must first use NativeVideoWorkerClaim and the original
+        # post-COMMIT owner enrollment, then pass that exact claim+budget to
+        # run_private_one_job. Never claim twice while awaiting native wiring.
+        raise NeonVideoWorkerError('NATIVE_ORIGINAL_CLAIM_BINDING_REQUIRED')
+    require_native_budget({}, worker_key, native_budget)
     from .private_one_job_entrypoint import (
         PrivateOneJobConfigurationError, _open_checked_queue, claim_exact_private_job,
         run_private_one_job,
@@ -462,6 +564,14 @@ def process_one_private_neon(
         DriveSubsetObservationProvider, SubsetDriveConfig, restricted_identity,
     )
     from .subset_worker import SubsetWorkerAdapter
+
+    # The original TerminalAckQueue owns arm/COMMIT-bind/finish/ACK. This
+    # parameter shares its exact prepared handoff, never creates authority.
+    from .diana20_terminal_queue import TerminalRecoveryAdapter
+    post_finish = terminal_recovery is not None
+    if post_finish and (type(terminal_recovery) is not TerminalRecoveryAdapter
+                        or not callable(private_failure_handler)):
+        raise PrivateOneJobConfigurationError('ONE_JOB_POST_FINISH_RECOVERY_REQUIRED')
 
     try:
         exact_admission_id = str(UUID(str(admission_id)))
@@ -475,6 +585,7 @@ def process_one_private_neon(
             or not callable(claim_reserver)
             or not callable(claim_publisher)
             or not callable(claim_committer)
+            or (private_failure_handler is not None and not callable(private_failure_handler))
             or os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip()):
         raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID')
     # An exclusive fence conflicts with the normal resident's shared fence.
@@ -494,10 +605,19 @@ def process_one_private_neon(
         # Read-only runtime, target, and identity checks precede the durable
         # journal; the claim transaction repeats its queue ACL check.
         with _open_checked_queue(queue_dsn, expected_login=expected_login,
-                                 expected_database=expected_database):
+                                 expected_database=expected_database,
+                                 **({'post_finish': True} if post_finish else {})):
             pass
         adapter = SubsetWorkerAdapter(DriveSubsetObservationProvider(
             config, key, expected_login=collector_login))
+        if post_finish:
+            terminal_recovery.bind_private_worker_inputs(dict(
+                queue_dsn=queue_dsn, expected_database=expected_database, expected_login=expected_login,
+                expected_batch_id=expected_batch_id, expected_job_id=expected_job_id,
+                expected_attempt_count=expected_attempt_count, expected_source_file_id=expected_source_file_id,
+                worker_key=key, admission_id=admission_id, source_fingerprint=source_fingerprint,
+                subset_adapter=adapter, approval_waiter=approval_waiter, processor=processor,
+                private_failure_handler=private_failure_handler))
         claim_reserver()  # Durable before the first potentially mutating SQL.
         claim = claim_exact_private_job(
             queue_dsn=queue_dsn, expected_database=expected_database,
@@ -509,8 +629,24 @@ def process_one_private_neon(
             worker_key=key, processing_profile=APPROVED_PROFILE,
             algorithm_revision=APPROVED_REVISION,
             claim_publisher=lambda selected: claim_publisher(
-                selected, key, admission_id, source_fingerprint))
+                selected, key, admission_id, source_fingerprint),
+            **({'post_finish': True} if post_finish else {}))
         claim_committer(dict(claim))
+        bound = {}
+        if post_finish:
+            # The original outer queue's committer returned only after its
+            # genuine owner bind and independent worker enrollment readback.
+            # Reuse THAT prepared object; never create a second handoff/reader.
+            from .private_one_job_entrypoint import PreparedPrivateOneJob
+            from .receipt_encoding import canonical_bytes
+            prepared = terminal_recovery.prepared_job
+            if (type(prepared) is not PreparedPrivateOneJob
+                    or terminal_recovery.reader is None
+                    or terminal_recovery.reader.handoff is not prepared.handoff
+                    or prepared._claim_raw != canonical_bytes(dict(claim), max_bytes=16384)):
+                raise PrivateOneJobConfigurationError('ONE_JOB_POST_COMMIT_BINDING_REQUIRED')
+            terminal_recovery.assert_bound(claim, terminal_recovery.reader)
+            bound = dict(assignment=prepared.handoff.assignment, prepared=prepared)
         return run_private_one_job(
             queue_dsn=queue_dsn, expected_database=expected_database,
             expected_login=expected_login, claim=claim,
@@ -522,7 +658,8 @@ def process_one_private_neon(
             worker_key=key, admission_id=admission_id,
             source_fingerprint=source_fingerprint,
             subset_adapter=adapter, approval_waiter=approval_waiter,
-            processor=processor)
+            processor=processor, private_failure_handler=private_failure_handler,
+            **({'native_budget': native_budget} if native_budget is not None else {}), **bound)
 
 
 __all__ = [
