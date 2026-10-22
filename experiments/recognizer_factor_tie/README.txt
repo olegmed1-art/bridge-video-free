@@ -36,8 +36,9 @@ active main caller. BASELINE_PINS.json pins the frozen source, patched source,
 helper and patch. frozen_rank_suit_candidate.py.txt is a code fixture only.
 
 Verification
-Public offline regressions use only synthetic component scores, stdlib and git:
-  python3 -B -m unittest discover -s tests -p test_factor_identity_diagnostic.py -v
+Public offline regressions use synthetic scores and pinned code fixtures.
+The JSON Schema engine is required in CI (jsonschema==4.23.0):
+  python3 -B -m unittest discover -s tests -p 'test_factor_identity*.py' -v
 They cover arbitrary ranks/suits, component ties, positive margins, malformed
 inputs, idempotence, no acceptance, strict patch apply, exact byte hashes and
 reverse application. No sprite, source image or private label is committed.
@@ -49,7 +50,7 @@ if all old gates are supplied as true. This is NOT a pixel or full-worker run.
 Independent assurance uses a separate exact integer oracle over saved binary32
 scores, rectangle unions and local Pareto frontiers, rather than this helper.
 
-The human packet is local-only: 59 blank records / 58 unique existing PNGs;
+The human packet is delivered separately through the authenticated Library: 59 blank records / 58 unique existing PNGs;
 12 requested baseline PNGs are unavailable. It contains no machine answers or
 source map. Two humans must freeze independent readings before the private
 join. No human labels have been generated or submitted in this change.
@@ -68,3 +69,9 @@ Integration gates and rollback
 Rollback is to leave the current release selected. The source patch also
 reverses cleanly with git apply --reverse; original fixture bytes are retained.
 There is no default enable flag or activation step in this package.
+
+Compatibility continuation
+See COMPATIBILITY.txt, CONSUMER_PINS.json and SOURCE_BUNDLE_CHECKPOINT.json.
+The prepared source package now includes strict TIE/parity readers, matching
+worker/vendor/IPC pins and a reproducible code-only builder. Old pins still
+reject. This proves source/import compatibility only; release HOLD remains.

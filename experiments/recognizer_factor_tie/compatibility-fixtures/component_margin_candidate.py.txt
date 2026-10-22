@@ -1,0 +1,190 @@
+"""Pure isolated candidate decisions. No pixels, imports of vision, or I/O.
+
+The frozen producer is never modified. Legacy identity-margin failures remain
+in the original receipt. This candidate uses same-ROI component competition
+and can only add machine candidates in a separate observation overlay.
+"""
+from collections import Counter
+import copy
+import json
+import math
+import struct
+
+VERSION = 'diana20-same-roi-component-margin-candidate-r1'
+RANKS = tuple('AKQJT98765432')
+SUITS = tuple('CDHS')
+CARDS = tuple(r+s for s in SUITS for r in RANKS)
+GATES = frozenset(('score','identity_margin','rank_margin','suit_margin',
+                   'whole_corner_score','white_retention','whole_corner_top1_agreement'))
+MIN_SCORE = .78
+MIN_MARGIN = .08
+MIN_WHITE = .85
+
+
+class CandidateError(ValueError):
+    pass
+
+
+def need(ok, reason):
+    if not ok:
+        raise CandidateError(reason)
+
+
+def f32(value):
+    need(type(value) in (int,float) and math.isfinite(value), 'FINITE_NUMERIC_SCORE_REQUIRED')
+    try:
+        return struct.unpack('f',struct.pack('f',value))[0]
+    except (OverflowError,struct.error) as error:
+        raise CandidateError('FLOAT32_SCORE_RANGE') from error
+
+
+def array(value, length):
+    need(type(value) is list and len(value)==length,'SCORE_ARRAY_SHAPE')
+    result=[f32(v) for v in value]
+    need(all(math.isfinite(v) and -1.00001<=v<=1.00001 for v in result),'CORRELATION_SCORE_RANGE')
+    return result
+
+
+def component_identity(registration):
+    """Compare every different component at one registration, never maxima."""
+    rs=array(registration.get('rank_scores'),13)
+    ss=array(registration.get('suit_scores'),4)
+    ri=max(range(13),key=lambda i:rs[i]);si=max(range(4),key=lambda i:ss[i])
+    rm=f32(rs[ri]-max(v for i,v in enumerate(rs) if i!=ri))
+    sm=f32(ss[si]-max(v for i,v in enumerate(ss) if i!=si))
+    ci=si*13+ri
+    whole=array(registration.get('whole_scores'),52)
+    white=registration.get('white_retention')
+    need(type(white) is list and len(white)==52 and all(type(v) in (int,float)
+         and math.isfinite(v) and 0<=v<=1 for v in white),'WHITE_ARRAY_SHAPE')
+    return dict(card=CARDS[ci],rank_score=rs[ri],suit_score=ss[si],rank_margin=rm,
+        suit_margin=sm,component_margin=min(rm,sm),whole_score=whole[ci],
+        white_retention=white[ci],credible=(rs[ri]>=MIN_SCORE and ss[si]>=MIN_SCORE
+            and rm>=MIN_MARGIN and sm>=MIN_MARGIN and whole[ci]>=MIN_SCORE and white[ci]>=MIN_WHITE))
+
+
+def decide(unknown, diagnostic):
+    """Return a separate decision, preserving the full original UNKNOWN.
+
+    Inputs deliberately have no expected-card/annotation argument. Exceptions
+    indicate malformed diagnostics, not evidence for an accepted card.
+    """
+    need(type(unknown) is dict and type(diagnostic) is dict,'PLAIN_INPUT_OBJECTS_REQUIRED')
+    result=dict(version=VERSION,status='UNKNOWN',card=None,reason=None,
+        original_unknown=copy.deepcopy(unknown),canonical_allowed=False,human_verified=False,
+        legacy_identity_margin_gate_passed=None,acceptance_rule_changed=False,
+        decision_model='SAME_ROI_COMPONENT_COMPETITION',
+        diagnostic_ref=copy.deepcopy(diagnostic.get('observation_ref')))
+    def refuse(reason):
+        result['reason']=reason
+        return result
+    if diagnostic.get('legacy_parity',{}).get('status')!='PASS':
+        return refuse('LEGACY_DIAGNOSTIC_PARITY_NOT_PROVEN')
+    old=unknown.get('receipt');factor=unknown.get('factor_diagnostic')
+    if (unknown.get('kind')!='HAND_CORNER' or unknown.get('reason') not in ('CARD_UNCERTAIN','CORNER_OCCLUDED')
+            or type(old) is not dict or type(old.get('best_score')) not in (int,float)
+            or not math.isfinite(old['best_score']) or old['best_score']<MIN_SCORE):
+        return refuse('FROZEN_FALLBACK_INELIGIBLE')
+    if type(factor) is not dict:
+        return refuse('FROZEN_FACTOR_DIAGNOSTIC_ABSENT')
+    gates=factor.get('gates')
+    need(type(gates) is dict and set(gates)==GATES and all(type(v) is bool for v in gates.values()),'INVALID_LEGACY_GATE_VECTOR')
+    result['legacy_identity_margin_gate_passed']=gates['identity_margin']
+    if {k for k,v in gates.items() if not v}!={'identity_margin'}:
+        return refuse('NOT_SOLE_LEGACY_IDENTITY_MARGIN_FAILURE')
+    card=factor.get('best_card')
+    need(card in CARDS,'LEGACY_IDENTITY_INVALID')
+    if card!=old.get('best_card'):
+        return refuse('ORIGINAL_WHOLE_TOP1_DISAGREEMENT')
+    # Require both recorded values and the independently recomputed gate vector.
+    if not (factor.get('joint_score',-2)>=MIN_SCORE and factor.get('rank_margin',-2)>=MIN_MARGIN
+        and factor.get('suit_margin',-2)>=MIN_MARGIN and factor.get('whole_corner_score',-2)>=MIN_SCORE
+        and factor.get('white_retention',-2)>=MIN_WHITE and factor.get('identity_margin',2)<MIN_MARGIN):
+        return refuse('RECORDED_GATE_VALUE_INCONSISTENCY')
+    registrations=diagnostic.get('registrations')
+    need(type(registrations) is list and len(registrations)==49,'ALL_49_REGISTRATIONS_REQUIRED')
+    expected={(dx,dy) for dy in range(-3,4) for dx in range(-3,4)}
+    offsets=[]
+    anchor=old.get('anchor_xy')
+    need(type(anchor) is list and len(anchor)==2 and all(type(v) is int for v in anchor),'ORIGINAL_ANCHOR_REQUIRED')
+    for reg in registrations:
+        need(type(reg) is dict and type(reg.get('offset')) is list and len(reg['offset'])==2
+            and all(type(v) is int for v in reg['offset']),'REGISTRATION_OFFSET_INVALID')
+        offsets.append(tuple(reg['offset']))
+        dx,dy=reg['offset'];x,y=anchor
+        need(reg.get('roi_xyxy')==[x+dx,y+dy,x+dx+33,y+dy+47]
+             and type(reg.get('roi_bgr_sha256')) is str and len(reg['roi_bgr_sha256'])==64
+             and all(c in '0123456789abcdef' for c in reg['roi_bgr_sha256']), 'REGISTRATION_ROI_BINDING_INVALID')
+    need(len(set(offsets))==49 and set(offsets)==expected,'REGISTRATION_OFFSETS_NOT_BIJECTIVE')
+    matches=[r for r in registrations if r.get('roi_xyxy')==factor.get('roi_xyxy')]
+    need(len(matches)==1,'FIXED_FROZEN_ROI_NOT_UNIQUE')
+    selected=matches[0]
+    if selected.get('roi_bgr_sha256')!=factor.get('roi_bgr_sha256'):
+        return refuse('FIXED_ROI_PIXEL_BINDING_MISMATCH')
+    local=component_identity(selected)
+    result['selected_component_diagnostic']=local
+    if local['card']!=card or not local['credible']:
+        return refuse('FIXED_ROI_COMPONENT_GATE_FAILED')
+    competing=[]
+    for reg in registrations:
+        component=component_identity(reg)
+        if component['credible'] and component['card']!=card:
+            competing.append(dict(offset=reg['offset'],roi_xyxy=reg.get('roi_xyxy'),
+                roi_bgr_sha256=reg.get('roi_bgr_sha256'),component=component))
+    if competing:
+        result['competing_registrations']=competing
+        return refuse('CREDIBLE_DIFFERENT_IDENTITY_AT_OTHER_REGISTRATION')
+    result.update(status='ADDITIONAL_MACHINE_CANDIDATE',card=card,reason='SAME_ROI_COMPONENT_MARGIN_PASSED',
+        fixed_roi_xyxy=copy.deepcopy(selected['roi_xyxy']),fixed_roi_bgr_sha256=selected['roi_bgr_sha256'],
+        acceptance_rule_changed=True,experimental_replaced_criterion='LEGACY_52_WAY_MIN_JOINT_IDENTITY_MARGIN',
+        legacy_identity_margin_gate_passed=False)
+    return result
+
+
+def build_overlay(rows, decisions, *, expected_baseline_cards=974):
+    """Separate rows; immutable original card/UNKNOWN objects remain verbatim.
+
+    Any new duplicate identity is withheld. A conflict never removes an
+    original accepted baseline row. No new result is called a confirmed deal.
+    """
+    need(type(rows) is list and type(decisions) is list,'ROWS_AND_DECISIONS_REQUIRED')
+    by_ref={}
+    for d in decisions:
+        ref=d.get('diagnostic_ref')
+        need(type(ref) is dict and type(ref.get('frame_sha256')) is str
+             and type(ref.get('unknown_index')) is int,'DECISION_REF_REQUIRED')
+        key=(ref['frame_sha256'],ref['unknown_index'])
+        need(key not in by_ref,'DUPLICATE_DECISION_REF')
+        by_ref[key]=d
+    result=[];used=set();baseline_count=0;additions=0
+    for row in rows:
+        source=copy.deepcopy(row);frame=row['receipt']['frame_sha256'];cards=row['payload']['cards']
+        baseline_count+=len(cards)
+        pending=[];unknown_decisions=[]
+        for i,u in enumerate(row['payload']['unknown']):
+            key=(frame,i)
+            if key not in by_ref:
+                need(u.get('kind')!='HAND_CORNER','HAND_UNKNOWN_DECISION_MISSING')
+                continue
+            d=copy.deepcopy(by_ref[key]);used.add(key)
+            need(d.get('original_unknown')==u,'DECISION_ORIGINAL_UNKNOWN_CHANGED')
+            (pending if d['status']=='ADDITIONAL_MACHINE_CANDIDATE' else unknown_decisions).append(d)
+        counts=Counter(d['card'] for d in pending);baseline={c['card'] for c in cards}
+        accepted=[]
+        for d in pending:
+            if d['card'] in baseline or counts[d['card']]>1:
+                d.update(status='UNKNOWN',reason='DUPLICATE_WITH_IMMUTABLE_BASELINE_OR_CANDIDATE')
+                unknown_decisions.append(d)
+            else:
+                accepted.append(d)
+        additions+=len(accepted)
+        result.append(dict(source_observation_row=source,candidate_additions=accepted,candidate_unknown_decisions=unknown_decisions,
+            canonical_allowed=False,complete_deal=False))
+        need(source==row,'ORIGINAL_ROW_MUTATION')
+    need(used==set(by_ref),'FOREIGN_DECISION_REF')
+    need(type(expected_baseline_cards) is int and baseline_count==expected_baseline_cards,'BASELINE_CARD_COUNT_MISMATCH')
+    value=dict(schema='diana20-component-margin-observation-overlay/v1',candidate_version=VERSION,
+        observations=result,baseline_card_count=baseline_count,additional_machine_candidate_count=additions,
+        baseline_rows_preserved=True,canonical_allowed=False,confirmed_recoveries='UNKNOWN_REQUIRES_INDEPENDENT_ROI_REVIEW')
+    json.dumps(value,allow_nan=False)
+    return value

@@ -1,0 +1,32 @@
+--- a/offline/unified_candidate.py
++++ b/offline/unified_candidate.py
+@@ -12,9 +12,9 @@
+
+
+ VERSION = 'diana20-unified-independent-candidate-r1'
+-MARGIN_SHA = '9e5e5b4a67ed42006a297175b34bb048df8b537a6228152b03b560e9393d96d9'
++MARGIN_SHA = '56b9cb63c99eb5c0a50eae7f4c85b2be34253adf63fb0b55e5e5f060936cffb1'
+ GEOMETRY_SHA = '378aaa02d8f63937665bf924e660747ea306b48ae4e088206bf6cf4e7cfb9d41'
+-MARGIN_VERSION = 'diana20-same-roi-component-margin-candidate-r1'
++MARGIN_VERSION = 'diana20-same-roi-component-margin-candidate-r2-tie-v1'
+ GEOMETRY_VERSION = 'diana20-geometry90-fixed-anchor-prefix27-candidate-r1'
+ SOURCE_SHA = 'e5a600d8d532a4f10adef191a9bfdfbb962854429849cd55821266ad71d6868f'
+ ORIGINAL_SHA = 'd8e58328d8848255ba07a50b610f14f873597a416067e9588c4fd0ef20947c53'
+@@ -33,7 +33,7 @@
+     'FROZEN_FACTOR_DIAGNOSTIC_ABSENT', 'NOT_SOLE_LEGACY_IDENTITY_MARGIN_FAILURE',
+     'ORIGINAL_WHOLE_TOP1_DISAGREEMENT', 'RECORDED_GATE_VALUE_INCONSISTENCY',
+     'FIXED_ROI_PIXEL_BINDING_MISMATCH', 'FIXED_ROI_COMPONENT_GATE_FAILED',
+-    'CREDIBLE_DIFFERENT_IDENTITY_AT_OTHER_REGISTRATION'))
++    'CREDIBLE_DIFFERENT_IDENTITY_AT_OTHER_REGISTRATION', 'FACTOR_IDENTITY_TIE'))
+ GEOMETRY_REASONS = frozenset(('NOT_ORIGINAL_HAND_UNKNOWN', 'NO_NEXT_SAME_ROW_ANCHOR',
+     'NEXT_ANCHOR_GAP_NOT_EXACT27', 'FIXED_PREFIX_QUALITY_OR_IDENTITY_REJECTED'))
+ PIN_KEYS = frozenset(('snapshot_content_sha256', 'baseline_objects_content_sha256', 'unknown_objects_content_sha256',
+@@ -171,6 +171,8 @@
+         return out
+     u = binding['original_unknown']
+     factor = u.get('factor_diagnostic', {})
++    _need(type(factor) is dict and factor.get('identity_status') != 'TIE'
++          and factor.get('best_card') is not None, 'MARGIN_TIE_CANNOT_BE_PROPOSED')
+     gates = factor.get('gates')
+     _need(type(gates) is dict and set(gates) == MARGIN_GATES and all(type(v) is bool for v in gates.values())
+         and {k for k, v in gates.items() if not v} == {'identity_margin'}, 'MARGIN_INHERITED_GATE_VECTOR_CHANGED')

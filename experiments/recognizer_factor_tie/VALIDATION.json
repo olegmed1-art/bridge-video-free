@@ -4,10 +4,12 @@
   "base_main": "a993b69d931f88f84fac0c2dd3d02592f3d2e5ee",
   "release_status": "HOLD_NOT_INSTALLED",
   "public_regressions": {
-    "tests": 12,
-    "generic_rank_suit_subcases": 52,
-    "result": "PASS",
-    "dependencies": "stdlib and git; no pixels"
+    "tests": 27,
+    "local_skipped": 1,
+    "local_result": "PASS_WITH_LOCAL_SCHEMA_ENGINE_UNAVAILABLE",
+    "schema_validation": "REQUIRED_IN_CI_AGAINST_THIS_COMMIT",
+    "dependencies": "stdlib, git, jsonschema==4.23.0 in CI; no pixels",
+    "full_unified_fixture": "PRIVATE_ONLY"
   },
   "private_saved_arrays": {
     "factor_diagnostics": 137,
@@ -33,13 +35,6 @@
     "helper_calls": 520,
     "blocking_findings": []
   },
-  "human_packet_local_only": {
-    "records": 59,
-    "unique_existing_rasters": 58,
-    "missing_baseline_rasters": 12,
-    "human_labels_created": 0,
-    "sha256": "906b62e34177f62e38b09dedaefc3ee1501d54b19236482d826fa524b06e3838"
-  },
   "scope_limits": [
     "Diagnostic source-only; no active main caller",
     "Pinned frozen observer source; main observer API incompatible",
@@ -53,5 +48,94 @@
     "regression": "12 public tests include trailing-whitespace rejection",
     "algorithm_and_postimage_unchanged": true,
     "first_commit": "2cc1af22ad8b72ba02f56383bbb1a08f500aff17"
+  },
+  "consumer_compatibility": {
+    "source_files_audited": 31,
+    "consumer_groups": 14,
+    "source_references": 36,
+    "local_tests": 5,
+    "result": "PASS_SAVED_NUMERICS_AND_OVERLAY_ONLY",
+    "factor_records": 137,
+    "legacy_exports_unchanged": 129,
+    "optional_tie_views": 8,
+    "archived_unknowns_preserved": 227,
+    "saved_overlay_rows": 37,
+    "baseline_cards_preserved": 974,
+    "previous_machine_candidates_retained": 73,
+    "diagnostic_jsonl_rows": 227,
+    "jsonl_roundtrip": true,
+    "parity_failures": 0,
+    "original_global_failure_veto_preserved": true,
+    "new_NCC": 0,
+    "pixel_replay": false,
+    "strict_apply_byte_reverse_patches": 4,
+    "private_unified_reader_tests": 2
+  },
+  "source_bundle": {
+    "revision": "candidate-r3",
+    "archive_bytes": 81989,
+    "archive_sha256": "bbb713503446f2ce294891310386287031f1fc61daf57e2c78727eef6dd6a8f6",
+    "source_manifest_sha256": "a85c419ec6ca58f47b6fdb266d15280d9f471c8e0aefa5b07e345ce14764dc83",
+    "worker_sha256": "cad226f6279788ef0dad96350c78157bfa3104ee37b1cdb04e665f8bacca1b92",
+    "vendor_pins_sha256": "121d40aa883728284471131a0c3d3b637e906638fd4cb059a3cea65a32c3b38b",
+    "payload_files": 24,
+    "vendor_files": 17,
+    "deterministic_repeat_byte_identical": true,
+    "import_closure_status": "PASS_SOURCE_AND_IMPORT_CLOSURE_ONLY",
+    "targeted_proofs": {
+      "BUILDER_INPUT_TESTS_R3.json": {
+        "errors": 0,
+        "failures": 0,
+        "tests": 5
+      },
+      "BUNDLE_INTEGRITY_TESTS_R3.json": {
+        "errors": 0,
+        "failures": 0,
+        "tests": 11
+      },
+      "LAYER_BOUNDARY_GREEN_R3.json": {
+        "errors": 0,
+        "failures": 0,
+        "tests": 3
+      }
+    },
+    "geometry_enabled": false,
+    "runtime_installed": false,
+    "installation_or_activation_allowed": false
+  },
+  "human_packet_library_delivery": {
+    "records": 59,
+    "unique_existing_rasters": 58,
+    "missing_baseline_rasters": 12,
+    "human_labels_created": 0,
+    "sha256": "906b62e34177f62e38b09dedaefc3ee1501d54b19236482d826fa524b06e3838",
+    "delivered": true,
+    "machine_answers_in_blind_archive": false
+  },
+  "consumer_independent_review": {
+    "schema": "factor-compatibility-independent-review-summary/v1",
+    "verdict": "PASS_LIMITED_LOCAL_SOURCE_AND_PACKAGE_REVIEW",
+    "exact_private_review_sha256": "d510b6a6c6c07931f89448dc24813160389535bcef11e960d18ebe60f9cb8da1",
+    "closed_findings": [
+      "CF1",
+      "CF2"
+    ],
+    "targeted_case_observations": 77,
+    "strict_patch_forks": 4,
+    "git_operations": 16,
+    "original_guard_AST_preserved": true,
+    "source_bundle_raw_SHA_and_payload_pins_verified": true,
+    "schema_engine": "NOT_RUN_LOCALLY_REQUIRED_IN_CI",
+    "full_unified_fixture": "PRIVATE_ONLY_NOT_PUBLISHED",
+    "full_unified_reader_tests": "TWO_PRIVATE_TESTS_PASS_PLUS_INDEPENDENT_TARGETED_CHECKER",
+    "public_fixture_and_CI_scope": "Margin and diagnostic fixtures only; narrow unified patch retained",
+    "activation_allowed": false,
+    "geometry_enabled": false,
+    "human_labels": false,
+    "limits": [
+      "No runtime, worker construction, pixel/NCC inference or full launcher qualification",
+      "Independent archive review is distinct from the builder import-only proof",
+      "Actual owner bridge, enrolled caller, pinned sprite and later bounded runtime remain gates"
+    ]
   }
 }
