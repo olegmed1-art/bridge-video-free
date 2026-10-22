@@ -1,0 +1,51 @@
+{
+  "archive_bytes": 81989,
+  "archive_entries": 25,
+  "archive_sha256": "bbb713503446f2ce294891310386287031f1fc61daf57e2c78727eef6dd6a8f6",
+  "deterministic_repeat_byte_identical": true,
+  "factor_identity_fix_enabled": true,
+  "geometry_enabled": false,
+  "human_labels_or_quality_claim": false,
+  "import_closure_status": "PASS_SOURCE_AND_IMPORT_CLOSURE_ONLY",
+  "independent_review": "PASS_LIMITED_LOCAL_SOURCE_AND_PACKAGE_REVIEW",
+  "installation_or_activation_allowed": false,
+  "margin_enabled": true,
+  "overrides_manifest_sha256": "60e8ea002b2de5ad02e33f88ad1dd6ea442d02cb4abebf2f6aeb1a4920ff6b4a",
+  "payload_files": 24,
+  "previous_r1_r2_archives_preserved": true,
+  "release_status": "HOLD",
+  "remaining_gates": [
+    "Separate matching caller and owner bridge integration",
+    "External pinned sprite and authorized bounded runtime validation",
+    "Independent release approval; HOLD remains"
+  ],
+  "revision": "candidate-r3",
+  "runtime_installed": false,
+  "runtime_or_inference_executed": false,
+  "schema": "prepared-source-bundle-build-receipt/v1",
+  "source_manifest_sha256": "a85c419ec6ca58f47b6fdb266d15280d9f471c8e0aefa5b07e345ce14764dc83",
+  "status": "SOURCE_BUNDLE_VERIFIED_LOCAL_HOLD",
+  "targeted_proofs": {
+    "BUILDER_INPUT_TESTS_R3.json": {
+      "errors": 0,
+      "failures": 0,
+      "tests": 5
+    },
+    "BUNDLE_INTEGRITY_TESTS_R3.json": {
+      "errors": 0,
+      "failures": 0,
+      "tests": 11
+    },
+    "LAYER_BOUNDARY_GREEN_R3.json": {
+      "errors": 0,
+      "failures": 0,
+      "tests": 3
+    }
+  },
+  "transport_or_owner_bridge_provided": false,
+  "vendor_files": 17,
+  "vendor_pins_sha256": "121d40aa883728284471131a0c3d3b637e906638fd4cb059a3cea65a32c3b38b",
+  "version": "diana20-margin-factor-tie-source-candidate-20261022-r1",
+  "worker_sha256": "cad226f6279788ef0dad96350c78157bfa3104ee37b1cdb04e665f8bacca1b92",
+  "independent_review_raw_sha256": "d510b6a6c6c07931f89448dc24813160389535bcef11e960d18ebe60f9cb8da1"
+}

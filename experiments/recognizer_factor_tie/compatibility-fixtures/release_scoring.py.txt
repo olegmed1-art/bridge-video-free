@@ -1,0 +1,84 @@
+"""Exact reviewed scoring functions, without experimental replay orchestration."""
+import hashlib
+TOLERANCE=1e-6
+def sha(raw): return hashlib.sha256(raw).hexdigest()
+def need(ok, reason):
+    if not ok: raise ValueError(reason)
+
+def make_banks(sprite,base,factor,reference):
+    import numpy as np
+    cells=reference.decode_card_cells(sprite)
+    templates=[base._bgr_cell(cells[c])[:47,:33].copy() for c in reference.CARDS]
+    whole=base._normalized_bank(templates)
+    instance=factor.GamblerRankSuitCandidate.__new__(factor.GamblerRankSuitCandidate)
+    instance._factor_cache={}
+    ranks,suits=instance._factors(sprite)
+    white=np.stack([(p>=235).all(axis=2) for p in templates])
+    need(all(white.reshape(52,-1).sum(axis=1)>0),'EMPTY_TEMPLATE_WHITE_MASK')
+    return whole,ranks,suits,white
+
+def score_unknown(image,unknown,banks,cards,ranks,suits,ref):
+    """Diagnostic reproduction of frozen arithmetic; never reads labels."""
+    import cv2
+    import numpy as np
+    whole_bank,rank_bank,suit_bank,white=banks
+    x,y=unknown['receipt']['anchor_xy'];regs=[];best=np.full(52,-2.,np.float32)
+    rank_max=np.full(13,-2.,np.float32);suit_max=np.full(4,-2.,np.float32);locations=[None]*52
+    whole_best=np.full(52,-2.,np.float32);whole_locations=[None]*52
+    def vector(patch,box):
+        x0,y0,x1,y1=box;v=patch[y0:y1,x0:x1].astype(np.float32).ravel();v-=v.mean();v/=max(float(cv2.norm(v)),1e-6)
+        return v
+    for dy in range(-3,4):
+        for dx in range(-3,4):
+            xx,yy=x+dx,y+dy
+            need(0<=xx and 0<=yy and xx+33<=1920 and yy+47<=1010,'REGISTRATION_OUTSIDE_FRAME')
+            patch=image[yy:yy+47,xx:xx+33]
+            rs=(rank_bank@vector(patch,(4,4,25,26))).reshape(4,13).max(axis=0)
+            ss=(suit_bank@vector(patch,(3,27,20,45))).reshape(4,13).max(axis=1)
+            rank_max=np.maximum(rank_max,rs);suit_max=np.maximum(suit_max,ss)
+            joint=np.minimum(np.tile(rs,4),np.repeat(ss,13))
+            for i in np.where(joint>best)[0]:best[i]=joint[i];locations[int(i)]=len(regs)
+            raw=patch.astype(np.float32).ravel();raw-=raw.mean();raw/=max(float(cv2.norm(raw)),1e-6)
+            ws=whole_bank@raw
+            for i in np.where(ws>whole_best)[0]:whole_best[i]=ws[i];whole_locations[int(i)]=len(regs)
+            visible=(patch>=220).all(axis=2)
+            retention=(white&visible).reshape(52,-1).sum(axis=1)/white.reshape(52,-1).sum(axis=1)
+            regs.append(dict(offset=[dx,dy],roi_xyxy=[xx,yy,xx+33,yy+47],roi_bgr_sha256=sha(patch.tobytes()),
+                rank_scores=rs.tolist(),suit_scores=ss.tolist(),joint_scores=joint.tolist(),
+                whole_scores=ws.tolist(),white_retention=retention.tolist()))
+    order=np.argsort(-best);winner,runner=int(order[0]),int(order[1]);card=cards[winner];at=regs[locations[winner]]
+    margin=float(best[winner]-best[runner]);ri,si=ranks.index(card[0]),suits.index(card[1])
+    rm=float(rank_max[ri]-max(v for i,v in enumerate(rank_max) if i!=ri))
+    sm=float(suit_max[si]-max(v for i,v in enumerate(suit_max) if i!=si))
+    ws=at['whole_scores'][winner];retention=at['white_retention'][winner];old=unknown['receipt']
+    gates=dict(score=float(best[winner])>=.78,identity_margin=margin>=.08,rank_margin=rm>=.08,suit_margin=sm>=.08,
+        whole_corner_score=ws>=.78,white_retention=retention>=.85,whole_corner_top1_agreement=card==old['best_card'])
+    rebuilt=dict(best_card=card,joint_score=float(best[winner]),identity_margin=margin,rank_margin=rm,suit_margin=sm,
+        whole_corner_score=ws,white_retention=retention,gates=gates,roi_xyxy=at['roi_xyxy'],roi_bgr_sha256=at['roi_bgr_sha256'])
+    # Whole observer sorts equal maxima by card identity, unlike numpy argsort.
+    wo=sorted(range(52),key=lambda i:(-float(whole_best[i]),cards[i]));wi,wj=wo[:2];wat=regs[whole_locations[wi]]
+    original_rebuilt=dict(best_card=cards[wi],best_score=float(whole_best[wi]),
+        margin=float(whole_best[wi])-float(whole_best[wj]),roi_xyxy=wat['roi_xyxy'],roi_bgr_sha256=wat['roi_bgr_sha256'],
+        white_retention=wat['white_retention'][wi])
+    original_rebuilt['gates']=dict(score=original_rebuilt['best_score']>=.78,
+        identity_margin=original_rebuilt['margin']>=.08,white_retention=original_rebuilt['white_retention']>=.85)
+    original_rebuilt['reason']=('CORNER_OCCLUDED' if not original_rebuilt['gates']['white_retention'] else
+        'CARD_UNCERTAIN' if not all(original_rebuilt['gates'].values()) else 'BASE_WOULD_HAVE_ACCEPTED')
+    checks={};deltas={}
+    checks['whole_reason_and_quality_gates']=original_rebuilt['reason']==unknown['reason']
+    for k in ('best_card','roi_xyxy','roi_bgr_sha256'):checks['whole_'+k]=original_rebuilt[k]==old[k]
+    for k in ('best_score','margin'):
+        delta=abs(original_rebuilt[k]-old[k]);deltas['whole_'+k]=delta;checks['whole_'+k]=delta<=TOLERANCE
+    eligible=(unknown['reason'] in ('CARD_UNCERTAIN','CORNER_OCCLUDED') and old['best_score']>=.78)
+    stored=unknown.get('factor_diagnostic')
+    checks['factor_presence_matches_eligibility']=(stored is not None)==eligible
+    if stored is not None:
+        for k in ('best_card','gates','roi_xyxy','roi_bgr_sha256'):checks['factor_'+k]=rebuilt[k]==stored[k]
+        for k in ('joint_score','identity_margin','rank_margin','suit_margin','whole_corner_score','white_retention'):
+            delta=abs(rebuilt[k]-stored[k]);deltas['factor_'+k]=delta;checks['factor_'+k]=delta<=TOLERANCE
+    return dict(schema='diana20-saved-roi-registration-diagnostic/v1',observation_ref=ref,original_unknown=unknown,
+        legacy_parity=dict(status='PASS' if all(checks.values()) else 'FAIL',checks=checks,absolute_deltas=deltas,tolerance=TOLERANCE),
+        original_whole_recomputed=original_rebuilt,legacy_factor_recomputed=rebuilt,
+        per_identity_max_joint_scores=best.tolist(),per_identity_winning_registration_indices=locations,
+        per_identity_max_whole_scores=whole_best.tolist(),per_identity_whole_winning_registration_indices=whole_locations,
+        global_rank_max=rank_max.tolist(),global_suit_max=suit_max.tolist(),registrations=regs)

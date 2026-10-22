@@ -1,0 +1,31 @@
+{
+  "schema": "factor-consumer-fork-pins/v1",
+  "source_only": true,
+  "activation_allowed": false,
+  "files": [
+    {
+      "name": "release_scoring.py",
+      "source_sha256": "16fa38973e7cc97685185bd1ad40b8db6e9b9a99502a704b50739eb22456c3b2",
+      "fixed_sha256": "f777944b0c59549f1ca6b6ea6d864f750dd19e37223cd9b84f6ac696b5f3a25b",
+      "patch_sha256": "3994310f82a1cf7deb4951af2eae6f858af9e744f953f9d414c8b7bafeb8406b"
+    },
+    {
+      "name": "component_margin_candidate.py",
+      "source_sha256": "9e5e5b4a67ed42006a297175b34bb048df8b537a6228152b03b560e9393d96d9",
+      "fixed_sha256": "56b9cb63c99eb5c0a50eae7f4c85b2be34253adf63fb0b55e5e5f060936cffb1",
+      "patch_sha256": "a7492ffe8a7f436ad2b3ac331653f05fe5a9d7defc23b51c2598ca5e35cd06d6"
+    },
+    {
+      "name": "diagnose_saved37.py",
+      "source_sha256": "51d9cd5016cb437f4a14a3801aee9318358602903177d16b35ee19409ef0f494",
+      "fixed_sha256": "90ea5f0046d2e1a0e496b590d70ac1018a4d145eb071fbbd22ea3f186a0f63b5",
+      "patch_sha256": "34f879caa9db0fb3bcc25036b6fba9b75470612f60e295973eb05165ee60fb90"
+    },
+    {
+      "name": "unified_candidate.py",
+      "source_sha256": "9cfd28a6478577209d4abd80c0495c730473672e5772309874a94292e6faf0cf",
+      "fixed_sha256": "c62912d529a1bcdf0a85780f7fb39504699a05d68d21aa1c140f4d18b77345e3",
+      "patch_sha256": "56be4a3640364f8e074c7c55d02872b7b956a9d98e452550f454f26fd3b26b96"
+    }
+  ]
+}
