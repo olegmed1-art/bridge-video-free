@@ -24,7 +24,7 @@ from urllib.parse import urlencode, parse_qsl
 
 REPO = Path(__file__).resolve().parents[1]
 HEAD = REVISION = TREE = IMAGE = None
-ALGORITHM_SOURCE_HEAD = '09a8aad83a7600958c48360cc14ce1e6f618d3f3'
+ALGORITHM_SOURCE_HEAD = 'c16ce47b2b653909ef6fbb5d8d17848ae7a2da28'
 PROFILE = 'SCHOOL_L1_DB_V1'
 TOKEN = 'github-actions-smoke-token'  # Existing CI's synthetic local-only value.
 FINGERPRINT = '143d7387734a721ebedd6cab78af21278f7b250d963ee2c82562e50dc3bbfd33'
@@ -48,10 +48,10 @@ EXPECTED_SOURCE_PINS = {
     "bridge_school_api/knowledge.py": "52b4c6c57b2fcf7005401858e4a6d369409e2cc49335ac9523a294d4e5bf222d",
     "bridge_school_api/db.py": "1c391cd0bfde393994db6b3b2f71af7843f5ed48b79e5476eced02113338234a",
     "bridge_school_api/l1_canonical_registry.py": "4f724aa0b4c350b1ed36b77c5d39da5a217c9b17e7369a29201a3fe4fa61679b",
-    "bridge_school_api/l1_canonical_runtime.py": "324b711d1beb1efa927a72ac1f9f15c0831072876c3f642e91bc972ea635202a",
+    "bridge_school_api/l1_canonical_runtime.py": "fb2a6b5e9f98525edda370edd33bb14c0ae1f0b6650e7e2110023eb8016e2a25",
     "bridge_school_api/l1_canonical_runtime_v2.py": "9b4bc446e1bed8bc578cbfcc16200915a4c1d2127734f345e06b32b7e10c2001",
-    "bridge_school_api/l1_canonical_runtime_v3.py": "c81df99b8e6a24f96e13824bb2e819db94f895379b9918183973f19d3d6e2aeb",
-    "bridge_school_api/l1_canonical_runtime_v4.py": "56b7d3dd05ef783c239d659dabd9f4e51824558066ffe8112cc490f0d5cf55d6",
+    "bridge_school_api/l1_canonical_runtime_v3.py": "ea9e2d80de9c5187827e918a5e91d2441da70cf4042f91f42afeea673e11d443",
+    "bridge_school_api/l1_canonical_runtime_v4.py": "cff18e792d934f5a1a2442c2450c78adce6fb92dd1e79916330840e37a33eee5",
     "tools/l1_ci_smoke_scope.py": "21f18e5b6f7022cd641e956774b072e38eb1632ccf976b8e9f9ce0eda53e8123",
     "tools/api_smoke_session.py": "fbea18f32fe041ba7b925b518d772513a71056daf0885f6d162a01da298858a4",
     "bridge_school_api/incident_db_probe.py": "d229f0441b206a9496d94fa20b378856524ce4019032d8bbc4672e2c9c5b6ab5",
