@@ -141,6 +141,27 @@ jobs:
           -v "$PWD/tests/test_api_runtime_bundle.py:/tmp/test_api_runtime_bundle.py:ro"
           bridge-school-api:ci python -I -B /tmp/test_api_runtime_bundle.py --smoke /app
 
+      - name: Verify L1 source API without database or network
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 2
+        shell: bash
+        env:
+          CI_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          image="$(docker image inspect bridge-school-api:ci --format '{{.Id}}')"
+          container="l1-api-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          timeout --kill-after=5s 50s docker run --rm --name "$container" \
+            --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user 65532:65532 --cpus=1 --memory=512m --pids-limit=64 \
+            --mount "type=bind,source=$PWD,target=/source,readonly" --workdir /source \
+            -e BRIDGE_API_TOKEN=github-actions-smoke-token \
+            "$image" python -I -B /source/tests/test_l1_api_smoke.py --smoke /source \
+            --head "$CI_PR_HEAD" --revision "$revision" --tree "$tree" --image "$image"
+
   production-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.api-static.result == 'success' && needs.api-static.outputs.production_smoke_scope_status == 'run' && needs.api-static.outputs.allow_production_smoke == 'true'
     needs: api-static
