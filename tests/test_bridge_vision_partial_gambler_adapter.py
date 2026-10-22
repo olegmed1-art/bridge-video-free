@@ -60,6 +60,23 @@ def _run(samples: list[dict], tmp_path: Path, observer):
     )
 
 
+def test_unknown_factor_components_reach_temporal_history_without_promotion(tmp_path, monkeypatch):
+    _bind_synthetic_sprite(monkeypatch, tmp_path)
+    diagnostic = {"best_card": "KS", "rank_margin": .7, "suit_margin": .001,
+                  "roi_xyxy": [10, 20, 30, 40], "roi_bgr_sha256": "b" * 64}
+    unknown = {"index": 0, "reason": "CARD_UNCERTAIN", "factor_diagnostic": diagnostic,
+               "receipt": {"anchor_xy": [10, 20]}}
+    def observer(path, sprite):
+        return {"table_region": {"x": 0, "y": 0, "w": 100, "h": 100},
+                "cards": [], "unknown": [unknown]}
+    result = _run(_samples(tmp_path), tmp_path, observer)
+    history = result["recovery"]["history"][0]
+    assert history["frame"]["rejected_observations"][0] == unknown
+    assert history["component_observations"][0]["raw_factor_diagnostic"] == diagnostic
+    assert len(history["component_observations"][0]["rank"]["domain"]) == 13
+    assert result["recovery"]["status"] == "CLOSED_UNKNOWN"
+
+
 def test_shadow_sprite_loader_preserves_png_bytes_on_windows(tmp_path: Path):
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")

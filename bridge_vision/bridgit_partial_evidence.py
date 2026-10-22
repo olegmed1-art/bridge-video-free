@@ -15,9 +15,13 @@ from typing import Any, Callable, Mapping, Sequence
 
 from bridge_contracts.video_deal import FULL_DECK, SEATS, canonicalize_video_deal
 from bridge_vision.bridgit_adjacent_candidate_profile import PROFILE
+from bridge_vision.temporal_deal_recovery import (
+    MAX_EVENTS, ReviewedRecoveryEvidence, accumulate_recovery_frames,
+)
 
 PARTIAL_EVIDENCE_VERSION = "bridgit-partial-evidence-v1"
 _SHA = re.compile(r"^[0-9a-f]{64}$")
+MAX_FRAME_BYTES = 64 * 1024 * 1024
 
 
 class PartialEvidenceError(ValueError):
@@ -155,9 +159,15 @@ def _track_output(frames: list[Mapping[str, Any]], contract: SamplingContract) -
 
 def accumulate_partial_frames(
     frames: Sequence[Mapping[str, Any]], *, contract: SamplingContract,
+    recovery_evidence: ReviewedRecoveryEvidence | None = None,
 ) -> dict[str, Any]:
     """Group adjacent scoped observations; retain uncertainty without guessing."""
     contract.validate()
+    if not isinstance(frames, (list, tuple)) or len(frames) > MAX_EVENTS:
+        raise PartialEvidenceError("FRAME_LIMIT_OR_TYPE_INVALID")
+    # Keep historical review-only tracks, with recovery in a separate envelope.
+    # The independent gate must never consume legacy merged hands as facts.
+    recovery = accumulate_recovery_frames(frames, evidence=recovery_evidence)
     tracks: list[list[Mapping[str, Any]]] = []
     identities: list[tuple[Any, ...]] = []
     seen_hashes: set[str] = set()
@@ -166,6 +176,8 @@ def accumulate_partial_frames(
             raise PartialEvidenceError("FRAME_INVALID")
         identity = _frame_identity(frame)
         if frame["frame_sha256"] in seen_hashes:
+            if recovery_evidence is not None:
+                continue  # Recovery retains events and detects payload conflicts.
             raise PartialEvidenceError("FRAME_HASH_REPLAY")
         seen_hashes.add(frame["frame_sha256"])
         if tracks:
@@ -187,6 +199,7 @@ def accumulate_partial_frames(
         "version": PARTIAL_EVIDENCE_VERSION,
         "sampling_profile_version": contract.profile_version,
         "tracks": outputs,
+        "recovery": recovery,
         "canonical_promotion_allowed": False,
         "real_video_accuracy_evaluated": False,
     }
@@ -196,6 +209,7 @@ def accumulate_detected_frames(
     samples: Sequence[Mapping[str, Any]], *,
     detector: Callable[[Path], Mapping[str, Any]],
     contract: SamplingContract,
+    recovery_evidence: ReviewedRecoveryEvidence | None = None,
 ) -> dict[str, Any]:
     """Bind local frame bytes to a card detector, then accumulate shadow evidence.
 
@@ -205,6 +219,8 @@ def accumulate_detected_frames(
     point performs no activation or reference verification on its behalf.
     """
     contract.validate()
+    if not isinstance(samples, (list, tuple)) or len(samples) > MAX_EVENTS:
+        raise PartialEvidenceError("FRAME_LIMIT_OR_TYPE_INVALID")
     records: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="bridgit-partial-snapshot-") as directory:
         for index, sample in enumerate(samples):
@@ -213,7 +229,10 @@ def accumulate_detected_frames(
             path = sample.get("frame_path")
             if not isinstance(path, Path) or not path.is_file():
                 raise PartialEvidenceError("FRAME_FILE_UNAVAILABLE")
-            raw = path.read_bytes()
+            with path.open("rb") as stream:
+                raw = stream.read(MAX_FRAME_BYTES + 1)
+            if not raw or len(raw) > MAX_FRAME_BYTES:
+                raise PartialEvidenceError("FRAME_BYTE_LIMIT")
             raw_hash = hashlib.sha256(raw).hexdigest()
             if raw_hash != sample.get("frame_sha256"):
                 raise PartialEvidenceError("FRAME_HASH_MISMATCH")
@@ -230,7 +249,7 @@ def accumulate_detected_frames(
             if not isinstance(evidence, Mapping) or not isinstance(evidence.get("accepted"), list):
                 raise PartialEvidenceError("DETECTOR_EVIDENCE_INVALID")
             observations = [
-                {"status": "ACCEPTED_VISUAL", "source": "VISUAL", "seat": item.get("seat"),
+                {**item, "status": "ACCEPTED_VISUAL", "source": "VISUAL", "seat": item.get("seat"),
                  "card": item.get("card"), "confidence": item.get("confidence")}
                 for item in evidence["accepted"] if isinstance(item, Mapping)
             ]
@@ -239,8 +258,10 @@ def accumulate_detected_frames(
             record["recognizer_version"] = evidence.get("detector_version")
             record["observations"] = observations
             record["rejected_observations"] = evidence.get("rejected") or []
+            record["detector_conflicts"] = evidence.get("conflicts") or []
+            record["pixel_observer_version"] = evidence.get("pixel_observer_version")
             records.append(record)
-    return accumulate_partial_frames(records, contract=contract)
+    return accumulate_partial_frames(records, contract=contract, recovery_evidence=recovery_evidence)
 
 
 __all__ = ["PARTIAL_EVIDENCE_VERSION", "PartialEvidenceError", "SamplingContract",

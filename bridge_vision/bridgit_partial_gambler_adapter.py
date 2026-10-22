@@ -26,6 +26,7 @@ from bridge_vision.gambler_classic_reference import (
 )
 from bridge_vision.gambler_reference_authority import authority_provenance
 from bridge_vision.native_cards import NativeFourSeatCardDetector
+from bridge_vision.temporal_deal_recovery import MAX_EVENTS, ReviewedRecoveryEvidence
 
 PARTIAL_GAMBLER_ADAPTER_VERSION = "bridgit-partial-gambler-shadow-v1"
 PixelObserver = Callable[[Path, GamblerClassicSprite], Mapping[str, Any]]
@@ -71,6 +72,7 @@ def accumulate_gambler_partial_frames(
     samples: Sequence[Mapping[str, Any]], *, asset_root: Path,
     verified_card_width_px: float, verified_card_height_px: float,
     pixel_observer: PixelObserver, contract: SamplingContract,
+    recovery_evidence: ReviewedRecoveryEvidence | None = None,
 ) -> dict[str, Any]:
     """Accept raw card boxes from an explicitly supplied partial pixel observer.
 
@@ -80,6 +82,8 @@ def accumulate_gambler_partial_frames(
     coordinate system. The result remains review-only.
     """
     contract.validate()
+    if not isinstance(samples, (list, tuple)) or len(samples) > MAX_EVENTS:
+        raise PartialEvidenceError("FRAME_LIMIT_OR_TYPE_INVALID")
     try:
         variant, path, expected_sha = resolve_original_gambler_asset(
             Path(asset_root), verified_card_width_px=verified_card_width_px,
@@ -104,7 +108,7 @@ def accumulate_gambler_partial_frames(
         _frame_identity(bound)
         bound_samples.append(bound)
     by_path = {Path(sample["frame_path"]).resolve(): sample for sample in bound_samples}
-    if len(by_path) != len(bound_samples):
+    if len(by_path) != len(bound_samples) and recovery_evidence is None:
         raise PartialEvidenceError("FRAME_PATH_REUSED")
     receipts: list[dict[str, Any]] = []
 
@@ -152,11 +156,12 @@ def accumulate_gambler_partial_frames(
             raise PartialEvidenceError("PIXEL_OBSERVER_UNKNOWN_INVALID")
         native = NativeFourSeatCardDetector(
             lambda _: payload, min_card_confidence=contract.minimum_card_confidence,
+            retain_conflicts=recovery_evidence is not None,
         )(path)
-        native["evidence"]["rejected"].extend(
-            {key: item[key] for key in ("index", "reason", "seat", "best_score", "margin")
-             if key in item} for item in unknown
-        )
+        native["evidence"]["pixel_observer_version"] = payload.get("version")
+        # Preserve the existing factor/ROI diagnostics even when full identity
+        # failed. A margin or component top-1 remains soft evidence.
+        native["evidence"]["rejected"].extend(dict(item) for item in unknown)
         receipts.append({
             "frame_sha256": sample["frame_sha256"],
             "source_video_sha256": sample["source_video_sha256"],
@@ -172,7 +177,8 @@ def accumulate_gambler_partial_frames(
         return native
 
     detector = detect
-    result = accumulate_detected_frames(bound_samples, detector=detector, contract=contract)
+    result = accumulate_detected_frames(bound_samples, detector=detector, contract=contract,
+                                        recovery_evidence=recovery_evidence)
     result["reference_provenance"] = {
         **authority_provenance(variant),
         "reference_profile_id": reference_id,

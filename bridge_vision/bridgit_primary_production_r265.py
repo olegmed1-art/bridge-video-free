@@ -9,6 +9,9 @@ mutated by this module.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
+from pathlib import Path
 from collections.abc import Mapping
 from typing import Any, Callable
 
@@ -18,6 +21,7 @@ from bridge_vision.teacher_card_reconstruction_r265 import (
     extract_teacher_card_declarations,
     reconstruct_deal,
 )
+from bridge_vision.temporal_deal_recovery import ReviewedRecoveryBatch, ReviewedRecoveryEvidence, accumulate_recovery_frames
 
 _STATE: dict[str, Any] = {
     "transcript": [],
@@ -67,9 +71,12 @@ def _deal_timestamps() -> dict[str, float]:
     }
 
 
-def install(base, token_func: Callable[[], str]) -> None:
+def install(base, token_func: Callable[[], str], *, recovery_provider=None) -> None:
     base_id = id(base)
-    if base_id in _INSTALLED_BASE_IDS:
+    installed = getattr(base, "_r265_recovery_install", None)
+    if installed is not None:
+        if installed[0] is not recovery_provider:
+            raise ValueError("R265_RECOVERY_PROVIDER_RECONFIGURATION_REQUIRES_FRESH_BASE")
         return
 
     original_obtain = base.obtain_transcript
@@ -77,17 +84,32 @@ def install(base, token_func: Callable[[], str]) -> None:
     original_master = base.master_analysis_payload
     if ASR_CARD_PROMPT not in base.PROMPT:
         base.PROMPT += ASR_CARD_PROMPT
+    run_context = {"source_video_sha256": None, "extraction": {}}
 
     def obtain_transcript(t, parent, name, video, work, dur, job):
+        run_context.update(source_video_sha256=None, extraction={})
+        if recovery_provider is not None and isinstance(video, (str, Path)):
+            try:
+                path = Path(video)
+                before = path.stat()
+                if 0 < before.st_size <= 16 * 1024 ** 3:
+                    with path.open("rb") as stream:
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    after = path.stat()
+                    if (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns):
+                        run_context["source_video_sha256"] = digest
+            except OSError:
+                pass
         segments, info, warnings = original_obtain(t, parent, name, video, work, dur, job)
         extraction = extract_teacher_card_declarations(segments)
         _STATE["transcript"] = [dict(segment) for segment in segments]
         _STATE["extraction"] = extraction
+        run_context["extraction"] = extraction
         return segments, info, warnings
 
     def derive(episodes, job):
         deals, decisions = original_derive(episodes, job)
-        declarations = (_STATE.get("extraction") or {}).get("declarations") or []
+        declarations = run_context["extraction"].get("declarations") or []
         timestamps = _deal_timestamps()
         try:
             speech_window = float(
@@ -113,22 +135,55 @@ def install(base, token_func: Callable[[], str]) -> None:
                 deal_timestamp_seconds=deal_timestamp,
                 speech_window_seconds=speech_window,
             )
+            # A provider is a caller-owned trusted dependency, never request JSON
+            # or an environment flag. No source/seat/boundary proof is invented
+            # from the first screenshot timestamp or the +/-120 second window.
+            temporal = {"status": "CLOSED_UNKNOWN", "reason": "REVIEWED_RECOVERY_PROVIDER_UNAVAILABLE", "scopes": []}
+            if recovery_provider is not None and run_context["source_video_sha256"]:
+                target = {"source_video_sha256": run_context["source_video_sha256"], "deal": deal, "job": job,
+                          "shots": [shot for shot in previous._STATE.get("shots", [])
+                                    if str(shot.get("evidence_id")) in evidence_ids]}
+                target_sha = hashlib.sha256(json.dumps(target, sort_keys=True, allow_nan=False,
+                                                      separators=(",", ":")).encode()).hexdigest()
+                batch = recovery_provider(deal, run_context["extraction"], {"target_sha256": target_sha,
+                                          "source_video_sha256": run_context["source_video_sha256"]})
+                if (not isinstance(batch, ReviewedRecoveryBatch) or not evidence_ids
+                        or not isinstance(batch.evidence, ReviewedRecoveryEvidence)
+                        or not isinstance(batch.deal_evidence_ids, (list, tuple))
+                        or not all(isinstance(v, str) and v for v in batch.deal_evidence_ids)
+                        or batch.target_sha256 != target_sha
+                        or tuple(sorted(batch.deal_evidence_ids)) != tuple(sorted(evidence_ids))
+                        or batch.evidence.provenance()["source_video_sha256"] != run_context["source_video_sha256"]):
+                    temporal = {"status": "CLOSED_UNKNOWN", "reason": "RECOVERY_TARGET_BINDING_MISMATCH", "scopes": []}
+                else:
+                    temporal = accumulate_recovery_frames(batch.frames, evidence=batch.evidence)
+                    for scope in temporal["scopes"]:
+                        receipts = scope.get("review_receipts", {})
+                        if (not receipts or any(p.get("output_deal_sha256") != target_sha
+                                or not isinstance(p.get("output_deal_binding_ref"), str)
+                                or not p["output_deal_binding_ref"].strip() for p in receipts.values())):
+                            temporal = {"status": "CLOSED_UNKNOWN", "reason": "OUTPUT_DEAL_REVIEW_BINDING_MISSING", "scopes": []}
+                            break
+            deal["temporal_recovery"] = temporal
+            verified = None
+            if temporal["status"] == "SCOPED_OBSERVATIONS" and len(temporal["scopes"]) == 1:
+                verified = temporal["scopes"][0].get("recovery")
+                if verified and any(verified["domains"].get(c) != [seat]
+                                    for seat, cards in _visual_hands(deal).items() for c in cards):
+                    temporal["status"] = "CONFLICT"
+                    temporal["reason"] = "CURRENT_VISUAL_HANDS_CONFLICT_WITH_RECOVERY"
+                    verified = None
+            deal["verified_recovery"] = verified
             counts["deal_count"] += 1
             deal["reconstruction"] = reconstruction
             deal["recognizer"]["asr_text_reconstruction_enabled"] = True
             deal["recognizer"]["visual_cards_checked_against_speech"] = False
             deal["recognizer"]["teacher_card_speech_window_seconds"] = speech_window
-            if reconstruction["status"] == "RECONSTRUCTED_FULL":
-                deal.setdefault("visual_hands", deal.get("hands"))
-                deal["hands"] = reconstruction["hands_by_suit"]
-                deal["canonical_deal"] = reconstruction["deal"]
-                deal["status"] = "EVIDENCE_FUSED_RECONSTRUCTED_FULL"
-                deal["reconstruction_rule"] = (
-                    "VISUAL_FIRST; TEACHER_SPEECH_FOR_UNKNOWN_ONLY; "
-                    "DECK_COMPLEMENT_AFTER_THREE_COMPLETE_HANDS"
-                )
+            if verified is not None and verified["status"] == "VERIFIED_FULL":
+                # Export consumers must use verified_recovery, preserving its
+                # domains and provenance. Legacy hands/canonical_deal stay raw.
                 counts["full_count"] += 1
-            elif reconstruction["status"] == "UNRESOLVED_CONFLICT":
+            elif temporal["status"] == "CONFLICT" or reconstruction["status"] == "UNRESOLVED_CONFLICT":
                 counts["conflict_count"] += 1
             else:
                 counts["partial_count"] += 1
@@ -161,6 +216,7 @@ def install(base, token_func: Callable[[], str]) -> None:
     base.derive_deals_decisions = derive
     base.master_analysis_payload = master_payload
     _INSTALLED_BASE_IDS.add(base_id)
+    base._r265_recovery_install = (recovery_provider,)
 
 
 __all__ = ["ASR_CARD_PROMPT", "install"]

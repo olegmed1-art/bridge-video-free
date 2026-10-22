@@ -11,6 +11,25 @@ on:
       - 'bridge_vision/bridgit_partial_gambler_adapter.py'
       - 'bridge_vision/bridgit_partial_pixel_observer.py'
       - 'bridge_vision/gambler_classic_reference.py'
+      - 'bridge_vision/original_deal_solver.py'
+      - 'bridge_vision/temporal_deal_recovery.py'
+      - 'bridge_vision/bridgit_rank_order_evidence.py'
+      - 'bridge_vision/bridgit_component_evidence.py'
+      - 'bridge_vision/temporal_recovery_export.py'
+      - 'bridge_vision/runtime_recovery_evidence.py'
+      - 'video_adapters/**'
+      - 'tests/test_diana20_runtime_semantics.py'
+      - 'tools/diana20_recovery_replay.py'
+      - 'tests/test_diana20_runtime_recovery.py'
+      - 'bridge_vision/native_cards.py'
+      - 'bridge_vision/teacher_card_reconstruction_r265.py'
+      - 'bridge_vision/bridgit_primary_production_r265.py'
+      - 'bridge_runtime_hardening_r26_5.py'
+      - 'run_drive_3_1_free_r265.py'
+      - 'tests/test_original_deal_recovery.py'
+      - 'tests/test_temporal_deal_recovery.py'
+      - 'tests/test_r265_speech_binding.py'
+      - 'tests/test_r265_asr_reconstruction.py'
       - 'tests/test_bridge_vision_bridgit_board_number_shadow.py'
       - 'tests/test_bridge_vision_holdout_manifest.py'
       - 'tests/test_bridge_vision_partial_evidence.py'
@@ -55,3 +74,9 @@ jobs:
           tests/test_bridge_vision_partial_gambler_adapter.py
           tests/test_bridge_vision_partial_pixel_observer.py
           tests/test_bridge_vision_gambler_classic_reference.py
+          tests/test_original_deal_recovery.py
+          tests/test_temporal_deal_recovery.py
+          tests/test_r265_speech_binding.py
+          tests/test_r265_asr_reconstruction.py
+          tests/test_diana20_runtime_recovery.py
+          tests/test_diana20_runtime_semantics.py
