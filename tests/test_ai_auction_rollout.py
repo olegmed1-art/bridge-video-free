@@ -69,6 +69,7 @@ def test_rollout_completes_each_world_without_claiming_dds_evidence():
         ben_bidder=bidder,
     )
     assert result["complete"] is True
+    assert result["dealer"] == "N"
     assert result["evidence_class"] == "BEN_AUCTION_ROLLOUT"
     assert result["vulnerability"] == "NONE"
     assert result["dds_evaluated"] is False
@@ -77,6 +78,20 @@ def test_rollout_completes_each_world_without_claiming_dds_evidence():
     assert len(result["worlds"][0]["world_fingerprint"]) == 64
     assert len(result["worlds"][0]["deal_pbn_sha256"]) == 64
     assert len(result["worlds"][0]["ben_request_sha256s"]) == 3
+
+
+@pytest.mark.parametrize("vulnerability", [None, False, 0, 0.0, [], {}])
+def test_rollout_rejects_unknown_vulnerability_before_ben(vulnerability):
+    calls = []
+    world = {"hands": {
+        "N": "AKQJT98765432...", "E": ".AKQJT98765432..",
+        "S": "..AKQJT98765432.", "W": "...AKQJT98765432",
+    }}
+    with pytest.raises(AuctionRolloutError, match="vulnerability"):
+        rollout_worlds(worlds=[world], dealer="N", auction=[], decision_seat="N",
+                       candidate_call="1C", vulnerability=vulnerability,
+                       ben_bidder=lambda request: calls.append(request) or _ben_response(request, "PASS"))
+    assert calls == []
 
 
 def test_rollout_rejects_wrong_turn_bad_ben_contract_and_call_overrun():
