@@ -382,3 +382,123 @@ def test_saved_frames_preserve_v5_cards_unknowns_and_margin(bundle, assets, tmp_
                 assert after.get(key) == before.get(key), key
             for key in ('effective_cards', 'effective_unknown', 'decisions'):
                 assert after['recognizer_update'][key] == before['recognizer_update'][key], key
+
+
+@pytest.mark.parametrize("status", ["UNKNOWN", "TIE"])
+@pytest.mark.parametrize("change", ["drop", "reason", "order", "append"])
+def test_abstention_unknown_history_is_immutable(status, change):
+    result = response_fixture()
+    scale = result["card_scale"]
+    scale.update(selection_status=status, status=status)
+    result["recognizer_update"]["runtime"]["card_scale"] = copy.deepcopy(scale)
+    result["unknown"] = [
+        {"kind": "CARD_SCALE", "reason": "SYNTHETIC_" + status, "card": None, "seat": None},
+        {"kind": "CARD_SCALE", "reason": "SYNTHETIC_BOUNDARY_DIAGNOSTIC", "card": None, "seat": None},
+    ]
+    update = result["recognizer_update"]
+    update["effective_unknown"] = copy.deepcopy(result["unknown"])
+    pins = {v: (pinned_sprite_sha256(v), w, h) for v, (w, h) in VARIANT_CARD_SIZE.items()}
+    assert validate_native_scale_response(result, pins)
+    if change == "drop":
+        update["effective_unknown"] = []
+    elif change == "reason":
+        update["effective_unknown"][0]["reason"] = "REPLACED"
+    elif change == "order":
+        update["effective_unknown"].reverse()
+    else:
+        update["effective_unknown"].append({"reason": "INVENTED"})
+    assert not validate_native_scale_response(result, pins)
+
+
+@pytest.fixture
+def synthetic_caller_inputs(tmp_path, monkeypatch):
+    """Minimal pinned byte fixtures; generated callers are compiled, never run."""
+    from scripts import build_diana20_scale_bundle as builder
+    from tools import diana20_gambler_scale
+
+    caller, bundle = tmp_path / "caller", tmp_path / "bundle"
+    source = (
+        "COMPONENT_SHA256 = 'SYNTHETIC'\n"
+        "class RecognizerError(RuntimeError):\n    pass\n"
+        "def command(c):\n    return ['worker',\n"
+        '            "--sprite", c["sprite"]]\n'
+        "def validate_response(runtime, contract):\n    if (False\n"
+        '            or runtime.get("factor_identity_fix_enabled") is not False):\n        pass\n'
+        "    # Keep baseline cards, UNKNOWN history and every observation field intact.\n"
+    ).encode()
+    prepared = (
+        "def command(c):\n    return ['worker',\n"
+        '            "--sprite", c["sprite"]]\n'
+        'def validate_abi(abi):\n    return len(abi["argv"]) == 15\n'
+    ).encode()
+    contract = dict(entry="/synthetic/ACTIVE_RECOGNIZER.py", runtime=dict(geometry_enabled=False),
+                    files=[dict(path="/synthetic/ACTIVE_RECOGNIZER.py", sha256="e" * 64)])
+    for name, raw, pin_name in (
+        ("universal_video/diana20_recognizer.py", source, "CALLER_SHA"),
+        ("universal_video/diana20_prepared_frames.py", prepared, "PREPARED_SHA"),
+        ("ops/diana20-recognizer-component.json", json.dumps(contract).encode(), "COMPONENT_SHA"),
+    ):
+        path = caller / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        monkeypatch.setattr(builder, pin_name, sha(raw))
+    entries = []
+    for name in ("geometry/diana20_geometry_worker.py", "geometry/CARD_WORKER_PINS.json"):
+        path = bundle / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = b"# SYNTHETIC_NOT_EXECUTED\n" if name.endswith(".py") else b"{}\n"
+        path.write_bytes(raw)
+        entries.append(dict(path=name, sha256=sha(raw), bytes=len(raw)))
+    monkeypatch.setattr(diana20_gambler_scale, "NativeScaleSelector",
+                        lambda **kwargs: SimpleNamespace(sprites=inventory()))
+    manifest = dict(schema="diana20-pixel-scale-source-bundle/v1",
+                    base="installed-margin", version=builder.VERSION + "-installed-margin",
+                    factor_identity_fix_enabled=False, files=entries)
+    return SimpleNamespace(caller=caller, bundle=bundle, assets=tmp_path / "synthetic-assets",
+                           output=tmp_path / "proposal", manifest=manifest)
+
+
+def write_caller_manifest(inputs):
+    (inputs.bundle / "CODE_BUNDLE.json").write_text(json.dumps(inputs.manifest), encoding="utf-8")
+
+
+@pytest.mark.parametrize("base", ["installed-margin", "tie-candidate"])
+def test_prepare_caller_supported_versions_stay_under_code_bundles(synthetic_caller_inputs, base):
+    from scripts import build_diana20_scale_bundle as builder
+    inputs = synthetic_caller_inputs
+    inputs.manifest.update(base=base, version=builder.VERSION + "-" + base,
+                           factor_identity_fix_enabled=base == "tie-candidate")
+    write_caller_manifest(inputs)
+    receipt = prepare_caller(inputs.caller, inputs.bundle, inputs.assets, inputs.output)
+    target = "/opt/bridge-school/universal-video/code-bundles/" + inputs.manifest["version"]
+    pointer = json.loads((inputs.output / "CURRENT_RECOGNIZER.proposed.json").read_bytes())
+    component = json.loads((inputs.output / "ops/diana20-recognizer-component.json").read_bytes())
+    assert receipt["target"] == pointer["code_root"] == target
+    for key in ("vendor", "pins", "asset_root", "sprite"):
+        assert component[key].startswith(target + "/")
+    assert component["runtime"]["worker_path"].startswith(target + "/")
+    assert receipt["applied"] is False and receipt["owner_lifecycle_dispatch_changed"] is False
+
+
+@pytest.mark.parametrize("version", [
+    "/tmp/release", "../release", "../../release", "nested/release", "nested\\release",
+    "C:/release", "", ".", "..", None, True, [], {}, "unrecognized-release",
+    "diana20-pixel-scale-source-v1-tie-candidate",
+])
+def test_prepare_caller_rejects_unsafe_or_mismatched_version(synthetic_caller_inputs, version):
+    inputs = synthetic_caller_inputs
+    inputs.manifest["version"] = version
+    write_caller_manifest(inputs)
+    with pytest.raises(ValueError, match="unsupported scale bundle version"):
+        prepare_caller(inputs.caller, inputs.bundle, inputs.assets, inputs.output)
+    assert not inputs.output.exists()
+
+
+@pytest.mark.parametrize("base", [None, "", "unknown-base", True, [], {}])
+def test_prepare_caller_rejects_unsupported_base(synthetic_caller_inputs, base):
+    inputs = synthetic_caller_inputs
+    inputs.manifest["base"] = base
+    write_caller_manifest(inputs)
+    with pytest.raises(ValueError, match="unsupported scale bundle version"):
+        prepare_caller(inputs.caller, inputs.bundle, inputs.assets, inputs.output)
+    assert not inputs.output.exists()

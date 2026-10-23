@@ -31,6 +31,7 @@ def validate_native_scale_response(result, pins):
                 and scale.get('native_size') is None and result.get('sprite_sha256') is None
                 and runtime.get('sprite_sha256') is None and runtime.get('margin_applied') is False
                 and scale['matcher_attempts'] == 0 and result['cards'] == []
+                and update['effective_unknown'] == result['unknown']
                 and update['effective_cards'] == [] and update.get('additional_machine_candidate_count') == 0)
     variant = scale.get('selected_variant')
     if status != 'SELECTED' or type(variant) is not int or variant not in pins:
