@@ -323,3 +323,34 @@ def test_omitted_vendor_module_and_foreign_hash_rejected(kit):
             del modules[name]
         with pytest.raises(ValueError, match="VENDOR"):
             adapt_diana20_row(row, scale_profile=kit["verified"])
+
+
+@pytest.mark.parametrize("status", ["UNKNOWN", "TIE"])
+def test_profile_validator_rejects_lost_abstention_reason(kit, status):
+    row = scale_row(kit, status=status)
+    payload = row["payload"]
+    assert kit["verified"].verify_payload(payload)
+    payload["recognizer_update"]["effective_unknown"] = []
+    with pytest.raises(ValueError, match="SCALE_RESPONSE"):
+        kit["verified"].verify_payload(payload)
+
+
+@pytest.mark.parametrize("status", ["UNKNOWN", "TIE"])
+def test_pbn_abstention_history_guard_preserves_reason(kit, status):
+    row = scale_row(kit, status=status)
+    record, claims = adapt_diana20_row(row, scale_profile=kit["verified"])
+    assert record["deal"] is None
+    assert claims["effective_unknown"] == claims["baseline_unknown_history"] == row["payload"]["unknown"]
+    row["payload"]["recognizer_update"]["effective_unknown"] = []
+    with pytest.raises(ValueError, match="UNKNOWN_HISTORY|SCALE_RESPONSE"):
+        adapt_diana20_row(row, scale_profile=kit["verified"])
+
+
+@pytest.mark.parametrize("version", ["/tmp/release", "../release", "../../release"])
+def test_profile_already_rejects_unsafe_bundle_version(kit, version):
+    path = kit["options"]["bundle_root"] / "SOURCE_BUNDLE.json"
+    manifest = json.loads(path.read_bytes())
+    manifest["version"] = version
+    path.write_bytes(encoded(manifest))
+    with pytest.raises(ValueError, match="BUNDLE_VERSION"):
+        profile_module.load_scale_pbn_profile(kit["path"], **reseal(kit))
