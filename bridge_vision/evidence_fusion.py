@@ -12,7 +12,11 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
+from bridge_contracts.video_deal import (
+    SEATS,
+    BridgeVideoDealContractError,
+    canonicalize_video_deal,
+)
 
 FUSION_SCHEMA = "bridge-card-evidence-fusion-v3"
 DEFAULT_MIN_DECLARATION_CONFIDENCE = 0.90
@@ -66,7 +70,7 @@ def _card_claim(raw: Mapping[str, Any]) -> tuple[str | None, dict[str, str] | No
     if value is not None:
         try:
             return _normalise_card(value), None
-        except (TypeError, ValueError):
+        except BridgeVideoDealContractError:
             token = str(value).strip().upper()
             token = _UNICODE_SUITS.get(token, token)
             if token == "10":
@@ -155,7 +159,7 @@ def fuse_card_evidence(
             continue
         try:
             card = _normalise_card(suggestion.get("suggested_card"))
-        except (TypeError, ValueError):
+        except BridgeVideoDealContractError:
             continue
         layout_lookup[(seat, card)] = {"layout_index": layout_index, **dict(suggestion)}
 
