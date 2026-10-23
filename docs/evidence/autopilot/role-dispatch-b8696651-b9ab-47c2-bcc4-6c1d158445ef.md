@@ -1,0 +1,7 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=b8696651-b9ab-47c2-bcc4-6c1d158445ef
+dispatch_epoch=1
+role=BOOKS
+task_fingerprint=419c1292ef281ae5b069c99d7a04d089693cd12e4cbf7b965dacaca5a230f09c
+target_pr=857
+mode=READ_ONLY
