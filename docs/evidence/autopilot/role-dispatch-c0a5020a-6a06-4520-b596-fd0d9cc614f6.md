@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=c0a5020a-6a06-4520-b596-fd0d9cc614f6
+dispatch_epoch=14
+role=KNOWLEDGE
+task_fingerprint=12cf66e99e7803eaba594d93b421abf2facbf6d83356dd1f692b42c4c9ac83c2
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=ed5e9dc6-cf6b-460c-948a-87a9914ee001
+prior_task_id=ed5e9dc6-cf6b-460c-948a-87a9914ee001
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox requires READ_ONLY on 642b6c2, but assignment requires completed WORLD provenance REPAIR on stale 1c628a4; binding rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
