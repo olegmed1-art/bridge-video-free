@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=efeee8e5-e985-4758-ab8a-5fc50f6c0733
+dispatch_epoch=41
+role=RECOGNIZER
+task_fingerprint=c0780c818aabca6668fef7b2c4fbf1e3cb584f8b3d1820eb63279b071e2b06d0
+target_pr=1106
+mode=REPAIR
+repair_attempt=1
+origin_task_id=fb728b8e-205d-4f63-a7f6-3def32872a99
+prior_task_id=fb728b8e-205d-4f63-a7f6-3def32872a99
+blocked_result_code=TARGET_HEAD_CHANGED
+blocked_summary=Target head changed after exact-head audit; issue a fresh READ_ONLY dispatch for the current head.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
