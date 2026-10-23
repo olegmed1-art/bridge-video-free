@@ -57,7 +57,7 @@ def _objects(value: Any) -> bool:
     return type(value) is list and all(isinstance(v, Mapping) for v in value)
 
 
-def adapt_diana20_row(row: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def adapt_diana20_row(row: Mapping[str, Any], *, scale_profile=None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Adapt one original persisted row; preserve every candidate and UNKNOWN."""
     _need(isinstance(row, Mapping), "ROW")
     payload, receipt = row.get("payload"), row.get("receipt")
@@ -68,7 +68,8 @@ def adapt_diana20_row(row: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str,
     _need(isinstance(update, Mapping), "INSTALLED_UPDATE_REQUIRED")
     _need(update.get("schema") == "diana20-installed-recognizer-observation/v1" and
           update.get("version") == "diana20-installed-margin-r1-20261020" and update.get("mode") == "margin", "UPDATE_VERSION")
-    empty_legacy = (payload.get("recognizer_version") is None and payload.get("status") == "NO_HAND_CORNERS"
+    empty_statuses = ("NO_HAND_CORNERS",) if scale_profile is None else ("NO_HAND_CORNERS", "SCALE_UNKNOWN", "SCALE_TIE")
+    empty_legacy = (payload.get("recognizer_version") is None and payload.get("status") in empty_statuses
                     and payload.get("cards") == [] and update.get("effective_cards") == [])
     _need(payload.get("recognizer_version") == "bridgit-gambler-partial-pixels-v3" or empty_legacy, "BASE_VERSION")
     for obj, names in ((payload, ("canonical_allowed", "complete_deal")),
@@ -76,7 +77,13 @@ def adapt_diana20_row(row: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str,
         _need(all(obj.get(name) is False for name in names), "AUTHORITY_OR_MODE")
     runtime = update.get("runtime")
     _need(isinstance(runtime, Mapping), "RUNTIME")
-    for key, expected in installed_runtime_pins().items():
+    if scale_profile is None:
+        runtime_pins = installed_runtime_pins()
+    else:
+        from tools.diana20_scale_pbn_profile import VerifiedScalePBNProfile
+        _need(type(scale_profile) is VerifiedScalePBNProfile, "VERIFIED_SCALE_PROFILE_REQUIRED")
+        runtime_pins = scale_profile.verify_payload(payload)
+    for key, expected in runtime_pins.items():
         # bool values require exact types; True must not be accepted as integer1.
         _need(runtime.get(key) == expected and (type(expected) is not bool or type(runtime.get(key)) is bool), "RUNTIME_PIN_" + key)
     _need(receipt.get("source_sha256") == payload.get("source_video_sha256") == SOURCE, "SOURCE_BINDING")
@@ -117,6 +124,11 @@ def adapt_diana20_row(row: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str,
               "decisions": update["decisions"], "seat_mapping_claim": payload.get("seat_mapping"),
               "hand_inventory_completeness": payload.get("hand_inventory_completeness"),
               "receipt_claim": receipt, "inferred_solver_output": "NOT_PROVIDED"}
+    if scale_profile is not None:
+        claims.pop("installed_release_claim")
+        claims["source_bundle_claim"] = runtime_pins["version"]
+        claims["scale_source_profile"] = scale_profile.provenance()
+        claims["card_scale_claim"] = payload["card_scale"]
     return record, claims
 
 
@@ -135,7 +147,8 @@ def _constant(_):
 def export_diana20_jsonl(observations: Path, output_dir: Path, *, expected_sha256: str,
                         video_title: str | None = None,
                         reconstruction_by_row_sha256: Mapping[str, Mapping[str, Any]] | None = None,
-                        qualified_reconstruction_by_row_sha256: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                        qualified_reconstruction_by_row_sha256: Mapping[str, Any] | None = None,
+                        scale_profile=None) -> dict[str, Any]:
     """Output stage for real saved card-observations.jsonl, without inference.
 
     Optional reconstruction claims remain comments bound to the original row.
@@ -143,6 +156,8 @@ def export_diana20_jsonl(observations: Path, output_dir: Path, *, expected_sha25
     separately pinned QualifiedRecovery objects; arbitrary mappings cannot do so.
     """
     path = Path(observations)
+    _need(scale_profile is None or not qualified_reconstruction_by_row_sha256,
+          "SCALE_QUALIFIED_RECOVERY_UNSUPPORTED")
     _need(type(expected_sha256) is str and bool(_SHA.fullmatch(expected_sha256)), "EXPECTED_SHA")
     _need(0 < path.stat().st_size <= MAX_JSONL, "JSONL_SIZE")
     raw = path.read_bytes()
@@ -153,7 +168,7 @@ def export_diana20_jsonl(observations: Path, output_dir: Path, *, expected_sha25
     for line in raw.splitlines(keepends=True):
         _need(0 < len(line) <= MAX_ROW and bool(line.strip()), "ROW_SIZE")
         row = json.loads(line.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
-        record, provenance = adapt_diana20_row(row)
+        record, provenance = adapt_diana20_row(row, scale_profile=scale_profile)
         _need(record["sequence"] not in sequences and record["diana20_row_sha256"] not in row_hashes, "DUPLICATE_ROW")
         sequences.add(record["sequence"]); row_hashes.add(record["diana20_row_sha256"])
         provenance.update(input_jsonl_sha256=expected_sha256, raw_row_line_sha256=_digest(line))
@@ -199,6 +214,9 @@ def export_diana20_jsonl(observations: Path, output_dir: Path, *, expected_sha25
                "pbn_outputs": [{k:v for k,v in item.items() if k != "write_status"} for item in outputs]}
     if qualified_records:
         summary["qualified_ownership_outputs"] = len(qualified_records)
+    if scale_profile is not None:
+        summary["release_claim"] = "diana20-pixel-scale-source-v1-installed-margin"
+        summary["scale_source_profile"] = scale_profile.provenance()
     report = _encode(summary) + b"\n"
     report_name = "diana20-pbn-export-" + _digest(report)[:24] + ".json"
     _write_exclusive(root / report_name, report)
