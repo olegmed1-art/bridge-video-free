@@ -1,0 +1,29 @@
+name: Autopilot selective source ledger contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/autopilot-selective-ledger-ci.yml'
+      - 'ops/autopilot_selective_ledger.py'
+      - 'ops/test_autopilot_selective_ledger.py'
+      - 'docs/ops/AUTOPILOT_NEON_SELECTIVE_SOURCE_RECOVERY_20260923.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/autopilot-selective-ledger-ci.yml'
+      - 'ops/autopilot_selective_ledger.py'
+      - 'ops/test_autopilot_selective_ledger.py'
+      - 'docs/ops/AUTOPILOT_NEON_SELECTIVE_SOURCE_RECOVERY_20260923.md'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m ops.test_autopilot_selective_ledger
