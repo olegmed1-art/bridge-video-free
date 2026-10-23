@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 
 from tools.bridge_video_positions import _bind_speech_declarations, process_job_frames
@@ -125,7 +126,10 @@ def test_universal_video_frames_flow_into_existing_recognizer_contract(tmp_path:
     summary = process_job_frames(tmp_path, parser=fake_existing_parser)
 
     assert seen == [frame.resolve()]
-    assert summary == {
+    pbn_outputs = summary["pbn_outputs"]
+    # Keep the exact legacy summary contract; only the explicit new field is
+    # additive. Unexpected extra keys must still fail this equality.
+    assert {key: value for key, value in summary.items() if key != "pbn_outputs"} == {
         "status": "COMPLETED",
         "job_id": "video-job-1",
         "source_fingerprint": "source-fp",
@@ -137,6 +141,19 @@ def test_universal_video_frames_flow_into_existing_recognizer_contract(tmp_path:
         "derived_fourth_hand_frames": 0,
         "output": "bridge_positions.jsonl",
     }
+    assert len(pbn_outputs) == 1
+    pbn = pbn_outputs[0]
+    assert pbn["record_index"] == 0
+    assert pbn["observed_card_count"] == 4
+    assert pbn["canonical_promotion_allowed"] is False
+    pbn_path = (tmp_path / pbn["path"]).resolve()
+    assert pbn_path.is_relative_to(tmp_path.resolve())
+    assert pbn_path.suffix == ".pbn"
+    pbn_bytes = pbn_path.read_bytes()
+    assert pbn["bytes"] == len(pbn_bytes)
+    assert pbn["sha256"] == hashlib.sha256(pbn_bytes).hexdigest()
+    # Four observed cards cannot become a complete original hand or deal.
+    assert b'[Deal "?"]' in pbn_bytes
     record = json.loads((tmp_path / "bridge_positions.jsonl").read_text(encoding="utf-8"))
     assert record["frame_file"] == frame.name
     assert record["time"] == 0.0

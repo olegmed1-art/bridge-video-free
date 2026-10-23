@@ -13,7 +13,7 @@ from bridge_vision.bridgit_primary_production_r265 import install as install_rec
 REVISION = "3.1-free-r26.5"
 
 
-def install(token_func):
+def install(token_func, *, recovery_provider=None):
     requested = os.getenv("BRIDGE_REQUESTED_ALGORITHM_REVISION", "").strip()
     if requested and requested != REVISION:
         raise RuntimeError(
@@ -44,11 +44,11 @@ def install(token_func):
     )
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
-    install_reconstruction(base, token_func)
+    install_reconstruction(base, token_func, recovery_provider=recovery_provider)
 
 
-def run(token_func):
-    install(token_func)
+def run(token_func, *, recovery_provider=None):
+    install(token_func, recovery_provider=recovery_provider)
     import run_master_3_1_free_semantic_v2 as semantic_v2
 
     return semantic_v2.process_job(token_func())
