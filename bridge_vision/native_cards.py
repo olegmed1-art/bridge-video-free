@@ -100,6 +100,7 @@ def observations_from_backend(
     *,
     min_card_confidence: float = 0.80,
     seat_dead_zone: float = 0.08,
+    retain_conflicts: bool = False,
 ) -> tuple[dict[str, list[str]], dict[str, Any]]:
     if not 0.0 <= min_card_confidence <= 1.0:
         raise ValueError("min_card_confidence outside [0,1]")
@@ -117,6 +118,7 @@ def observations_from_backend(
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     seen: dict[str, str] = {}
+    conflicts: list[dict[str, Any]] = []
 
     for index, raw in enumerate(raw_cards):
         if not isinstance(raw, Mapping):
@@ -142,15 +144,29 @@ def observations_from_backend(
             continue
         previous = seen.get(card)
         if previous is not None and previous != seat:
-            raise NativeCardDetectorError(f"card {card} assigned to both {previous} and {seat}")
-        if card in hands[seat]:
+            if not retain_conflicts:
+                raise NativeCardDetectorError(f"card {card} assigned to both {previous} and {seat}")
+            conflicts.append({"reason": "SAME_CARD_DIFFERENT_SEATS", "card": card,
+                              "seats": [previous, seat]})
+        if card in hands[seat] and not retain_conflicts:
             rejected.append({"index": index, "card": card, "reason": "DUPLICATE_OBSERVATION", "seat": seat})
             continue
         seen[card] = seat
-        hands[seat].append(card)
-        accepted.append({"index": index, "card": card, "seat": seat, "confidence": confidence})
+        if card not in hands[seat]:
+            hands[seat].append(card)
+        accepted.append({"index": index, "card": card, "seat": seat, "confidence": confidence,
+                         "box": {"x": box.x, "y": box.y, "w": box.w, "h": box.h}})
 
-    canonical = canonicalize_video_deal({"hands": hands}).to_dict()["hands"]
+    if retain_conflicts and any(len(cards) > 13 for cards in hands.values()):
+        conflicts.append({"reason": "OVERFULL_OBSERVED_HAND"})
+    # Keep already-produced factor/ROI evidence for both accepted and UNKNOWN
+    # components. This does not rerun a classifier or promote its top candidate.
+    for observation in accepted + rejected:
+        raw = raw_cards[observation["index"]]
+        for key in ("factor_diagnostic", "receipt"):
+            if key in raw:
+                observation[key] = raw[key]
+    canonical = canonicalize_video_deal({"hands": {} if conflicts else hands}).to_dict()["hands"]
     normalized_hands = {seat: canonical[seat]["cards"] for seat in hands if canonical[seat]["cards"]}
     evidence = {
         "detector_version": CARD_DETECTOR_VERSION,
@@ -160,16 +176,20 @@ def observations_from_backend(
         "min_card_confidence": min_card_confidence,
         "seat_dead_zone": seat_dead_zone,
     }
+    if retain_conflicts:
+        evidence["conflicts"] = conflicts
     return normalized_hands, evidence
 
 
 class NativeFourSeatCardDetector:
     """Adapter from a school-controlled glyph backend into BridgeVisionEngine."""
 
-    def __init__(self, backend: RawBackend, *, min_card_confidence: float = 0.80, seat_dead_zone: float = 0.08):
+    def __init__(self, backend: RawBackend, *, min_card_confidence: float = 0.80, seat_dead_zone: float = 0.08,
+                 retain_conflicts: bool = False):
         self.backend = backend
         self.min_card_confidence = float(min_card_confidence)
         self.seat_dead_zone = float(seat_dead_zone)
+        self.retain_conflicts = retain_conflicts
 
     def __call__(self, frame: Path) -> dict[str, Any]:
         payload = self.backend(frame)
@@ -177,6 +197,7 @@ class NativeFourSeatCardDetector:
             payload,
             min_card_confidence=self.min_card_confidence,
             seat_dead_zone=self.seat_dead_zone,
+            retain_conflicts=self.retain_conflicts,
         )
         accepted = evidence["accepted"]
         confidence = min((float(item["confidence"]) for item in accepted), default=0.0)

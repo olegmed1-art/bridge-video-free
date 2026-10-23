@@ -17,6 +17,7 @@ from typing import Any
 
 from bridge_vision import BridgeVisionEngine, fuse_card_evidence
 from bridge_vision.evidence_fusion import MAX_DECLARATIONS
+from bridge_vision.pbn import export_frame_pbns
 
 NativeDetectorInjection = Callable[[Path], dict[str, Any]]
 
@@ -365,6 +366,8 @@ def process_job_frames(
     allow_legacy_old_bbo: bool = False,
     profiled_challenger: NativeDetectorInjection | None = None,
     speech_declarations: Iterable[Mapping[str, Any]] | None = None,
+    video_title: str | None = None,
+    pbn_provenance_by_record_sha256: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     selected = sum(value is not None for value in (engine, parser, profiled_challenger))
     if selected > 1:
@@ -538,6 +541,12 @@ def process_job_frames(
             "speech_multi_frame_associations": 0,
             "output": output_path.name,
         }
+    summary["pbn_outputs"] = export_frame_pbns(
+        root, records, source_metadata=(
+            {**manifest, "video_title": video_title} if video_title is not None else manifest
+        ), diagnostics_file=output_path.name,
+        provenance_by_record_sha256=pbn_provenance_by_record_sha256,
+    )
     summary_path = root / (
         "bridge_positions_profiled_shadow_summary.json"
         if profiled_shadow
@@ -550,6 +559,7 @@ def process_job_frames(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("job_dir", type=Path)
+    parser.add_argument("--video-title", help="Actual video title; otherwise use manifest metadata or explicit UNKNOWN_TITLE")
     parser.add_argument(
         "--allow-legacy-old-bbo",
         action="store_true",
@@ -559,6 +569,7 @@ def main() -> None:
     summary = process_job_frames(
         args.job_dir,
         allow_legacy_old_bbo=args.allow_legacy_old_bbo,
+        video_title=args.video_title,
     )
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 

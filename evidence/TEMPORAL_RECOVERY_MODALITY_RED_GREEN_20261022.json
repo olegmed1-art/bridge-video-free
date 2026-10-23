@@ -1,0 +1,121 @@
+{
+  "schema": "temporal-recovery-modality-regression-v1",
+  "base_commit": "2eec5ba690057463e0c5e89b2a429f46521c640c",
+  "baseline_source_sha256": "ed9bec480f0a52424ae01fed6fcc2671428a07613a73966891ca88b478b27ce4",
+  "cases": [
+    {
+      "synthetic_text": "У Запада нет туза пик",
+      "baseline_card_seats": [
+        [
+          "AS",
+          "W"
+        ]
+      ],
+      "candidate_card_seats": [],
+      "candidate_rejections": [
+        {
+          "segment": 0,
+          "reason": "NON_ASSERTIVE_OR_CORRECTED_SPEECH",
+          "modality": "NEGATION",
+          "evidence_locator": "transcript.jsonl#segment=0",
+          "text": "У Запада нет туза пик"
+        }
+      ]
+    },
+    {
+      "synthetic_text": "Если у Запада туз пик",
+      "baseline_card_seats": [
+        [
+          "AS",
+          "W"
+        ]
+      ],
+      "candidate_card_seats": [],
+      "candidate_rejections": [
+        {
+          "segment": 0,
+          "reason": "NON_ASSERTIVE_OR_CORRECTED_SPEECH",
+          "modality": "HYPOTHETICAL",
+          "evidence_locator": "transcript.jsonl#segment=0",
+          "text": "Если у Запада туз пик"
+        }
+      ]
+    },
+    {
+      "synthetic_text": "У Запада туз пик?",
+      "baseline_card_seats": [
+        [
+          "AS",
+          "W"
+        ]
+      ],
+      "candidate_card_seats": [],
+      "candidate_rejections": [
+        {
+          "segment": 0,
+          "reason": "NON_ASSERTIVE_OR_CORRECTED_SPEECH",
+          "modality": "QUESTION",
+          "evidence_locator": "transcript.jsonl#segment=0",
+          "text": "У Запада туз пик?"
+        }
+      ]
+    },
+    {
+      "synthetic_text": "У Запада туз пик, нет, король пик",
+      "baseline_card_seats": [
+        [
+          "AS",
+          "W"
+        ],
+        [
+          "KS",
+          "W"
+        ]
+      ],
+      "candidate_card_seats": [],
+      "candidate_rejections": [
+        {
+          "segment": 0,
+          "reason": "NON_ASSERTIVE_OR_CORRECTED_SPEECH",
+          "modality": "CORRECTION",
+          "evidence_locator": "transcript.jsonl#segment=0",
+          "text": "У Запада туз пик, нет, король пик"
+        }
+      ]
+    },
+    {
+      "synthetic_text": "Если бы у Востока была десятка пик",
+      "baseline_card_seats": [
+        [
+          "TS",
+          "E"
+        ]
+      ],
+      "candidate_card_seats": [],
+      "candidate_rejections": [
+        {
+          "segment": 0,
+          "reason": "NON_ASSERTIVE_OR_CORRECTED_SPEECH",
+          "modality": "HYPOTHETICAL",
+          "evidence_locator": "transcript.jsonl#segment=0",
+          "text": "Если бы у Востока была десятка пик"
+        }
+      ]
+    }
+  ],
+  "saved_diagnostics": [
+    {
+      "path": "evidence/BRIDGIT_PARTIAL_PIXEL_SINGLE_FRAME_SMOKE_20261015.json",
+      "sha256": "8f3270951c9bd6c88858f90a0617bdb0c203c46ff6828e1511be3a9b9c0b1d15",
+      "use": "ABSTENTION_ONLY_NOT_PIXEL_OR_TRANSCRIPT_VALIDATION"
+    },
+    {
+      "path": "evidence/BRIDGIT_PARTIAL_AUTO_GEOMETRY_SMOKE_20261015.json",
+      "sha256": "9e5eb867ed52e65f10d721e2292421e063e5609e19cea00b3f1cafcb4d1615f5",
+      "use": "ABSTENTION_ONLY_NOT_PIXEL_OR_TRANSCRIPT_VALIDATION"
+    }
+  ],
+  "real_video_accuracy_evaluated": false,
+  "deployment_executed": false,
+  "costly_inference_run": false
+}

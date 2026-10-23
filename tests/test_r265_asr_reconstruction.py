@@ -5,10 +5,19 @@ from pathlib import Path
 from bridge_vision.teacher_card_reconstruction_r265 import (
     extract_teacher_card_declarations,
     reconstruct_deal,
+    declaration_digest,
 )
 
 RANKS = "AKQJT98765432"
 FULL_DECK = [rank + suit for suit in "SHDC" for rank in RANKS]
+SCOPE = {"source_video_sha256": "a" * 64, "episode_id": "synthetic", "board_epoch": 1,
+         "board_number": 1, "deal_start_ms": 0, "deal_end_ms": 100000}
+
+
+def reviewed(declarations):
+    return [{**SCOPE, "declaration_sha256": declaration_digest(item), "modality": "ACTUAL_HOLDING",
+             "audio_review_ref": "synthetic-audio", "speaker_review_ref": "synthetic-teacher",
+             "evidence_ref": "synthetic-" + declaration_digest(item)} for item in declarations]
 
 
 def teacher_segment(text, *, start=10.0, end=12.0, confidence=0.95, unreliable=False):
@@ -85,6 +94,7 @@ def test_teacher_speech_fills_unknown_card_in_any_hand_then_complements_fourth()
         },
         declarations,
         deal_timestamp_seconds=11.0,
+        deal_identity=SCOPE, speech_reviews=reviewed(declarations),
     )
 
     assert result["status"] == "RECONSTRUCTED_FULL"
@@ -145,6 +155,7 @@ def test_fourteenth_teacher_card_for_speech_completed_hand_fails_closed():
         {},
         declarations,
         deal_timestamp_seconds=20.0,
+        deal_identity=SCOPE, speech_reviews=reviewed(declarations),
     )
 
     assert result["status"] == "UNRESOLVED_CONFLICT"
