@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=aba5b76f-17dd-4172-b506-a128fc35cab8
+dispatch_epoch=17
+role=REPORTING
+task_fingerprint=3e1303115edfb7dec5cad1dbf83f3603bbf66c52ea6e865ce6423d281252cf40
+target_pr=797
+mode=REPAIR
+repair_attempt=1
+origin_task_id=631bbb74-f76e-487e-a50f-f19677f4ef56
+prior_task_id=631bbb74-f76e-487e-a50f-f19677f4ef56
+blocked_result_code=CURRENT_MAIN_NOT_ANCESTOR
+blocked_summary=Target evidence is append-only and bounded, but its exact head remains 13 commits behind supplied current main and requires reconciliation.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
