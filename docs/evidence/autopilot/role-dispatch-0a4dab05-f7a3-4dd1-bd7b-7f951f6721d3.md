@@ -1,0 +1,7 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=0a4dab05-f7a3-4dd1-bd7b-7f951f6721d3
+dispatch_epoch=10
+role=PLANNING
+task_fingerprint=1da1ca3d4f00a57e6fe5ceee1b915cee82b152787eca6858513288e5ce86f3b1
+target_pr=1150
+mode=READ_ONLY
