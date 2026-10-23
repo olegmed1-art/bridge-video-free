@@ -16,6 +16,10 @@ on:
         description: 'Reviewed exact PR1857 head SHA'
         required: true
         type: string
+      parent_id:
+        description: 'Reviewed current Neon production default branch ID'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -56,11 +60,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_MAIN: ${{ inputs.main_sha }}
           SQL_HEAD: ${{ inputs.sql_head }}
+          EXPECTED_PARENT: ${{ inputs.parent_id }}
         shell: bash
         run: |
           set -Eeuo pipefail
           umask 077
-          [[ "$EXPECTED_MAIN" =~ ^[0-9a-f]{40}$ && "$SQL_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_MAIN" =~ ^[0-9a-f]{40}$ && "$SQL_HEAD" =~ ^[0-9a-f]{40}$ && "$EXPECTED_PARENT" =~ ^br-[a-z0-9-]+$ ]]
           [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN" ]]
           [[ "$(gh api repos/olegmed1-art/bridge-video-free/git/ref/heads/main --jq .object.sha)" == "$EXPECTED_MAIN" ]]
           [[ "$(gh api repos/olegmed1-art/bridge-video-free/pulls/1857 --jq .head.sha)" == "$SQL_HEAD" ]]
