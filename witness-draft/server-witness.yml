@@ -1,0 +1,27 @@
+name: Issue 881 Server Witness V2 DRAFT DISABLED
+on:
+  workflow_dispatch:
+    inputs:
+      exact_sha:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+jobs:
+  witness:
+    # Deliberately disabled. This deliverable grants no server-run authority.
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.exact_sha }}
+          persist-credentials: false
+      - name: Draft integration boundary
+        run: |
+          echo 'BLOCKED_CAPABILITY: transport and worker-configuration proof require review'
+          exit 1
