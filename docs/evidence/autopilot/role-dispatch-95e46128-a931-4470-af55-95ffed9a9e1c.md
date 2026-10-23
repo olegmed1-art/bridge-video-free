@@ -1,0 +1,7 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=95e46128-a931-4470-af55-95ffed9a9e1c
+dispatch_epoch=16
+role=KNOWLEDGE
+task_fingerprint=64e374e8204b9669fcbb051a8b873ff39d570fbd17bb8d807688d04ddee8cffa
+target_pr=860
+mode=READ_ONLY
