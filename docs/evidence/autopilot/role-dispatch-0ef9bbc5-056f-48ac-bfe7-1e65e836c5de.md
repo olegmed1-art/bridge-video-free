@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=0ef9bbc5-056f-48ac-bfe7-1e65e836c5de
+dispatch_epoch=41
+role=VIDEO_QUEUE
+task_fingerprint=3456efc0c7d01d63713b63efd266dcb0b5f97d3d8de640adf9bb6ff73d33b13d
+target_pr=1059
+mode=REPAIR
+repair_attempt=1
+origin_task_id=14f8da79-6676-4780-8f28-2de739dee3a5
+prior_task_id=14f8da79-6676-4780-8f28-2de739dee3a5
+blocked_result_code=TARGET_PR_SUPERSEDED_AND_CHECKS_INCOMPLETE
+blocked_summary=Task blocked. See execution details above.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
