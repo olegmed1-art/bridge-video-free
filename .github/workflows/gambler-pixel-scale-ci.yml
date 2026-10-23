@@ -1,0 +1,54 @@
+name: Gambler pixel scale CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bridge_vision/gambler_card_scale.py'
+      - 'tools/diana20_gambler_scale.py'
+      - 'tools/diana20_scale_contract.py'
+      - 'scripts/build_diana20_scale_bundle.py'
+      - 'tests/test_gambler_card_scale.py'
+      - 'tests/test_diana20_gambler_scale.py'
+      - '.github/workflows/gambler-pixel-scale-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify exact PR head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install bounded public dependencies
+        run: python -m pip install --disable-pip-version-check 'pytest==8.4.1' 'numpy==2.2.6' 'opencv-python-headless==4.11.0.86' 'requests==2.32.3' 'psycopg[binary]==3.3.4' 'google-auth==2.56.3' 'PyYAML==6.0.3'
+      - name: Run offline scale and compatibility regressions
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/test_gambler_card_scale.py
+          tests/test_diana20_gambler_scale.py
+          tests/test_bridge_vision_bridgit_primary_video.py
+          tests/test_bridge_vision_bridgit_gambler_rank_layout.py
+          tests/test_bridge_vision_gambler_classic_reference.py
+          tests/test_bridge_vision_gambler_reference_authority.py
+          tests/test_bridge_vision_partial_gambler_adapter.py
+          tests/test_bridge_vision_partial_pixel_observer.py
+          tests/test_bridge_vision_primary_production_wiring.py
+          tests/test_bridgit_primary_video_error_boundary.py
+          tests/test_bridgit_primary_production_error_boundary.py
+          tests/test_r263_autonomous_recognizer_contract.py
+      # Historical r26 installation deliberately patches the global selector;
+      # the frozen candidate compares against the uninstalled selector baseline.
+      - name: Check candidate compatibility in a fresh process
+        run: python -m pytest -q -p no:cacheprovider tests/test_r26_candidate_integration.py
