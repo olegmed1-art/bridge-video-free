@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=b7070c6f-390b-410c-abcb-5fcd9e5db0c6
+dispatch_epoch=3
+role=KNOWLEDGE
+task_fingerprint=b7283ad947fb481b17700405e057fd6fd3c0a30dd797ff8372d6c91d2a893ade
+target_pr=860
+mode=VERIFY
+repair_attempt=1
+origin_task_id=cf4ca875-7f01-4765-b7ab-30f0925b9c60
+prior_task_id=8d843a1a-f391-4228-850c-79c6e55a43a3
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Task requires repository repair but the bound envelope and outbox mode is READ_ONLY; no code was changed.
+instruction=READ_ONLY_VERIFY_REPAIR_NO_MUTATION
