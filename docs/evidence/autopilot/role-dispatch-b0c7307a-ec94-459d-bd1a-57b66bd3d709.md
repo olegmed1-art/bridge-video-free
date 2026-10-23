@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=b0c7307a-ec94-459d-bd1a-57b66bd3d709
+dispatch_epoch=3
+role=KNOWLEDGE
+task_fingerprint=61814d30ff86515fd13fa14b0239ed925d89aad48872b09ab71f844fc0bf110b
+target_pr=860
+mode=VERIFY
+repair_attempt=1
+origin_task_id=b540c11f-209a-4054-a72b-87660b866f0a
+prior_task_id=a06aeb85-44fd-414b-9f55-f988d832f8fb
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Task requests REPAIR, but authoritative outbox and public envelope bind mode=READ_ONLY; no repository change was permitted.
+instruction=READ_ONLY_VERIFY_REPAIR_NO_MUTATION
