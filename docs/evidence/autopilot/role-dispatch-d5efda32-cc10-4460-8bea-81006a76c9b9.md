@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=d5efda32-cc10-4460-8bea-81006a76c9b9
+dispatch_epoch=2
+role=VIDEO
+task_fingerprint=f2481c0b9a6feaff9f7e801082a336734241a62479ac301a035095a1c62a53bc
+target_pr=1599
+mode=REPAIR
+repair_attempt=1
+origin_task_id=253a7a1b-d726-4e14-bd10-b1aac312376c
+prior_task_id=253a7a1b-d726-4e14-bd10-b1aac312376c
+blocked_result_code=BASELINE_AUDIT_STALE
+blocked_summary=Task blocked. See execution details above.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
