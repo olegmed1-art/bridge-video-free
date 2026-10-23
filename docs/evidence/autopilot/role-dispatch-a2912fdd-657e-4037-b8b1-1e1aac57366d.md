@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=a2912fdd-657e-4037-b8b1-1e1aac57366d
+dispatch_epoch=20
+role=PLANNING
+task_fingerprint=af6cd36c96d24adc4346f50c383858e8802e02e78ec4b703fd23e0117805c42b
+target_pr=1150
+mode=REPAIR
+repair_attempt=1
+origin_task_id=cbed8dbc-6d67-4a1d-9232-383c8e2cb054
+prior_task_id=cbed8dbc-6d67-4a1d-9232-383c8e2cb054
+blocked_result_code=IMPLEMENTATION_EVIDENCE_UNVERIFIED
+blocked_summary=Mailbox head is exact, but claimed executor-fallback commits and a dedicated implementation PR remain unverified in primary repository state.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
