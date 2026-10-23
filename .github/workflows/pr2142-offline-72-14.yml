@@ -1,0 +1,97 @@
+name: PR2142 offline 72 plus 14 optimized
+
+on:
+  pull_request:
+    types: [opened]
+    branches: [main]
+    paths:
+      - 'ops/review/pr2142_offline_packet.py'
+      - '.github/workflows/pr2142-offline-72-14.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr2142-offline-72-14-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  offline-contract:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'opened' &&
+      github.event.pull_request.draft == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'test/pr2142-offline-72-14-20261012' &&
+      github.event.pull_request.base.sha == '315777e1b69db659d26a94467e72e542af42fd8f' &&
+      github.actor == 'olegmed1-art' &&
+      github.actor_id == '315099490' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VERIFIED_BASE: '315777e1b69db659d26a94467e72e542af42fd8f'
+      VERIFIED_PACKET_SHA256: '34220348f0c861404416305524ac3f7f35b786c2bf8e8c7067d56ba708724d3c'
+      EXACT_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact public test head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /ops/review/pr2142_offline_packet.py
+            /.github/workflows/pr2142-offline-72-14.yml
+
+      - name: Verify one commit and two-path scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXACT_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXACT_HEAD"
+          parents="$(git rev-list --parents -n 1 HEAD)"
+          test "$parents" = "$EXACT_HEAD $VERIFIED_BASE"
+          expected="$(printf 'A\t%s\n' '.github/workflows/pr2142-offline-72-14.yml' 'ops/review/pr2142_offline_packet.py')"
+          actual="$(git diff --name-status --no-renames "$VERIFIED_BASE" HEAD)"
+          test "$actual" = "$expected"
+          expected_modes="$(printf '100644 blob %s\n' '.github/workflows/pr2142-offline-72-14.yml' 'ops/review/pr2142_offline_packet.py')"
+          actual_modes="$(git ls-tree --format='%(objectmode) %(objecttype) %(path)' HEAD -- '.github/workflows/pr2142-offline-72-14.yml' 'ops/review/pr2142_offline_packet.py')"
+          test "$actual_modes" = "$expected_modes"
+          printf '%s  %s\n' "$VERIFIED_PACKET_SHA256" 'ops/review/pr2142_offline_packet.py' | sha256sum --check
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Install bounded public test dependency
+        timeout-minutes: 2
+        run: >-
+          python -I -B -m pip --isolated install --disable-pip-version-check
+          --no-cache-dir --only-binary=:all: --timeout 30 --retries 1
+          --index-url https://pypi.org/simple 'psycopg[binary]==3.3.4'
+
+      - name: Validate pinned source packet
+        run: python -I -B ops/review/pr2142_offline_packet.py
+
+      - name: Run 72 plus 14 tests offline as the normal runner user
+        timeout-minutes: 17
+        shell: bash
+        run: |
+          set -euo pipefail
+          ci_uid="$(id -u)"
+          ci_gid="$(id -g)"
+          ci_python="$(command -v python)"
+          test "$ci_uid" -ne 0
+          test "$ci_gid" -ne 0
+          ci_host_netns="$(readlink /proc/self/ns/net)"
+          ci_status=0
+          sudo -n unshare --net --setgid "$ci_gid" --setuid "$ci_uid" \
+            -- "$ci_python" -I -B 'ops/review/pr2142_offline_packet.py' --run-tests \
+            --expected-uid "$ci_uid" --expected-gid "$ci_gid" --host-netns "$ci_host_netns" \
+            > "$RUNNER_TEMP/pr2142-offline-evidence.json" || ci_status=$?
+          cat "$RUNNER_TEMP/pr2142-offline-evidence.json"
+          exit "$ci_status"
