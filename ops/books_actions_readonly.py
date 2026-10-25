@@ -319,9 +319,11 @@ def connect_only(driver,env,now=None,*,resolve=socket.getaddrinfo,
         phase='BUILD_PARAMETERS'
         # Preserve the original host for SNI/auth semantics. One hostaddr prevents
         # the high-level connect() loop over multiple resolved addresses.
+        # This zero-SQL mode sends no options-based GUC bundle through the pooler.
+        # Query modes require their own transaction policy; never reuse this as one.
         info=driver.conninfo.make_conninfo(raw,host=HOST,hostaddr=str(address),port=5432,
              connect_timeout=5,sslmode='require',channel_binding='require',
-             gssencmode='disable',options=OPTIONS,
+             gssencmode='disable',options='',
              application_name='books-connect-diag-'+env['BOOKS_REQUEST_ID'][:8])
         need(type(info)is str and len(info)<=32768,'BOOKS_DRIVER_UNQUALIFIED')
         encoded=urlsplit(raw).password.encode('utf-8')
