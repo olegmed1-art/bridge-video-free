@@ -1,0 +1,39 @@
+name: Teacher0332 isolated native PG18 once
+on:
+  push:
+    branches: ['codex/teacher-0332-native-once-r2-20261025']
+permissions:
+  contents: read
+concurrency:
+  group: teacher0332-native-once
+  cancel-in-progress: false
+jobs:
+  native-ddl-codec-negative:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.repository.private == false &&
+      github.actor == github.repository_owner &&
+      github.run_attempt == 1 &&
+      github.event.created == true && github.event.deleted == false &&
+      github.event.forced == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      CI_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      CI_CREATED: ${{ github.event.created }}
+      CI_FORCED: ${{ github.event.forced }}
+      CI_BEFORE: ${{ github.event.before }}
+      CI_ACTOR: ${{ github.actor }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Exact sources only, no runtime
+        run: python3 -I -B tools/teacher0332_native_ci.py
+      - name: One disposable PG18 DDL codec and negative transaction check
+        run: python3 -I -B tools/teacher0332_native_ci.py --execute
+      - name: Read back and clean only this run container, including uncertain create ACK
+        if: always()
+        run: python3 -I -B tools/teacher0332_native_ci.py --cleanup-only

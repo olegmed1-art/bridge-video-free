@@ -1,0 +1,253 @@
+{
+  "schema": "teacher0332-native-ci-source-manifest-v1",
+  "SOURCE_ONLY": true,
+  "base_commit": "1238f1e403db4c8447c99f3381f78808484240ee",
+  "repository": "olegmed1-art/bridge-video-free",
+  "branch": "codex/teacher-0332-native-once-r2-20261025",
+  "image": "postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c",
+  "predecessor_patches": [
+    "fc7fa5071c3ceb5172e92b6376195bc22f63f00983c963e659dcb60c0853b290",
+    "ba317f9dbaae4433dcf82064779860ef95d0ff270adddb17c3f82ac1d8bace29"
+  ],
+  "scope": "native_DDL_codec_negative_transactions_only_NOT_provider_admission_or16checks",
+  "publication_files": [
+    ".github/workflows/teacher0332-native-once.yml",
+    "tools/teacher0332_native_ci.py",
+    "database/fixtures/teacher0332_native_ci_manifest.json",
+    "database/migrations/0331_workflow_definition_contract_store.sql",
+    "database/migrations/0332_workflow_definition_bundle_store_successor.sql",
+    "database/rollback/0332_workflow_definition_bundle_store_successor.sql"
+  ],
+  "install_order": [
+    "database/migrations/0001_global_registry.sql",
+    "database/migrations/0002_learning_core.sql",
+    "database/migrations/0003_event_publication_order.sql",
+    "database/migrations/0004_integrity_guards.sql",
+    "database/migrations/0005_runtime_roles.sql",
+    "database/migrations/0006_event_immutability_hardening.sql",
+    "database/migrations/0007_learning_context.sql",
+    "database/migrations/0008_exercises_homework.sql",
+    "database/migrations/0009_tournament_data.sql",
+    "database/migrations/0010_knowledge_media.sql",
+    "database/migrations/0049_analysis_candidate_staging.sql",
+    "database/migrations/0200_bidding_knowledge_v0.sql",
+    "database/migrations/0329_workflow_video_canon_ai_promotion.sql",
+    "database/migrations/0330_workflow_canon_source_domain_policy.sql",
+    "database/migrations/0331_workflow_definition_contract_store.sql",
+    "database/migrations/0332_workflow_definition_bundle_store_successor.sql"
+  ],
+  "files": [
+    {
+      "path": "database/migrations/0001_global_registry.sql",
+      "sha256": "b5aa773212d6593171d728fb93906f49ea5abf684fc851ceb6996e88bbd7b308",
+      "bytes": 10105,
+      "source": "existing_main",
+      "git_blob": "8b6bc273ecb91c1a8e6753c46f1dfafa240890ec"
+    },
+    {
+      "path": "database/migrations/0002_learning_core.sql",
+      "sha256": "16fbeb4b60f661e1cdb17f186a92217f36c14ac4ad139c0728791e2e0076f4fb",
+      "bytes": 12518,
+      "source": "existing_main",
+      "git_blob": "f43e3b13f84dc12a961b8b87abf4a08247198a7b"
+    },
+    {
+      "path": "database/migrations/0003_event_publication_order.sql",
+      "sha256": "72094e7a65bd35c97d099225d93c768057113f0417e2ba36360a54351cb3e307",
+      "bytes": 2259,
+      "source": "existing_main",
+      "git_blob": "7eee1a0bd9bd86147053d2a8b40fe5869bd1d413"
+    },
+    {
+      "path": "database/migrations/0004_integrity_guards.sql",
+      "sha256": "9c2c57d4680e8d5a24ddfc6270b1b16bd5b2da01a8d82714d26705cd3511394f",
+      "bytes": 3516,
+      "source": "existing_main",
+      "git_blob": "404cfeb1c85f7b6cb7df23d109d5926735b7b147"
+    },
+    {
+      "path": "database/migrations/0005_runtime_roles.sql",
+      "sha256": "fc9b3ded9b382744772c0075712c407701901a2eb425fab483e859feeab59aee",
+      "bytes": 5209,
+      "source": "existing_main",
+      "git_blob": "3c0d04a1492ce35272ae5d9a3797f36c6331c5d6"
+    },
+    {
+      "path": "database/migrations/0006_event_immutability_hardening.sql",
+      "sha256": "899f183142d4c039bf7e7e244c1ed200ca455f77fca5a64987a164a654998906",
+      "bytes": 1064,
+      "source": "existing_main",
+      "git_blob": "406212d24ab60a2c433a40a982df04a23ea9f917"
+    },
+    {
+      "path": "database/migrations/0007_learning_context.sql",
+      "sha256": "57ae70a5ae7e4d9010cc62f543f4bb9bf0f54cae2f8522358381fad1b9a581ad",
+      "bytes": 10849,
+      "source": "existing_main",
+      "git_blob": "8bcbf0c5f4a60c8c35e43d693c976f63f3a1adce"
+    },
+    {
+      "path": "database/migrations/0008_exercises_homework.sql",
+      "sha256": "7e67e090e6208c43e12247739037234cf3d3a9af6eba53f7a99d57a07292c6c3",
+      "bytes": 13168,
+      "source": "existing_main",
+      "git_blob": "1f95cf3d87675e77d3508835da6333781043c064"
+    },
+    {
+      "path": "database/migrations/0009_tournament_data.sql",
+      "sha256": "89ff9c937cf0710073e8e5536f88e7e4aba99336057db4cae826ea023ac43f05",
+      "bytes": 20459,
+      "source": "existing_main",
+      "git_blob": "1c31edf6aaaaaf4248dfd9fc1c30c38e5ed9ba0c"
+    },
+    {
+      "path": "database/migrations/0010_knowledge_media.sql",
+      "sha256": "82827aa0855ef03f4f101aecdba1c179d80b56c890a8c14a8e254922c1ba6899",
+      "bytes": 29102,
+      "source": "existing_main",
+      "git_blob": "62fc87d04a21643a53ea2ac7927d31dbcfb1b7af"
+    },
+    {
+      "path": "database/migrations/0049_analysis_candidate_staging.sql",
+      "sha256": "939a2d8948350eedd518b4a3a0ae8d370f35f9bf626b5fcea6f6fe9afe387414",
+      "bytes": 3074,
+      "source": "existing_main",
+      "git_blob": "9085533d2f21234c5ef9befb7a1c7b3d648bf14f"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0.sql",
+      "sha256": "68d4207d2f02f68de93d46b00dd8a564a74f72b32092ce0c257296e5b5b0a5fd",
+      "bytes": 623,
+      "source": "existing_main",
+      "git_blob": "e4f406219f399e9b773bc7668accd48853eb1536"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql",
+      "sha256": "33708210b2bdd146ca48a99396a7b4fba87012cd72214315fe30759cb68b5c85",
+      "bytes": 35627,
+      "source": "existing_main",
+      "git_blob": "bbe41cbb98055a2827818b5aa3b919960d90e04a"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/02_tests_conflicts_activation.sql",
+      "sha256": "b0b1357d441bdcf8264587056ad10c38f42ac9f30470f0c63dd9425f503f184d",
+      "bytes": 7897,
+      "source": "existing_main",
+      "git_blob": "2a4bc01e5f12934369ff4186c51741275bcef4af"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/03_activation_immutability_trace.sql",
+      "sha256": "22f53e1f772bb4607ec1eaf4d624f3169d0af9c1460014b0138ab747b7df535f",
+      "bytes": 16812,
+      "source": "existing_main",
+      "git_blob": "5d6569022cb12427d5e56f730afb51942a869801"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/04_ingestion_audit.sql",
+      "sha256": "3f82fb7620201b7aded7ebfbb52fd888950865853e20209ff58cf5305d1b77b1",
+      "bytes": 6122,
+      "source": "existing_main",
+      "git_blob": "891950b9190e19a2a682b20c3fe0975f8fc8f673"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/05_runtime_views.sql",
+      "sha256": "ea397213b87f7001ffcc5b6f78d9483dc3547678845b59747790dd5fc6212296",
+      "bytes": 6795,
+      "source": "existing_main",
+      "git_blob": "7ceb425f37236a6c4755cb1a50ed29908a2c9982"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/06_privileges.sql",
+      "sha256": "96a45de92019240387a7ee1931149327964ba9fba6bd67c5d8fd043fea0dfd4b",
+      "bytes": 1840,
+      "source": "existing_main",
+      "git_blob": "f5de1d4bfc49636aa1a2a16137f2529c17b0098f"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/07_function_acl.sql",
+      "sha256": "4e9c414f2b3291305f2f1a9537cc1c4e1392410564d1f0dfa57ee0f1825d33be",
+      "bytes": 1529,
+      "source": "existing_main",
+      "git_blob": "76e83266eea29f8569649c30cd4e334ce1977781"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/08_internal_acl_and_registry.sql",
+      "sha256": "b76c821e14c365684f0f8694463c34138e26b5e5a95a9ba92678cabf43469a19",
+      "bytes": 2196,
+      "source": "existing_main",
+      "git_blob": "519fcc51e262f487570ceb74367f41f8eafc515c"
+    },
+    {
+      "path": "database/migrations/0329_workflow_video_canon_ai_promotion.sql",
+      "sha256": "8436640539e288aeae70c6c6dc66dd4465f241dbb38bb63fa85515a9354bb4be",
+      "bytes": 111881,
+      "source": "existing_main",
+      "git_blob": "976833b7e42066734ca48be4a0c5d28703952e9d"
+    },
+    {
+      "path": "database/migrations/0330_workflow_canon_source_domain_policy.sql",
+      "sha256": "f61d0a224099ad53fae1e123b63854e723245a953bf861adfee22c0492422557",
+      "bytes": 4996,
+      "source": "existing_main",
+      "git_blob": "1a4a5bdf66822828155f438bae0f5face790b9ef"
+    },
+    {
+      "path": "database/migrations/0331_workflow_definition_contract_store.sql",
+      "sha256": "8949edf6c11b5e9a876eca1360bd2c8b45f5c4ded3a3f1e935e555583d4f051e",
+      "bytes": 7411,
+      "source": "reviewed_source_only_not_installed"
+    },
+    {
+      "path": "database/migrations/0332_workflow_definition_bundle_store_successor.sql",
+      "sha256": "6710e2f93b0d410aaa3fcca7eeb2a6107d2470a6588f76248fb39398c0eeb4bf",
+      "bytes": 87410,
+      "source": "reviewed_source_only_not_installed"
+    },
+    {
+      "path": "database/rollback/0332_workflow_definition_bundle_store_successor.sql",
+      "sha256": "7a4715b278b6fb5bcdcb9edd2c9a353037d0171b2d9146a01a5a1bef71336d1b",
+      "bytes": 17873,
+      "source": "reviewed_source_only_not_installed"
+    }
+  ],
+  "functions": 28,
+  "source_function_body_pins": {
+    "validate_video_canon_verification_bundle": "531eb789e024d6ada6540f265d1de29eb21135f4dfbf53c8129430c232d2cb90",
+    "validate_video_canon_verification": "3a9ec52c61d9efb589bfa22470dc115e74091c322e8d7e8e3acfac326bcd6d8b"
+  },
+  "budgets": {
+    "cpus": 1,
+    "memory_bytes": 1073741824,
+    "pids": 128,
+    "PGDATA_tmpfs_bytes": 536870912,
+    "pull_seconds": 90,
+    "driver_wall_seconds": 300,
+    "job_timeout_minutes": 8,
+    "SQL_statement_ms": 3000,
+    "lock_ms": 1000
+  },
+  "synthetic_data": {
+    "schools": 1,
+    "school_origin": "unchanged0001_seed_in_disposable_instance_only",
+    "sources": 0,
+    "candidates": 0,
+    "bundles": 0,
+    "verifications": 0,
+    "KI_KV": 0,
+    "activations": 0,
+    "lessons": 0,
+    "fixture_LOGINs": [
+      "source_only_outsider"
+    ],
+    "passwords": 0,
+    "receipt_providers": 0
+  },
+  "uploads": {
+    "cache": false,
+    "artifact": false,
+    "issue_comments": false,
+    "container_registry": false
+  },
+  "actual_runs": 0,
+  "genuine_Canon_checks": 0
+}
