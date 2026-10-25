@@ -5,9 +5,9 @@ No Oracle, credential export, fallback, user SQL, private book inputs or grants.
 The exact selector fixes the source contract, not the existence of current rights.
 """
 from __future__ import annotations
-import datetime,hashlib,importlib,json,os,re,stat,sys,time
+import datetime,hashlib,importlib,ipaddress,json,os,re,select,socket,ssl,stat,sys,time,types
 from pathlib import Path
-from urllib.parse import parse_qs,urlsplit
+from urllib.parse import parse_qs,unquote_to_bytes,urlsplit
 from uuid import UUID
 
 PROJECT='misty-poetry-18012774'
@@ -89,10 +89,71 @@ def connect_books_owned(driver,raw):
     return driver.connect(raw,connect_timeout=5,autocommit=True,options=OPTIONS,
         application_name='books-actions-readonly')
 
+CONNECT_ERROR_CLASSES=frozenset({'timeout','dns','tls','auth','driver','config','other'})
+
+def classify_connect_failure(exc,driver):
+    """Fixed fields from trusted types only: never inspect exception data/text/chain.
+
+    A category identifies a typed layer, not a proven underlying cause. libpq
+    often supplies a generic OperationalError: that deliberately stays other.
+    Optional driver classes missing from the qualified module stay unclassified.
+    """
+    fallback=('other','UNCLASSIFIED_CONNECT_EXCEPTION',None)
+    actual=type(exc)
+    if type(actual)is not type:
+        return fallback
+    ancestry=type.__getattribute__(actual,'__mro__')
+    def matches(cls):
+        return type(cls)is type and any(base is cls for base in ancestry)
+    for cls,category,basis in (
+        (TimeoutError,'timeout','TYPED_TIMEOUT'),
+        (socket.gaierror,'dns','TYPED_DNS_RESOLUTION'),
+        (ssl.SSLError,'tls','TYPED_TLS_LAYER'),
+        (ImportError,'driver','CLIENT_IMPORT_ERROR'),
+        (TypeError,'driver','CLIENT_API_TYPE_ERROR'),
+        (ValueError,'config','CLIENT_VALUE_ERROR'),
+    ):
+        if matches(cls):
+            return category,basis,None
+    if type(driver)is not types.ModuleType:
+        return fallback
+    namespace=vars(driver)
+    base_error=namespace.get('Error')
+    if (type(base_error)is not type or base_error in (Exception,BaseException)
+        or not issubclass(base_error,Exception)
+        or type.__getattribute__(base_error,'__module__')not in ('psycopg','psycopg.errors')):
+        return fallback
+    errors=namespace.get('errors')
+    error_namespace=vars(errors)if type(errors)is types.ModuleType else {}
+    def trusted_error(source,name):
+        cls=source.get(name)
+        if (type(cls)is not type or cls is base_error
+            or type.__getattribute__(cls,'__name__')!=name
+            or type.__getattribute__(cls,'__module__')not in ('psycopg','psycopg.errors')
+            or not any(base is base_error for base in type.__getattribute__(cls,'__mro__'))):
+            return None
+        return cls
+    rules=(
+        (error_namespace,'ConnectionTimeout','timeout','DRIVER_TYPED_TIMEOUT',None),
+        (error_namespace,'InvalidPassword','auth','PG_INVALID_PASSWORD_CLASS','28P01'),
+        (error_namespace,'InvalidAuthorizationSpecification','auth','PG_AUTHORIZATION_CLASS','28000'),
+        (error_namespace,'InvalidParameterValue','config','PG_PARAMETER_CLASS','22023'),
+        (namespace,'ProgrammingError','config','DRIVER_PROGRAMMING_ERROR',None),
+        (namespace,'InterfaceError','driver','DRIVER_INTERFACE_ERROR',None),
+        (namespace,'NotSupportedError','driver','DRIVER_UNSUPPORTED_ERROR',None),
+        (namespace,'OperationalError','other','DRIVER_OPERATIONAL_UNCLASSIFIED',None),
+    )
+    for source,name,category,basis,sqlstate in rules:
+        if matches(trusted_error(source,name)):
+            return category,basis,sqlstate
+    return fallback
+
+
 def snapshot(driver,env,now=None,before_driver=None):
     """One connection and two fixed catalog SELECTs; no Books payload rows."""
     connection=None;tx=False;entered=False;selects=0;identity=False;schema=False
     cleanup='NOT_CONNECTED';code='BOOKS_RUNTIME_FAILURE';status='CLOSED'
+    connect_diag=(None,None,None);connect_call_returned=False
     try:
         execution_identity(env)
         route_attested(env.get('BOOKS_ROUTE_ATTESTATION',''),now or datetime.datetime.now(datetime.timezone.utc))
@@ -101,7 +162,12 @@ def snapshot(driver,env,now=None,before_driver=None):
         raw=strict_dsn(raw)
         if before_driver is not None:before_driver()
         entered=True
-        connection=connect_books_owned(driver,raw)
+        try:
+            connection=connect_books_owned(driver,raw)
+            connect_call_returned=True
+        except BaseException as exc:
+            connect_diag=classify_connect_failure(exc,driver)
+            raise
         need(connection is not None,'BOOKS_DRIVER_UNQUALIFIED')
         info=connection.info
         need((info.host,info.dbname,info.user,info.port)==(HOST,DATABASE,ROLE,5432),'BOOKS_CONNECTION_TARGET')
@@ -137,7 +203,9 @@ def snapshot(driver,env,now=None,before_driver=None):
             else:cleanup='ROLLBACK_AND_CLOSE_CONFIRMED'if tx else'CLOSE_CONFIRMED_NO_TRANSACTION'
     return {'status':status,'code':code,'driver_entered':entered,'select_count':selects,
         'identity_verified':identity,'schema_verified':schema,'cleanup':cleanup,
-        'retry_allowed':False,'write_admitted':False,'Books_authority_attested':False}
+        'retry_allowed':False,'write_admitted':False,'Books_authority_attested':False,
+        'connect_call_returned':connect_call_returned,'connect_error_class':connect_diag[0],
+        'connect_error_basis':connect_diag[1],'connect_error_sqlstate':connect_diag[2]}
 
 def driver_from_target(path):
     """Approved official hash-locked install target; no site/.pth loading."""
@@ -160,6 +228,144 @@ def exclusive(path,value):
         with os.fdopen(fd,'wb',closefd=False)as out:out.write(raw);out.flush();os.fsync(fd)
     finally:os.close(fd)
 
+CONNECT_ONLY_CODES=frozenset({'BOOKS_CONNECT_ONLY_OK','BOOKS_CONNECT_POLL_FAILED',
+ 'BOOKS_CONNECT_DEADLINE','BOOKS_CONNECT_ONLY_FAILURE','BOOKS_CLIENT_CLEANUP_UNKNOWN'})
+
+def libpq_failure_hint(buffer,secrets):
+    """Process bounded, in-process bytes into hints; no text is ever returned.
+
+    The native getter may already have materialized a larger buffer. Reject it;
+    never truncate-and-match. Patterns are hints from untrusted text, not causes.
+    """
+    fallback=('other','UNRECOGNIZED_LIBPQ_BUFFER','unknown')
+    if type(buffer)is not bytes or len(buffer)>8192 or type(secrets)is not tuple:
+        return ('other','LIBPQ_BUFFER_NOT_CLASSIFIED','unknown')
+    if any(type(s)is not bytes for s in secrets):
+        return ('other','LIBPQ_BUFFER_NOT_CLASSIFIED','unknown')
+    masked=buffer
+    for secret in sorted(set(secrets),key=len,reverse=True):
+        if secret:masked=masked.replace(secret,b'\x00')
+    masked=masked.lower()
+    # The prefix and full phrase matter; isolated words and free-form SQLSTATE
+    # strings are never interpreted as proof of a cause.
+    prefix=rb'(?:^|\n)(?:connection (?:failed|to server [^\n]{0,512} failed):[ \t]*)?'
+    rules=(
+      ('auth',prefix+rb'(?:fatal|error):[ \t]+password authentication failed for user\b'),
+      ('auth',prefix+rb'(?:fatal|error):[ \t]+(?:role|user) [^\n]{1,256} does not exist\b'),
+      ('tls',prefix+rb'(?:ssl error:[ \t]+[^\n]{0,128}certificate verify failed|server does not support ssl, but ssl was required)\b'),
+      ('tls',prefix+rb'(?:ssl error:[ \t]+[^\n]{0,128}(?:handshake failure|protocol version)|channel binding required, but ssl not in use)\b'),
+      ('config',prefix+rb'(?:fatal|error):[ \t]+(?:unsupported startup parameter|unrecognized configuration parameter|invalid value for parameter)\b'),
+      ('config',prefix+rb'(?:fatal|error):[ \t]+endpoint id is not specified\b'),
+    )
+    hits={category for category,pattern in rules if re.search(pattern,masked)}
+    if len(hits)!=1:return fallback if not hits else('other','AMBIGUOUS_LIBPQ_HINT','unknown')
+    return next(iter(hits)),'LIBPQ_MESSAGE_PATTERN_HINT','hint'
+
+def connect_only(driver,env,now=None,*,resolve=socket.getaddrinfo,
+                 wait=select.select,clock=time.monotonic):
+    """One DNS result, one owned native handle, no application SQL or retry."""
+    result={'status':'UNKNOWN','code':'BOOKS_CONNECT_ONLY_FAILURE','phase':'PRECHECK',
+      'failure_phase':None,'connect_error_class':None,'connect_error_basis':None,
+      'connect_error_certainty':None,'dns_result_selected':False,'native_start_calls':0,
+      'connect_poll_succeeded':False,'tls_established':None,'password_auth_used':None,
+      'native_finish_attempted':False,'client_cleanup':'NOT_CREATED',
+      'server_cleanup':'UNVERIFIED','application_sql_count':0,'retry_allowed':False,
+      'write_admitted':False,'Books_authority_attested':False}
+    native=None;owned=False;phase='PRECHECK'
+    try:
+        execution_identity(env)
+        route_attested(env.get('BOOKS_ROUTE_ATTESTATION',''),now or datetime.datetime.now(datetime.timezone.utc))
+        need(not any(k.startswith('PG')for k in env),'BOOKS_LIBPQ_ENVIRONMENT_FORBIDDEN')
+        raw=env.get('BRIDGE_WORKER_DATABASE_URL','');need(bool(raw),'BOOKS_SOURCE_MISSING')
+        raw=strict_dsn(raw)
+        phase='RESOLVE'
+        rows=resolve(HOST,5432,type=socket.SOCK_STREAM,proto=socket.IPPROTO_TCP)
+        need(type(rows)is list and 0<len(rows)<=64,'BOOKS_DRIVER_UNQUALIFIED')
+        first=rows[0]
+        need(type(first)is tuple and len(first)==5 and first[0]in(socket.AF_INET,socket.AF_INET6)
+             and first[1]==socket.SOCK_STREAM and first[2]==socket.IPPROTO_TCP
+             and type(first[4])is tuple and len(first[4])>=2
+             and type(first[4][0])is str and type(first[4][1])is int and first[4][1]==5432,'BOOKS_DRIVER_UNQUALIFIED')
+        address=ipaddress.ip_address(first[4][0])
+        need(address.is_global and not address.is_multicast
+             and address.version==(4 if first[0]==socket.AF_INET else 6),'BOOKS_DRIVER_UNQUALIFIED')
+        result['dns_result_selected']=True
+        phase='BUILD_PARAMETERS'
+        # Preserve the original host for SNI/auth semantics. One hostaddr prevents
+        # the high-level connect() loop over multiple resolved addresses.
+        info=driver.conninfo.make_conninfo(raw,host=HOST,hostaddr=str(address),port=5432,
+             connect_timeout=5,sslmode='require',channel_binding='require',
+             gssencmode='disable',options=OPTIONS,
+             application_name='books-connect-diag-'+env['BOOKS_REQUEST_ID'][:8])
+        need(type(info)is str and len(info)<=32768,'BOOKS_DRIVER_UNQUALIFIED')
+        encoded=urlsplit(raw).password.encode('utf-8')
+        decoded=unquote_to_bytes(urlsplit(raw).password)
+        scrub=(raw.encode('utf-8'),info.encode('utf-8'),encoded,decoded,
+               decoded.replace(b'\\',b'\\\\').replace(b"'",b"\\'"))
+        deadline=clock()+5.0
+        phase='START';result['native_start_calls']=1
+        native=driver.pq.PGconn.connect_start(info.encode('utf-8'))
+        need(type(native)is driver.pq.PGconn,'BOOKS_DRIVER_UNQUALIFIED');owned=True
+        phase='POLL';polls=0
+        while True:
+            remaining=deadline-clock()
+            if remaining<=0:
+                result.update(code='BOOKS_CONNECT_DEADLINE',connect_error_class='timeout',
+                  connect_error_basis='LOCAL_MONOTONIC_DEADLINE',connect_error_certainty='stage')
+                result['failure_phase']=phase;break
+            polls+=1;need(polls<=1000,'BOOKS_DRIVER_UNQUALIFIED')
+            state=native.connect_poll()
+            if clock()>=deadline:
+                result.update(code='BOOKS_CONNECT_DEADLINE',connect_error_class='timeout',
+                  connect_error_basis='LOCAL_MONOTONIC_DEADLINE',connect_error_certainty='stage')
+                result['failure_phase']=phase;break
+            if state==driver.pq.PollingStatus.OK:
+                need(native.status==driver.pq.ConnStatus.OK,'BOOKS_SESSION_POLICY')
+                result['connect_poll_succeeded']=True
+                result['tls_established']=native.ssl_in_use is True
+                result['password_auth_used']=native.used_password is True
+                if not result['tls_established']or not result['password_auth_used']:
+                    result.update(code='BOOKS_SESSION_POLICY',connect_error_class='tls'if not result['tls_established']else'auth',
+                      connect_error_basis='TLS_NOT_ACTIVE'if not result['tls_established']else'PASSWORD_USE_NOT_OBSERVED',
+                      connect_error_certainty='stage',failure_phase=phase)
+                    break
+                result.update(status='CONNECT_ONLY_CLIENT_CLOSED',code='BOOKS_CONNECT_ONLY_OK')
+                break
+            if state==driver.pq.PollingStatus.FAILED:
+                category,basis,certainty=libpq_failure_hint(native.error_message,scrub)
+                result.update(code='BOOKS_CONNECT_POLL_FAILED',connect_error_class=category,
+                              connect_error_basis=basis,connect_error_certainty=certainty)
+                result['failure_phase']=phase;break
+            need(state in(driver.pq.PollingStatus.READING,driver.pq.PollingStatus.WRITING),'BOOKS_DRIVER_UNQUALIFIED')
+            fd=native.socket;need(type(fd)is int and fd>=0,'BOOKS_DRIVER_UNQUALIFIED')
+            remaining=deadline-clock()
+            if remaining>0:
+                read=[fd]if state==driver.pq.PollingStatus.READING else[]
+                write=[fd]if state==driver.pq.PollingStatus.WRITING else[]
+                wait(read,write,[],min(0.25,remaining))
+    except BaseException as exc:
+        category,basis,_=classify_connect_failure(exc,driver)
+        result.update(connect_error_class=category,connect_error_basis=basis,
+                      connect_error_certainty='typed'if category!='other'else'unknown')
+        if type(exc)is Closed and len(exc.args)==1 and type(exc.args[0])is str and exc.args[0]in SAFE:
+            result['code']=exc.args[0]
+        result['failure_phase']=phase
+    finally:
+        if owned:
+            result['native_finish_attempted']=True
+            try:
+                native.finish()
+                closed=native.pgconn_ptr is None
+            except BaseException:closed=False
+            result['client_cleanup']='FINISHED_POINTER_NONE'if closed else'UNKNOWN'
+            if not closed:result.update(status='UNKNOWN',code='BOOKS_CLIENT_CLEANUP_UNKNOWN')
+        elif result['native_start_calls']:
+            result.update(status='UNKNOWN',code='BOOKS_CLIENT_CLEANUP_UNKNOWN',client_cleanup='UNKNOWN')
+        result['phase']='FINISHED'if result['client_cleanup']=='FINISHED_POINTER_NONE'else phase
+    need(len(json.dumps(result,separators=(',',':')).encode())<=1024,'BOOKS_RUNTIME_FAILURE')
+    return result
+
+
 def main():
     # Mute native/provider stdout/stderr before it can access the selected input.
     output=os.dup(1);null=os.open(os.devnull,os.O_RDWR)
@@ -177,7 +383,7 @@ def main():
         exclusive(folder/'intent.json',{'state':'INTENT_OUTCOME_UNKNOWN','retry_allowed':False})
         # No application module import, dotenv, alternate URI or untrusted input code.
         driver=driver_from_target(str(root/'books-driver'))
-        result=snapshot(driver,os.environ)
+        result=connect_only(driver,os.environ)
         exclusive(folder/'result.json',result)
     except BaseException as exc:
         code=exc.args[0]if type(exc)is Closed and len(exc.args)==1 and type(exc.args[0])is str and exc.args[0]in SAFE else'BOOKS_RUNTIME_FAILURE'
@@ -185,5 +391,5 @@ def main():
     finally:
         raw=(json.dumps(result,separators=(',',':'))+'\n').encode()
         os.write(output,raw if len(raw)<=4096 else b'{"status":"UNKNOWN","retry_allowed":false}\n');os.close(output)
-    return 0 if result.get('status')=='READONLY_METADATA_COMPLETE_NOT_AUTHORITY'else 1
+    return 0 if result.get('status')=='CONNECT_ONLY_CLIENT_CLOSED'else 1
 if __name__=='__main__':raise SystemExit(main())
