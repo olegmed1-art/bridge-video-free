@@ -231,17 +231,17 @@ def exclusive(path,value):
 CONNECT_ONLY_CODES=frozenset({'BOOKS_CONNECT_ONLY_OK','BOOKS_CONNECT_POLL_FAILED',
  'BOOKS_CONNECT_DEADLINE','BOOKS_CONNECT_ONLY_FAILURE','BOOKS_CLIENT_CLEANUP_UNKNOWN'})
 
-def libpq_failure_hint(buffer,secrets):
+def libpq_failure_diagnostic(buffer,secrets):
     """Process bounded, in-process bytes into hints; no text is ever returned.
 
     The native getter may already have materialized a larger buffer. Reject it;
     never truncate-and-match. Patterns are hints from untrusted text, not causes.
     """
-    fallback=('other','UNRECOGNIZED_LIBPQ_BUFFER','unknown')
+    fallback=('other','UNRECOGNIZED_LIBPQ_BUFFER','unknown',None,None)
     if type(buffer)is not bytes or len(buffer)>8192 or type(secrets)is not tuple:
-        return ('other','LIBPQ_BUFFER_NOT_CLASSIFIED','unknown')
+        return ('other','LIBPQ_BUFFER_NOT_CLASSIFIED','unknown',None,None)
     if any(type(s)is not bytes for s in secrets):
-        return ('other','LIBPQ_BUFFER_NOT_CLASSIFIED','unknown')
+        return ('other','LIBPQ_BUFFER_NOT_CLASSIFIED','unknown',None,None)
     masked=buffer
     for secret in sorted(set(secrets),key=len,reverse=True):
         if secret:masked=masked.replace(secret,b'\x00')
@@ -250,23 +250,49 @@ def libpq_failure_hint(buffer,secrets):
     # strings are never interpreted as proof of a cause.
     prefix=rb'(?:^|\n)(?:connection (?:failed|to server [^\n]{0,512} failed):[ \t]*)?'
     rules=(
-      ('auth',prefix+rb'(?:fatal|error):[ \t]+password authentication failed for user\b'),
-      ('auth',prefix+rb'(?:fatal|error):[ \t]+(?:role|user) [^\n]{1,256} does not exist\b'),
-      ('tls',prefix+rb'(?:ssl error:[ \t]+[^\n]{0,128}certificate verify failed|server does not support ssl, but ssl was required)\b'),
-      ('tls',prefix+rb'(?:ssl error:[ \t]+[^\n]{0,128}(?:handshake failure|protocol version)|channel binding required, but ssl not in use)\b'),
-      ('config',prefix+rb'(?:fatal|error):[ \t]+(?:unsupported startup parameter|unrecognized configuration parameter|invalid value for parameter)\b'),
-      ('config',prefix+rb'(?:fatal|error):[ \t]+endpoint id is not specified\b'),
+      ('auth',None,prefix+rb'(?:fatal|error):[ \t]+password authentication failed for user\b'),
+      ('auth',None,prefix+rb'(?:fatal|error):[ \t]+(?:role|user) [^\n]{1,256} does not exist\b'),
+      ('tls',None,prefix+rb'(?:ssl error:[ \t]+[^\n]{0,128}certificate verify failed|server does not support ssl, but ssl was required)\b'),
+      ('tls',None,prefix+rb'(?:ssl error:[ \t]+[^\n]{0,128}(?:handshake failure|protocol version)|channel binding required, but ssl not in use)\b'),
+      ('config','CONFIG_UNSUPPORTED_STARTUP_PARAMETER_HINT',prefix+rb'(?:fatal|error):[ \t]+unsupported startup parameter\b'),
+      ('config','CONFIG_UNRECOGNIZED_PARAMETER_HINT',prefix+rb'(?:fatal|error):[ \t]+unrecognized configuration parameter\b'),
+      ('config','CONFIG_INVALID_PARAMETER_VALUE_HINT',prefix+rb'(?:fatal|error):[ \t]+invalid value for parameter\b'),
+      ('config','CONFIG_ENDPOINT_ID_MISSING_HINT',prefix+rb'(?:fatal|error):[ \t]+endpoint id is not specified\b'),
     )
-    hits={category for category,pattern in rules if re.search(pattern,masked)}
-    if len(hits)!=1:return fallback if not hits else('other','AMBIGUOUS_LIBPQ_HINT','unknown')
-    return next(iter(hits)),'LIBPQ_MESSAGE_PATTERN_HINT','hint'
+    hits=[(category,detail,match)for category,detail,pattern in rules
+          for match in re.finditer(pattern,masked)]
+    categories={category for category,_,_ in hits}
+    if len(categories)!=1:
+        return fallback if not hits else('other','AMBIGUOUS_LIBPQ_HINT','unknown',None,None)
+    category=next(iter(categories));detail=None;parameter=None
+    if category=='config':
+        details={value for _,value,_ in hits}
+        detail=next(iter(details))if len(details)==1 else'CONFIG_MULTIPLE_MATCHING_HINTS'
+        # Return only names already hardcoded by this connector, never values or
+        # unknown identifiers. These remain text-pattern hints, not authority.
+        name=rb'(options|statement_timeout|lock_timeout|idle_in_transaction_session_timeout|default_transaction_read_only|search_path)'
+        parameter_pattern=rb'^[ \t]*:?[ \t]*(?:"'+name+rb'"|\''+name+rb'\'|'+name+rb')(?=$|[ \t:\r\n])'
+        parameters=[]
+        for _,_,match in hits:
+            token=re.match(parameter_pattern,masked[match.end():])
+            parameters.append(next((g.decode('ascii')for g in token.groups()if g is not None),None)if token else None)
+        if len(set(parameters))==1 and 'CONFIG_ENDPOINT_ID_MISSING_HINT'not in details:parameter=parameters[0]
+        if len(details)!=1:parameter=None
+    return category,'LIBPQ_MESSAGE_PATTERN_HINT','hint',detail,parameter
+
+
+def libpq_failure_hint(buffer,secrets):
+    # Compatibility for callers requiring the original three-field contract.
+    return libpq_failure_diagnostic(buffer,secrets)[:3]
+
 
 def connect_only(driver,env,now=None,*,resolve=socket.getaddrinfo,
                  wait=select.select,clock=time.monotonic):
     """One DNS result, one owned native handle, no application SQL or retry."""
     result={'status':'UNKNOWN','code':'BOOKS_CONNECT_ONLY_FAILURE','phase':'PRECHECK',
       'failure_phase':None,'connect_error_class':None,'connect_error_basis':None,
-      'connect_error_certainty':None,'dns_result_selected':False,'native_start_calls':0,
+      'connect_error_certainty':None,'connect_error_detail':None,'connect_error_parameter':None,
+      'dns_result_selected':False,'native_start_calls':0,
       'connect_poll_succeeded':False,'tls_established':None,'password_auth_used':None,
       'native_finish_attempted':False,'client_cleanup':'NOT_CREATED',
       'server_cleanup':'UNVERIFIED','application_sql_count':0,'retry_allowed':False,
@@ -332,9 +358,10 @@ def connect_only(driver,env,now=None,*,resolve=socket.getaddrinfo,
                 result.update(status='CONNECT_ONLY_CLIENT_CLOSED',code='BOOKS_CONNECT_ONLY_OK')
                 break
             if state==driver.pq.PollingStatus.FAILED:
-                category,basis,certainty=libpq_failure_hint(native.error_message,scrub)
+                category,basis,certainty,detail,parameter=libpq_failure_diagnostic(native.error_message,scrub)
                 result.update(code='BOOKS_CONNECT_POLL_FAILED',connect_error_class=category,
-                              connect_error_basis=basis,connect_error_certainty=certainty)
+                              connect_error_basis=basis,connect_error_certainty=certainty,
+                              connect_error_detail=detail,connect_error_parameter=parameter)
                 result['failure_phase']=phase;break
             need(state in(driver.pq.PollingStatus.READING,driver.pq.PollingStatus.WRITING),'BOOKS_DRIVER_UNQUALIFIED')
             fd=native.socket;need(type(fd)is int and fd>=0,'BOOKS_DRIVER_UNQUALIFIED')
