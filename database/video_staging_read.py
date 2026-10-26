@@ -35,6 +35,13 @@ _PUBLIC_BLOCK_CODES = (
     'SOURCE_RUN_BINDING_MISMATCH', 'SOURCE_RUN_BINDING_MISSING', 'SOURCE_RUN_NOT_CURRENT',
     'STAGE_UNSUPPORTED', 'TEXT_HASH_MISMATCH', 'TEXT_INVALID', 'TRUSTED_READ_BINDING_MISSING',
     'UNSAFE_STAGING_REPLAY',
+    'DEFINITION_REPLAY_REQUIRED', 'DEFINITION_CONTEXT_INVALID', 'DEFINITION_CONTEXT_PAYLOAD_MISMATCH',
+    'DEFINITION_MEMBER_NOT_UNIQUE', 'DEFINITION_SOURCE_DRAFT_REQUIRED', 'DEFINITION_SOURCE_SELECTION_MISMATCH',
+    'DEFINITION_PARENT_MISMATCH', 'DEFINITION_OWNER_SELECTION_MISMATCH', 'DEFINITION_REPEATED_SOURCE_MISMATCH',
+    'DEFINITION_ACTUAL_LINEAGE_MISMATCH',
+    'DEFINITION_ACTUAL_JOB_MISMATCH', 'DEFINITION_SCHOOL_KEY_MISMATCH',
+    'DEFINITION_NATIVE_SEGMENT_NOT_UNIQUE', 'DEFINITION_NATIVE_SEGMENT_MISMATCH',
+    'DEFINITION_DIAGNOSTIC_PARENT_MISMATCH',
 )
 
 
@@ -97,7 +104,11 @@ def read_internal_school_video_candidate(connection, candidate_id):
                     raise ValueError('REPLAY_OUTPUT_LINK_MISSING')
                 replay = envelope['replay']
                 validate_replay(replay)
-                _, _, claims = _project(row['payload'], row['candidate_type'])
+                if row['candidate_type']=='video_school_canon_candidate':
+                    from database.video_definition_staging_lineage import require_definition_segment
+                    _, _, claims = require_definition_segment(cursor,row['payload'],replay,lineage)
+                else:
+                    _, _, claims = _project(row['payload'], row['candidate_type'])
                 if any(claims[k] != lineage[k] for k in ('source_video_file_id','source_media_sha256','parent_raw_sha256')):
                     raise ValueError('SOURCE_HASH_BINDING_MISMATCH')
                 now = datetime.now(timezone.utc)
