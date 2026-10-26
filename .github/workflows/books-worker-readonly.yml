@@ -1,0 +1,71 @@
+{
+  "name": "Books connect-only diagnostic",
+  "on": {
+    "workflow_dispatch": {
+      "inputs": {
+        "expected_commit": {
+          "description": "Exact reviewed main commit; never a ref/URL",
+          "required": true,
+          "type": "string"
+        },
+        "request_id": {
+          "description": "One approved canonical UUID; no automatic redispatch",
+          "required": true,
+          "type": "string"
+        },
+        "route_attestation": {
+          "description": "Fresh trusted nonsecret Neon API projection, <=120 seconds",
+          "required": true,
+          "type": "string"
+        }
+      }
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "books-worker-readonly-production",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "books-readonly": {
+      "if": "github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.sha == inputs.expected_commit && github.run_attempt == 1",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 3,
+      "steps": [
+        {
+          "name": "Checkout reviewed commit",
+          "uses": "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "with": {
+            "ref": "${{ inputs.expected_commit }}",
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Existing Python family",
+          "uses": "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+          "with": {
+            "python-version": "3.12"
+          }
+        },
+        {
+          "name": "Verify source and install official hash-locked driver before secret scope",
+          "shell": "bash",
+          "run": "set -euo pipefail\ntest \"$(uname -m)\" = x86_64\npython -I -S -B - <<'PY'\nimport hashlib,json,pathlib\nr=pathlib.Path.cwd()\nm=(r/'ops/books-actions-manifest.json').read_bytes()\nassert hashlib.sha256(m).hexdigest()=='190ad8ae657c29170fd3a51428e9607856a2b7262c380453b94f735ce1e67e1a'\npins=json.loads(m)\nassert set(pins)=={'ops/books_actions_readonly.py','ops/books-actions-requirements.lock'}\nverified={}\nfor name,pin in pins.items():\n p=r/name\n assert p.is_file() and not p.is_symlink()\n raw=p.read_bytes()\n assert len(raw)<=65536 and hashlib.sha256(raw).hexdigest()==pin\n verified[name]=raw\nprint('BOOKS_SOURCE_PINS_OK')\nPY\ntest ! -e \"$RUNNER_TEMP/books-driver\"\npython -m pip --isolated install --disable-pip-version-check --no-cache-dir --no-compile --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple --target \"$RUNNER_TEMP/books-driver\" -r ops/books-actions-requirements.lock\n"
+        },
+        {
+          "name": "One Books connect-only diagnostic",
+          "shell": "bash",
+          "env": {
+            "BRIDGE_WORKER_DATABASE_URL": "${{ secrets.BRIDGE_WORKER_DATABASE_URL }}",
+            "BOOKS_APPROVED_COMMIT": "${{ inputs.expected_commit }}",
+            "BOOKS_REQUEST_ID": "${{ inputs.request_id }}",
+            "BOOKS_ROUTE_ATTESTATION": "${{ inputs.route_attestation }}"
+          },
+          "run": "set -euo pipefail\ntimeout --signal=KILL 30s python -I -S -B - <<'PY'\nimport hashlib,json,pathlib\nr=pathlib.Path.cwd()\nm=(r/'ops/books-actions-manifest.json').read_bytes()\nassert hashlib.sha256(m).hexdigest()=='190ad8ae657c29170fd3a51428e9607856a2b7262c380453b94f735ce1e67e1a'\npins=json.loads(m)\nassert set(pins)=={'ops/books_actions_readonly.py','ops/books-actions-requirements.lock'}\nverified={}\nfor name,pin in pins.items():\n p=r/name\n assert p.is_file() and not p.is_symlink()\n raw=p.read_bytes()\n assert len(raw)<=65536 and hashlib.sha256(raw).hexdigest()==pin\n verified[name]=raw\nname='ops/books_actions_readonly.py'\nexec(compile(verified[name],str(r/name),'exec'),{'__name__':'__main__','__file__':str(r/name)})\nPY\n"
+        }
+      ]
+    }
+  }
+}
