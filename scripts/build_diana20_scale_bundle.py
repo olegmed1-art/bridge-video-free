@@ -260,6 +260,10 @@ def prepare_caller(caller_root, bundle_root, asset_root, output):
     manifest = json.loads(raw_manifest)
     if manifest.get('schema') != 'diana20-pixel-scale-source-bundle/v1':
         raise ValueError('scale bundle required')
+    base = manifest.get('base')
+    if (type(base) is not str or base not in BASES
+            or manifest.get('version') != VERSION + '-' + base):
+        raise ValueError('unsupported scale bundle version')
     for item in manifest['files']:
         read_pinned(bundle_root / item['path'], item['sha256'], item['bytes'])
     selector = NativeScaleSelector(sprite_path=None, asset_root=asset_root)
