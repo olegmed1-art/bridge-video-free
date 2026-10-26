@@ -1,0 +1,289 @@
+{
+  "version": 1,
+  "source_only": true,
+  "genuine_checks": 0,
+  "writer_module_sha256": {
+    "database/video_result_persistence.py": "700a7303bf6f563958c01746892c244d0c437d11508ddcf7c6553194ac17f0b2",
+    "database/source_identity_persistence.py": "e10731528c55afa034dc3bcbc63280d03b0e21bfbe576a0c78de9e6853acf372",
+    "database/video_candidate_persistence.py": "7ce1c5832d3158ab931c444082ef1dedea8bedee939cb1d94747ea4f7be315ed"
+  },
+  "required_columns": {
+    "public.algorithm": [
+      "algorithm_id",
+      "school_id",
+      "stable_key"
+    ],
+    "public.algorithm_version": [
+      "algorithm_id",
+      "algorithm_version_id",
+      "version_label"
+    ],
+    "public.analysis_candidate": [
+      "analysis_candidate_id",
+      "analysis_run_id",
+      "candidate_type",
+      "evidence_refs",
+      "input_fingerprint",
+      "method_version",
+      "payload",
+      "payload_hash",
+      "promotion_status",
+      "quality_status",
+      "rejection_reasons",
+      "school_id",
+      "source_id",
+      "stable_key",
+      "status"
+    ],
+    "public.analysis_run": [
+      "algorithm_key",
+      "algorithm_version",
+      "algorithm_version_id",
+      "analysis_run_id",
+      "checkpoint",
+      "completed_at",
+      "parameters_snapshot",
+      "publication_authorization_status",
+      "qc_summary",
+      "quality_confirmation_status",
+      "run_status",
+      "school_id",
+      "technical_record_status"
+    ],
+    "public.analysis_run_input": [
+      "analysis_run_id",
+      "analysis_run_input_id",
+      "asset_id",
+      "input_role",
+      "metadata"
+    ],
+    "public.analysis_run_output": [
+      "analysis_run_id",
+      "analysis_run_output_id",
+      "artifact_version_id",
+      "output_entity_id",
+      "output_entity_type",
+      "output_role",
+      "publication_id",
+      "status"
+    ],
+    "public.artifact": [
+      "artifact_id",
+      "artifact_type",
+      "school_id",
+      "status",
+      "title"
+    ],
+    "public.artifact_version": [
+      "artifact_id",
+      "artifact_version_id",
+      "asset_id",
+      "generated_by_analysis_run_id",
+      "generation_method",
+      "provenance",
+      "status",
+      "version_label",
+      "version_no"
+    ],
+    "public.asset": [
+      "asset_id",
+      "asset_type",
+      "byte_size",
+      "checksum_algorithm",
+      "checksum_value",
+      "immutable_flag",
+      "mime_type",
+      "school_id"
+    ],
+    "public.asset_location": [
+      "asset_id",
+      "asset_location_id",
+      "availability_status",
+      "last_verified_at",
+      "locator",
+      "storage_provider",
+      "verification_method"
+    ],
+    "public.changeset": [
+      "changeset_id",
+      "command_id",
+      "committed_at",
+      "correlation_id",
+      "school_id",
+      "status"
+    ],
+    "public.decision": [
+      "action_taken",
+      "available_information",
+      "decision_id",
+      "decision_type",
+      "evidence_ids",
+      "interaction_id",
+      "school_id",
+      "sequence_no",
+      "stated_reasoning"
+    ],
+    "public.domain_event": [
+      "aggregate_id",
+      "aggregate_type",
+      "aggregate_version",
+      "changeset_id",
+      "correlation_id",
+      "event_id",
+      "event_type",
+      "idempotency_key",
+      "idempotency_namespace",
+      "partition_key",
+      "payload",
+      "payload_hash",
+      "school_id"
+    ],
+    "public.episode": [
+      "end_offset_seconds",
+      "episode_id",
+      "episode_type",
+      "evidence_ids",
+      "interaction_id",
+      "metadata",
+      "sequence_no",
+      "start_offset_seconds",
+      "summary"
+    ],
+    "public.evidence": [
+      "asset_id",
+      "confidence_class",
+      "end_seconds",
+      "evidence_id",
+      "evidence_type",
+      "locator",
+      "quality_status",
+      "school_id",
+      "source_id",
+      "start_seconds"
+    ],
+    "public.evidence_link": [
+      "analysis_run_id",
+      "evidence_id",
+      "evidence_link_id",
+      "relation_type",
+      "target_entity_id",
+      "target_entity_type",
+      "weight"
+    ],
+    "public.ingestion_item": [
+      "ingestion_item_id",
+      "ingestion_run_id",
+      "native_key",
+      "native_namespace",
+      "payload_hash",
+      "result_ref",
+      "status"
+    ],
+    "public.ingestion_run": [
+      "checkpoint",
+      "completed_at",
+      "counts",
+      "error_manifest",
+      "ingestion_run_id",
+      "schema_version",
+      "school_id",
+      "source_system",
+      "status"
+    ],
+    "public.learning_interaction": [
+      "channel",
+      "interaction_id",
+      "interaction_type",
+      "school_id",
+      "status"
+    ],
+    "public.media_asset": [
+      "duration_seconds",
+      "media_asset_id",
+      "media_metadata",
+      "school_id"
+    ],
+    "public.outbox_message": [
+      "changeset_id",
+      "event_id"
+    ],
+    "public.school": [
+      "school_id",
+      "stable_name",
+      "status"
+    ],
+    "public.source": [
+      "canonical_locator",
+      "school_id",
+      "source_id",
+      "source_type",
+      "title",
+      "trust_class"
+    ],
+    "public.source_asset": [
+      "asset_id",
+      "relation_type",
+      "source_id"
+    ],
+    "public.source_identity": [
+      "attributes",
+      "display_name",
+      "first_seen_at",
+      "last_seen_at",
+      "source_id",
+      "source_identity_id",
+      "source_native_key"
+    ],
+    "public.transcript": [
+      "asr_model_version",
+      "language",
+      "media_asset_id",
+      "provenance",
+      "school_id",
+      "source_id",
+      "status",
+      "transcript_id",
+      "transcript_type"
+    ],
+    "public.transcript_segment": [
+      "confidence_class",
+      "end_seconds",
+      "metadata",
+      "sequence_no",
+      "speaker_label",
+      "start_seconds",
+      "text",
+      "transcript_id",
+      "transcript_segment_id"
+    ]
+  },
+  "ordered_DDL_sha256": {
+    "database/migrations/0001_global_registry.sql": "b5aa773212d6593171d728fb93906f49ea5abf684fc851ceb6996e88bbd7b308",
+    "database/migrations/0002_learning_core.sql": "16fbeb4b60f661e1cdb17f186a92217f36c14ac4ad139c0728791e2e0076f4fb",
+    "database/migrations/0003_event_publication_order.sql": "72094e7a65bd35c97d099225d93c768057113f0417e2ba36360a54351cb3e307",
+    "database/migrations/0004_integrity_guards.sql": "9c2c57d4680e8d5a24ddfc6270b1b16bd5b2da01a8d82714d26705cd3511394f",
+    "database/migrations/0005_runtime_roles.sql": "fc9b3ded9b382744772c0075712c407701901a2eb425fab483e859feeab59aee",
+    "database/migrations/0006_event_immutability_hardening.sql": "899f183142d4c039bf7e7e244c1ed200ca455f77fca5a64987a164a654998906",
+    "database/migrations/0007_learning_context.sql": "57ae70a5ae7e4d9010cc62f543f4bb9bf0f54cae2f8522358381fad1b9a581ad",
+    "database/migrations/0008_exercises_homework.sql": "7e67e090e6208c43e12247739037234cf3d3a9af6eba53f7a99d57a07292c6c3",
+    "database/migrations/0009_tournament_data.sql": "89ff9c937cf0710073e8e5536f88e7e4aba99336057db4cae826ea023ac43f05",
+    "database/migrations/0010_knowledge_media.sql": "82827aa0855ef03f4f101aecdba1c179d80b56c890a8c14a8e254922c1ba6899",
+    "database/migrations/0049_analysis_candidate_staging.sql": "939a2d8948350eedd518b4a3a0ae8d370f35f9bf626b5fcea6f6fe9afe387414",
+    "database/migrations/0200_bidding_knowledge_v0.sql": "68d4207d2f02f68de93d46b00dd8a564a74f72b32092ce0c257296e5b5b0a5fd",
+    "database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql": "33708210b2bdd146ca48a99396a7b4fba87012cd72214315fe30759cb68b5c85",
+    "database/migrations/0200_bidding_knowledge_v0/02_tests_conflicts_activation.sql": "b0b1357d441bdcf8264587056ad10c38f42ac9f30470f0c63dd9425f503f184d",
+    "database/migrations/0200_bidding_knowledge_v0/03_activation_immutability_trace.sql": "22f53e1f772bb4607ec1eaf4d624f3169d0af9c1460014b0138ab747b7df535f",
+    "database/migrations/0200_bidding_knowledge_v0/04_ingestion_audit.sql": "3f82fb7620201b7aded7ebfbb52fd888950865853e20209ff58cf5305d1b77b1",
+    "database/migrations/0200_bidding_knowledge_v0/05_runtime_views.sql": "ea397213b87f7001ffcc5b6f78d9483dc3547678845b59747790dd5fc6212296",
+    "database/migrations/0200_bidding_knowledge_v0/06_privileges.sql": "96a45de92019240387a7ee1931149327964ba9fba6bd67c5d8fd043fea0dfd4b",
+    "database/migrations/0200_bidding_knowledge_v0/07_function_acl.sql": "4e9c414f2b3291305f2f1a9537cc1c4e1392410564d1f0dfa57ee0f1825d33be",
+    "database/migrations/0200_bidding_knowledge_v0/08_internal_acl_and_registry.sql": "b76c821e14c365684f0f8694463c34138e26b5e5a95a9ba92678cabf43469a19",
+    "database/migrations/0051_bridge_video_meta_evidence_gate.sql": "8ff6dd3c5008d6e2efb2e2025780be6c6b1632ce1954322ca456f296b13aad93",
+    "database/migrations/0329_workflow_video_canon_ai_promotion.sql": "8436640539e288aeae70c6c6dc66dd4465f241dbb38bb63fa85515a9354bb4be",
+    "database/migrations/0330_workflow_canon_source_domain_policy.sql": "f61d0a224099ad53fae1e123b63854e723245a953bf861adfee22c0492422557",
+    "database/migrations/0331_workflow_definition_contract_store.sql": "8949edf6c11b5e9a876eca1360bd2c8b45f5c4ded3a3f1e935e555583d4f051e",
+    "database/migrations/0332_workflow_definition_bundle_store_successor.sql": "6710e2f93b0d410aaa3fcca7eeb2a6107d2470a6588f76248fb39398c0eeb4bf",
+    "database/proposals/definition_staging_identity_v2.sql": "05f54c1b82a1095111f07c8e5aa2b35351a42377dc965df99c3f0c4f18c072b4"
+  },
+  "proof": "Fresh declared-column source AST reconstruction; not native qualification or genuine receipts."
+}

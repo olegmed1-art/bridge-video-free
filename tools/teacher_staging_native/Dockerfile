@@ -8,6 +8,6 @@ RUN python -m pip --isolated install --disable-pip-version-check --no-cache-dir 
  && python -I -B -c "import sys,psycopg,psycopg.pq; assert sys.version_info[:3]==(3,12,15); assert psycopg.__version__=='3.3.4'; assert psycopg.pq.__impl__=='binary'"
 COPY source ./source
 COPY sql ./sql
-COPY native_fixture.py native_cases.py ./
+COPY native_fixture.py native_cases.py prerequisites.py WRITER_SCHEMA_CONTRACT.json ./
 USER 999:999
 ENTRYPOINT ["python","-I","-B","/qualification/native_cases.py"]

@@ -9,6 +9,8 @@ HERE=Path(__file__).resolve().parent
 sys.path[:0]=[str(HERE/'source'),str(HERE)]
 import staging_runner as runner
 from native_fixture import create,encode,digest
+from prerequisites import (load_contract,validate_writer_prerequisites,PrerequisiteMissing,
+    safe_sql_diagnostic,safe_failure_code,safe_failure_type,writer_failure_summary)
 
 class NativeAdapter:
     evidence_class='AUTHORIZED_CALLER_CONNECTION'  # Actual disposable PG connection, never project authority.
@@ -16,6 +18,7 @@ class NativeAdapter:
         self.outcomes={};self.pids={};self.target=None;self.abort=abort;self.ack_lost=ack_lost
         self.isolation=isolation;self.same_identity=same_identity;self.write_pid=None
         self.abort_reached=False;self.ack_suppressed=False
+        self.schema_contract=load_contract();self.last_sql_diagnostic=None
     def connect(self):
         import psycopg
         c=psycopg.connect(host='/var/run/postgresql',port=5432,dbname='teacher0332',user='postgres',
@@ -50,7 +53,8 @@ class NativeAdapter:
                 yield c
                 if self.abort:
                     self.abort_reached=True;raise RuntimeError('SOURCE_ONLY_BEFORE_COMMIT_ABORT')
-            except BaseException:
+            except BaseException as exc:
+                self.last_sql_diagnostic=safe_sql_diagnostic(exc,self.schema_contract)
                 self.phase='ROLLBACK_REQUESTED'
                 suppressed=transaction.__exit__(*sys.exc_info())
                 check(not suppressed and not c.closed and c.info.transaction_status==psycopg.pq.TransactionStatus.IDLE,'ROLLBACK_ACK_NOT_CONFIRMED')
@@ -80,6 +84,7 @@ class Cases:
         self.a=NativeAdapter();self.results=[];self.fixture_dir=tempfile.TemporaryDirectory(prefix='SOURCE_ONLY_',dir='/tmp')
         self.p,self.proposal,self.scope,self.pins=create(Path(self.fixture_dir.name)/'base',runner)
         self.cid=None;self.output=None
+        self.prerequisite_report=None;self.writer_failure=None
     def connection(self):return self.a.connect()
     def q(self,c,sql,args=()):return c.execute(sql,args).fetchall()
     def census(self,c):
@@ -88,7 +93,7 @@ class Cases:
             'bidding.video_canon_ai_verification_bundle','bidding.video_canon_ai_verification'})
         return {n:c.execute('SELECT count(*) FROM '+n).fetchone()[0] for n in names}
     def canon_zero(self,c):
-        for n in ('knowledge_item','knowledge_version','canon_activation','bidding.video_canon_ai_verification_bundle','bidding.video_canon_ai_verification','bidding.video_definition_store_binding'):
+        for n in ('knowledge_item','knowledge_version','canon_activation','bidding.video_canon_ai_verification_bundle','bidding.video_canon_ai_verification','bidding.video_definition_store_binding','bridge_video_evidence_gate'):
             check(c.execute('SELECT count(*) FROM '+n).fetchone()[0]==0,'GENUINE_OR_CANON_ROWS:'+n)
     def read(self,c=None):
         if c is not None and c.info.transaction_status and c.execute('SHOW transaction_read_only').fetchone()[0]=='on':
@@ -161,11 +166,14 @@ class Cases:
         with self.connection() as c:self.canon_zero(c)
     def n02(self):
         with self.connection() as c:
+            self.prerequisite_report=validate_writer_prerequisites(c,self.a.schema_contract)
             self.canon_zero(c)
             check(c.execute('SELECT count(*) FROM algorithm_version WHERE version_label=%s',('SOURCE_ONLY_NATIVE_STAGING_R4',)).fetchone()[0]==1,'FIXTURE_ALGORITHM')
+            check(c.execute("SELECT count(*) FROM algorithm_version WHERE version_label='3.1-free-r25.12-meta' AND status='candidate'").fetchone()[0]==1,'FIXTURE_META_REGISTRATION')
             check(c.execute('SELECT count(*) FROM source').fetchone()[0]==0,'FRESH_FIXTURE_REQUIRED')
     def n03(self):
-        r=runner.persist_with_adapter(self.p,self.a);check(r['status']=='COMMITTED_AND_READ_BACK','FULL_CHAIN:'+str(r))
+        r=runner.persist_with_adapter(self.p,self.a);self.writer_failure=writer_failure_summary(r)
+        check(r['status']=='COMMITTED_AND_READ_BACK','FULL_CHAIN')
         self.output=r;self.cid=r['writer_outputs']['staging_result']['candidate_ids'][0]
         read=r['writer_outputs']['candidate_readback']
         check(read['stage']=='DEFINITION_RESEARCH' and read['accepted_canon']==[] and read['student_delivery_allowed'] is False,'STAGING_HOLD')
@@ -348,12 +356,16 @@ class Cases:
         check(r['status']=='ABSTAIN' and r['Canon_checks_closed_by_this_run']==0,'NO_GENUINE_PROVIDER_HOLD')
     def execute(self):
         for number in range(1,24):
+            self.writer_failure=None
             try:getattr(self,'n'+str(number).zfill(2))();self.after_case();self.results.append(dict(id='N'+str(number).zfill(2),status='PASS'))
             except BaseException as exc:
-                self.results.append(dict(id='N'+str(number).zfill(2),status='FAIL',type=type(exc).__name__,code=str(exc)[:700]));break
+                diagnostic=exc.diagnostic if isinstance(exc,PrerequisiteMissing) else self.a.last_sql_diagnostic or safe_sql_diagnostic(exc,self.a.schema_contract)
+                self.results.append(dict(id='N'+str(number).zfill(2),status='FAIL',type=safe_failure_type(exc),code=safe_failure_code(exc),
+                    prerequisite_diagnostic=diagnostic,writer_outcome=self.writer_failure));break
         return dict(status='PASS_NATIVE_CASES_N01_N23' if len(self.results)==23 and all(r['status']=='PASS' for r in self.results) else 'FAIL_OR_INCOMPLETE',
             cases=self.results,cleanup_case='N24_HOST_PENDING',synthetic_data=True,genuine_checks=0,teacher_ready=False,
             target=list(self.a.target or ()),actual_backend_pids=sorted(set(self.a.pids.values())),
+            writer_schema_prerequisites=self.prerequisite_report,
             ack_fault='Controlled client ACK suppression after actual commit; not an induced network failure',
             source_commit=os.environ.get('GITHUB_SHA'))
 

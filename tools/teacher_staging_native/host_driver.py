@@ -8,7 +8,7 @@ import argparse,hashlib,io,json,os,re,subprocess,sys,tarfile,tempfile,time
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 sys.path.insert(0,str(HERE))
 import r3_driver as r3
-BRANCH='refs/heads/codex/teacher-staging-native-once-20261025'
+BRANCH='refs/heads/codex/teacher-staging-native-once-r2-20261026'
 PG='postgres@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c'
 PY='python@sha256:e8a38829209aea82774882e5157e1f7c3e8c8393ff53a697b3580896e57f345c'
 DOCKER=r3.DOCKER
@@ -20,6 +20,8 @@ def sources():
         p=(ROOT/row['path']).resolve();need(p.is_relative_to(ROOT) and not p.is_symlink(),'SOURCE_PATH')
         raw=p.read_bytes();need(len(raw)==row['bytes'] and digest(raw)==row['sha256'],'SOURCE_PIN:'+row['path'])
     need(m['PG_image']==PG and m['Python_base_image']==PY and m['genuine_checks']==0,'RUNTIME_PINS')
+    need(m['seed_after_install_unit']=='database/migrations/0200_bidding_knowledge_v0.sql'
+        and m['install_order'].index(m['seed_after_install_unit'])<m['install_order'].index('database/migrations/0051_bridge_video_meta_evidence_gate.sql'),'SEED_BEFORE_META_MIGRATION')
     return m
 def guard(m):
     need(os.name=='posix' and os.environ.get('GITHUB_ACTIONS')=='true','CI_ONLY')
@@ -144,9 +146,13 @@ def execute(m):
             values=','.join('('+r3.lit(p)+')' for p in expected)
             _,out,_=sql("SELECT jsonb_object_agg(path,encode(public.digest(pg_read_binary_file(path),'sha256'),'hex')) FROM (VALUES "+values+") AS pinned(path)")
             need(json.loads(out)==expected,'SERVER_SQL_FILE_HASHES')
+            seed_applied=False
             for path in m['install_order']:
                 commands.run(DOCKER+['exec',s['pg_name'],'psql','-X','-q','-v','ON_ERROR_STOP=1','-U','postgres','-d','teacher0332','-f','/tmp/teacher0332-source/'+path],seconds=20)
-            sql((HERE/'seed.sql').read_text('utf8'))
+                if path==m['seed_after_install_unit']:
+                    need(not seed_applied,'DUPLICATE_FIXTURE_SEED')
+                    sql((HERE/'seed.sql').read_text('utf8'));seed_applied=True
+            need(seed_applied,'FIXTURE_SEED_NOT_APPLIED')
             _,target,_=sql("SELECT json_build_object('database_oid',(SELECT oid::text FROM pg_database WHERE datname=current_database()),'system_identifier',(pg_control_system()).system_identifier::text)")
             target=json.loads(target);report['native_target']=target
             commands.run(DOCKER+['create','--name',s['py_name'],'--label','teacher-stage.run='+run,'--label','teacher-stage.kind=py']+common+[

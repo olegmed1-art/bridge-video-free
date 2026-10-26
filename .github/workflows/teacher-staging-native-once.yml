@@ -1,7 +1,7 @@
 name: Teacher staging native once
 on:
   push:
-    branches: ['codex/teacher-staging-native-once-20261025']
+    branches: ['codex/teacher-staging-native-once-r2-20261026']
 permissions:
   contents: read
 concurrency:
