@@ -79,7 +79,7 @@ def _current(record, now, code):
     _need(now - MAX_SNAPSHOT_AGE <= checked <= now < until, code)
 
 
-def _project(payload, kind):
+def _project(payload, kind, *, definition_replay=None):
     """Explicitly supported existing contracts only; no generic parser."""
     if kind == "video_artifact_source_observation":
         _need(payload["schema"] == "video-artifact-source-observation-v1"
@@ -105,6 +105,10 @@ def _project(payload, kind):
             "parent_canonical_sha256": parent["embedded_canonical_sort_compact_utf8_sha256"],
         }
         text_hash, stage = text["exact_text_utf8_sha256"], "CANDIDATE_RESEARCH"
+    elif kind == 'video_school_canon_candidate':
+        from bridge_contracts.video_definition_staging import project_definition
+        stage, display, claims = project_definition(payload, definition_replay)
+        text_hash = payload['knowledge_version']['content']['definition_evidence']['source_binding']['raw_text_sha256']
     else:
         raise _Blocked("STAGE_UNSUPPORTED")
     _need(isinstance(display["quote"], str) and bool(display["quote"].strip()), "TEXT_INVALID")
@@ -148,10 +152,18 @@ def _validate(candidate_id, school_id, data, now, *, school_internal=False):
     members = [m for m in receipt["candidates"] if m.get("payload_hash") == row["payload_hash"]]
     _need(len(members) == 1, "REPLAY_CANDIDATE_BINDING_MISMATCH")
     member = members[0]
-    _need(all(member.get(k) == row[k] for k in ("candidate_type", "stable_key", "method_version", "quality_status", "payload"))
+    compare_fields=("candidate_type", "method_version", "quality_status", "payload")
+    if row['candidate_type']=='video_school_canon_candidate':
+        from bridge_contracts.definition_staging_identity import definition_staging_keys
+        logical=payload['knowledge_item']['stable_key']
+        _need(member.get('stable_key')==logical and row['stable_key'] in definition_staging_keys(logical,row['payload_hash']),
+              'REPLAY_CANDIDATE_BINDING_MISMATCH')
+    else:
+        _need(member.get('stable_key')==row['stable_key'],'REPLAY_CANDIDATE_BINDING_MISMATCH')
+    _need(all(member.get(k) == row[k] for k in compare_fields)
           and member.get("promotion_status") == "STAGING_ONLY"
           and member.get("authoritative_tables_modified") is False, "REPLAY_CANDIDATE_BINDING_MISMATCH")
-    stage, display, claims = _project(payload, row["candidate_type"])
+    stage, display, claims = _project(payload, row["candidate_type"], definition_replay=receipt)
     _need(all(binding.get(k) == v for k, v in claims.items()), "SOURCE_HASH_BINDING_MISMATCH")
     _need(source["video_file_id"] == claims["source_video_file_id"]
           and source["media_sha256"] == claims["source_media_sha256"], "SOURCE_HASH_BINDING_MISMATCH")
