@@ -9,6 +9,7 @@ on:
       - 'tools/diana20_scale_contract.py'
       - 'scripts/build_diana20_scale_bundle.py'
       - 'tests/test_gambler_card_scale.py'
+      - 'tests/test_gambler_calculated_scale.py'
       - 'tests/test_diana20_gambler_scale.py'
       - '.github/workflows/gambler-pixel-scale-ci.yml'
 
@@ -37,6 +38,7 @@ jobs:
         run: >-
           python -m pytest -q -p no:cacheprovider
           tests/test_gambler_card_scale.py
+          tests/test_gambler_calculated_scale.py
           tests/test_diana20_gambler_scale.py
           tests/test_bridge_vision_bridgit_primary_video.py
           tests/test_bridge_vision_bridgit_gambler_rank_layout.py

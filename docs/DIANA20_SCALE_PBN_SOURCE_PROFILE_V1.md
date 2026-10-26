@@ -81,3 +81,42 @@ change or promotion is authorized by this source-only contract.
 Rollback before installation is to omit the explicit scale profile and keep the
 legacy route. Any later installation needs its own exact target, dependency and
 runtime readback approval. Runtime remains HOLD.
+
+## Staged source binding
+
+`load_staged_scale_pbn_profile(profile_path, expected_sha256=...,
+staged_binding=..., expected_run_id=...)` is an opt-in factory for the same exact
+`VerifiedScalePBNProfile` type. It first reuses the existing source loader and
+its byte/version/authority checks, then rebinds only worker/helper/vendor paths
+to the staged source directory. The original loader and runtime admission are
+unchanged; this function does not install, execute or activate anything.
+
+The provider `video_adapters.diana20.staged_binding.StagedBinding` is owned by
+the runtime integration. Its exact class, immutable identity, required owner
+policy, content/profile pins and trusted request run ID must match. A missing
+provider, subclass, changed identity or unsuccessful recheck fails closed.
+`recheck()` must return `None` on success or raise, and must verify the full
+staged content closure, metadata, process identity and work/scratch policy.
+The factory invokes it before/after load and before/after each payload's byte
+checks. A provider test double does not qualify actual filesystem ownership,
+isolation, completion or runtime admission. Frozen packages remain unchanged;
+a successor source manifest and actual provider qualification are separate.
+
+The adapter continues to preserve UNKNOWN/TIE and source/frame provenance.
+Geometry remains off and exported `runtime_qualified`, `installation_verified`
+and `runtime_admission_granted` remain false. Private profiles, manifests,
+frames, sprites, operational receipts and real provider state are not fixtures
+in this repository. The factory tests use explicit synthetic source bytes and
+a synthetic binding provider. The existing Universal Video CI selects them.
+
+## Calculated-scale regression boundary
+
+The existing Gambler CI also runs calculated-layout tests using geometric
+card-like panels. They check rational coordinate placement, rejection of a
+width-only uniform transform for the taller native variants, JPEG/subpixel
+stress and scale changes. Each target uses its own native dimensions; no real
+frame or original card artwork is stretched. Safe abstention is permitted
+under degradation, but a different selected size is not. No card matching,
+real ground truth, holdout or recognition accuracy is claimed by these tests.
+Original unresized frames with independent blinded annotation remain necessary
+before activation at a new scale. Viewport support is unchanged.
