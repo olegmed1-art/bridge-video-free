@@ -21,6 +21,6 @@ SET LOCAL search_path=pg_catalog;
 SELECT set_config('books.authority_expected_checksum', :'migration_checksum',true) AS books_checksum,
        set_config('books.authority_expected_database', :'books_expected_database',true) AS books_database,
        set_config('books.authority_expected_owner', :'books_expected_owner',true) AS books_owner \gset
-\ir ../migrations/0403_books_authority_core/002_assert.sql
+\ir ../migrations/0500_books_authority_core/002_assert.sql
 COMMIT;
 \echo BOOKS_AUTHORITY_REPLAY_VERIFIED_NO_REGRANT

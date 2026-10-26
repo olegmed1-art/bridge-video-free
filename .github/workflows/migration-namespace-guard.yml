@@ -74,6 +74,18 @@ jobs:
             esac
           done
 
+          for path in database/migrations/05??_*.sql; do
+            base="$(basename "$path" .sql)"
+            suffix="${base#*_}"
+            case "$suffix" in
+              books_*) ;;
+              *)
+                echo "Reserved migration range 0500-0599 is Books only: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           for path in database/tests/09?_*.sql; do
             base="$(basename "$path" .sql)"
             suffix="${base#*_}"
@@ -110,4 +122,17 @@ jobs:
             esac
           done
 
+          for path in database/tests/5??_*.sql; do
+            base="$(basename "$path" .sql)"
+            suffix="${base#*_}"
+            case "$suffix" in
+              books_*) ;;
+              *)
+                echo "Reserved SQL-test range 500-599 is Books only: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           echo 'Reserved migration/test namespaces verified.'
+

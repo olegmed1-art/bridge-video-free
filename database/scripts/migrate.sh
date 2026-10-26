@@ -25,7 +25,7 @@ verify_migration_postcondition() {
   local key="$1" checksum="$2"
   local check="$MIGRATION_CHECKS_DIR/$key.sql"
   if [[ ! -f "$check" ]]; then
-    if [[ "$key" == "0403_books_authority_core" ]]; then
+    if [[ "$key" == "0500_books_authority_core" ]]; then
       echo "Required Books authority postcondition missing" >&2
       return 1
     fi

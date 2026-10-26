@@ -1,4 +1,4 @@
-"""Bounded native PostgreSQL qualification for the isolated Books 0403 component."""
+"""Bounded native PostgreSQL qualification for the isolated Books 0500 component."""
 import hashlib
 import os
 from pathlib import Path
@@ -9,8 +9,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-KEY = '0403_books_authority_core'
-DB = 'bridge_school_books0403_ci'
+KEY = '0500_books_authority_core'
+DB = 'bridge_school_books0500_ci'
 OWNER = 'bridge_ci_owner'
 ADMIN_URL = 'postgresql://postgres:postgres@localhost:5432/bridge_school_ci'
 OWNER_URL = f'postgresql://{OWNER}:{OWNER}@localhost:5432/{DB}'
@@ -28,9 +28,9 @@ def fixture_guard():
         'DATABASE_URL': f'postgresql://{OWNER}:{OWNER}@localhost:5432/bridge_school_ci',
     }
     if any(os.environ.get(k) != v for k, v in required.items()):
-        raise RuntimeError('EXACT_DISPOSABLE_BOOKS0403_CI_REQUIRED')
+        raise RuntimeError('EXACT_DISPOSABLE_BOOKS0500_CI_REQUIRED')
     if not (ROOT / 'database/migrations' / f'{KEY}.sql').is_file():
-        raise RuntimeError('BOOKS0403_SOURCE_MISSING')
+        raise RuntimeError('BOOKS0500_SOURCE_MISSING')
 
 
 def command(argv, *, input_text=None, extra_env=None, timeout=20):
@@ -41,7 +41,7 @@ def command(argv, *, input_text=None, extra_env=None, timeout=20):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 timeout=timeout, env=env, check=False)
     except subprocess.TimeoutExpired as exc:
-        raise AssertionError('BOOKS0403_COMMAND_TIMEOUT') from exc
+        raise AssertionError('BOOKS0500_COMMAND_TIMEOUT') from exc
     # Never emit libpq error text or a connection string into a CI log.
     return result.returncode, result.stdout.strip()
 
@@ -51,9 +51,9 @@ def psql(sql, *, admin=False, admin_fixture=False, success=True):
     code, output = command(['psql', url, '-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1'],
                            input_text=sql)
     if success and code:
-        raise AssertionError('BOOKS0403_SQL_UNEXPECTED_FAILURE')
+        raise AssertionError('BOOKS0500_SQL_UNEXPECTED_FAILURE')
     if not success and not code:
-        raise AssertionError('BOOKS0403_SQL_UNEXPECTED_SUCCESS')
+        raise AssertionError('BOOKS0500_SQL_UNEXPECTED_SUCCESS')
     return output
 
 
@@ -66,18 +66,21 @@ def checksum(migrations):
     return hashlib.sha256(b''.join(chunks)).hexdigest()
 
 
-class Books0403Postgres(unittest.TestCase):
+class Books0500Postgres(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         fixture_guard()
         if psql(f"SELECT count(*) FROM pg_database WHERE datname='{DB}';", admin=True) != '0':
-            raise RuntimeError('BOOKS0403_FOREIGN_FIXTURE_DATABASE_HOLD')
+            raise RuntimeError('BOOKS0500_FOREIGN_FIXTURE_DATABASE_HOLD')
         if psql("SELECT count(*) FROM pg_roles WHERE rolname='bridge_school_worker_principal';",
                 admin=True) != '1':
-            raise RuntimeError('BOOKS0403_WORKER_PRINCIPAL_MISSING')
+            raise RuntimeError('BOOKS0500_WORKER_PRINCIPAL_MISSING')
+        if psql("SELECT count(*) FROM pg_roles WHERE rolname='bridge_school_reader';",
+                admin=True) != '1':
+            raise RuntimeError('BOOKS0500_READER_ROLE_MISSING')
         psql(f'CREATE DATABASE {DB} TEMPLATE template0 OWNER {OWNER};', admin=True)
         cls.created_oid = psql(f"SELECT oid FROM pg_database WHERE datname='{DB}';", admin=True)
-        cls.temp = tempfile.TemporaryDirectory(prefix='books0403-ci-')
+        cls.temp = tempfile.TemporaryDirectory(prefix='books0500-ci-')
         cls.stage = Path(cls.temp.name)
         shutil.copytree(ROOT / 'database/migrations' / KEY,
                         cls.stage / 'migrations' / KEY)
@@ -94,14 +97,14 @@ class Books0403Postgres(unittest.TestCase):
         try:
             if psql(f"SELECT oid FROM pg_database WHERE datname='{DB}';",
                     admin=True) != cls.created_oid:
-                raise AssertionError('BOOKS0403_FIXTURE_IDENTITY_CHANGED')
+                raise AssertionError('BOOKS0500_FIXTURE_IDENTITY_CHANGED')
             if psql(f"SELECT count(*) FROM pg_stat_activity WHERE datname='{DB}';",
                     admin=True) != '0':
-                raise AssertionError('BOOKS0403_FIXTURE_HAS_SESSIONS')
+                raise AssertionError('BOOKS0500_FIXTURE_HAS_SESSIONS')
             psql(f'DROP DATABASE {DB};', admin=True)
             if psql(f"SELECT count(*) FROM pg_database WHERE datname='{DB}';",
                     admin=True) != '0':
-                raise AssertionError('BOOKS0403_FIXTURE_CLEANUP_UNVERIFIED')
+                raise AssertionError('BOOKS0500_FIXTURE_CLEANUP_UNVERIFIED')
         finally:
             if hasattr(cls, 'temp'):
                 cls.temp.cleanup()
@@ -110,7 +113,8 @@ class Books0403Postgres(unittest.TestCase):
         psql('DROP SCHEMA IF EXISTS public CASCADE; '
              f'CREATE SCHEMA public AUTHORIZATION {OWNER}; '
              'CREATE TABLE public.schema_migration('
-             'migration_key text PRIMARY KEY,checksum text,applied_at timestamptz DEFAULT clock_timestamp());')
+             'migration_key text PRIMARY KEY,checksum text,applied_at timestamptz DEFAULT clock_timestamp()); '
+             'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO bridge_school_reader;')
         self.sum = checksum(self.stage / 'migrations')
 
     def wrapper(self, success=True):
@@ -119,7 +123,7 @@ class Books0403Postgres(unittest.TestCase):
                            '-v', f'books_expected_database={DB}',
                            '-v', f'books_expected_owner={OWNER}',
                            '-f', str(self.stage / 'migrations' / f'{KEY}.sql')])
-        self.assertEqual(code == 0, success, 'BOOKS0403_WRAPPER_OUTCOME')
+        self.assertEqual(code == 0, success, 'BOOKS0500_WRAPPER_OUTCOME')
 
     def checker(self, success=True):
         code, _ = command(['psql', OWNER_URL, '-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1',
@@ -127,7 +131,7 @@ class Books0403Postgres(unittest.TestCase):
                            '-v', f'books_expected_database={DB}',
                            '-v', f'books_expected_owner={OWNER}',
                            '-f', str(self.stage / 'migration_checks' / f'{KEY}.sql')])
-        self.assertEqual(code == 0, success, 'BOOKS0403_CHECKER_OUTCOME')
+        self.assertEqual(code == 0, success, 'BOOKS0500_CHECKER_OUTCOME')
 
     def runner(self, success=True):
         env = {'DATABASE_URL': OWNER_URL,
@@ -138,7 +142,7 @@ class Books0403Postgres(unittest.TestCase):
                'BOOKS_AUTHORITY_EXPECTED_OWNER': OWNER}
         code, _ = command(['bash', str(ROOT / 'database/scripts/migrate.sh')],
                            extra_env=env, timeout=30)
-        self.assertEqual(code == 0, success, 'BOOKS0403_RUNNER_OUTCOME')
+        self.assertEqual(code == 0, success, 'BOOKS0500_RUNNER_OUTCOME')
 
     def counts(self):
         return tuple(map(int, psql("SELECT "
@@ -152,18 +156,34 @@ class Books0403Postgres(unittest.TestCase):
              f"WHERE migration_key='{KEY}');").split('|')))
 
     def test_empty_install_and_exact_replay(self):
+        defaults_before = psql("SELECT defaclacl::text FROM pg_default_acl WHERE "
+                               "defaclrole=(SELECT oid FROM pg_roles WHERE rolname=current_user) "
+                               "AND defaclnamespace='public'::regnamespace AND defaclobjtype='r';")
         self.runner()
         self.assertEqual(self.counts(), (5, 3, 5, 1))
+        self.assertEqual(psql("SELECT count(*) FROM pg_class c WHERE "
+                              "c.relnamespace='public'::regnamespace AND c.relname LIKE 'books_authority_%' "
+                              "AND has_table_privilege('bridge_school_reader',c.oid,'SELECT');"), '0')
         self.assertEqual(psql("SELECT count(*) FROM information_schema.role_table_grants "
                               "WHERE grantee='bridge_school_worker_principal' "
                               "AND table_name LIKE 'books_authority_%';"), '0')
         self.runner()
         self.assertEqual(self.counts(), (5, 3, 5, 1))
+        self.assertEqual(psql("SELECT count(*) FROM pg_class c WHERE "
+                              "c.relnamespace='public'::regnamespace AND c.relname LIKE 'books_authority_%' "
+                              "AND has_table_privilege('bridge_school_reader',c.oid,'SELECT');"), '0')
+        self.assertEqual(psql("SELECT defaclacl::text FROM pg_default_acl WHERE "
+                              "defaclrole=(SELECT oid FROM pg_roles WHERE rolname=current_user) "
+                              "AND defaclnamespace='public'::regnamespace AND defaclobjtype='r';"), defaults_before)
 
     def test_partial_or_unknown_provenance_is_hold(self):
         psql('CREATE TABLE public.books_authority_object(object_id text PRIMARY KEY);')
+        self.assertEqual(psql("SELECT has_table_privilege('bridge_school_reader', "
+                              "'public.books_authority_object', 'SELECT');"), 't')
         self.wrapper(False)
         self.assertEqual(self.counts(), (1, 0, 0, 0))
+        self.assertEqual(psql("SELECT has_table_privilege('bridge_school_reader', "
+                              "'public.books_authority_object', 'SELECT');"), 't')
         psql('DROP TABLE public.books_authority_object;')
         psql((self.stage / 'migrations' / KEY / '001_core.sql').read_text())
         self.wrapper(False)

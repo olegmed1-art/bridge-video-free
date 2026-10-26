@@ -4,10 +4,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-KEY = '0403_books_authority_core'
+KEY = '0500_books_authority_core'
 
 
-class Books0403Source(unittest.TestCase):
+class Books0500Source(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.wrapper = (ROOT / 'database/migrations' / f'{KEY}.sql').read_text()
@@ -15,7 +15,9 @@ class Books0403Source(unittest.TestCase):
         cls.assertion = (ROOT / 'database/migrations' / KEY / '002_assert.sql').read_text()
         cls.checker = (ROOT / 'database/migration_checks' / f'{KEY}.sql').read_text()
         cls.runner = (ROOT / 'database/scripts/migrate.sh').read_text()
-        cls.native = (ROOT / 'database/tests/test_books_authority_0403_postgres.py').read_text()
+        cls.native = (ROOT / 'database/tests/test_books_authority_0500_postgres.py').read_text()
+        cls.namespaces = (ROOT / 'database/MIGRATION_NAMESPACES.md').read_text()
+        cls.namespace_guard = (ROOT / '.github/workflows/migration-namespace-guard.yml').read_text()
 
     def test_exact_object_counts_and_no_runtime_grants(self):
         for statement, count in [('CREATE TABLE public.books_authority_', 5),
@@ -29,8 +31,8 @@ class Books0403Source(unittest.TestCase):
         self.assertEqual(self.core.count('SECURITY INVOKER SET search_path = pg_catalog'), 3)
 
     def test_assertion_is_connected_to_both_paths(self):
-        self.assertIn(r'\ir 0403_books_authority_core/002_assert.sql', self.wrapper)
-        self.assertIn(r'\ir ../migrations/0403_books_authority_core/002_assert.sql', self.checker)
+        self.assertIn(r'\ir 0500_books_authority_core/002_assert.sql', self.wrapper)
+        self.assertIn(r'\ir ../migrations/0500_books_authority_core/002_assert.sql', self.checker)
         self.assertIn('BOOKS_AUTHORITY_EXPECTED_DATABASE', self.runner)
         self.assertIn('BOOKS_AUTHORITY_EXPECTED_OWNER', self.runner)
         self.assertIn('Required Books authority postcondition missing', self.runner)
@@ -38,6 +40,11 @@ class Books0403Source(unittest.TestCase):
                         self.runner.index('Bootstrapping checksum for already-applied migration'))
 
     def test_acl_and_check_ownership_are_closed(self):
+        self.assertIn('reader_id IS NULL', self.wrapper)
+        self.assertIn("x.grantee=reader_id AND x.privilege_type='SELECT'", self.wrapper)
+        self.assertEqual(self.core.count('FROM bridge_school_reader;'), 1)
+        self.assertIn('REVOKE SELECT ON TABLE public.books_authority_object', self.core)
+        self.assertIn('has_table_privilege(\'bridge_school_reader\'', self.native)
         self.assertIn('pg_catalog.aclexplode(a.attacl)', self.assertion)
         self.assertIn('a.attnum>0 AND NOT a.attisdropped AND x.grantee<>owner_id', self.assertion)
         self.assertIn('c.relname=item.value->>0', self.assertion)
@@ -55,7 +62,7 @@ class Books0403Source(unittest.TestCase):
                        'test_state_audit_and_immutable_boundaries',
                        'test_invoker_audit_failure_rolls_back_state'):
             self.assertIn(marker, self.native)
-        self.assertIn('EXACT_DISPOSABLE_BOOKS0403_CI_REQUIRED', self.native)
+        self.assertIn('EXACT_DISPOSABLE_BOOKS0500_CI_REQUIRED', self.native)
         self.assertNotIn('neondb', self.native.lower())
         self.assertNotIn('WITH (FORCE)', self.native)
 
@@ -66,6 +73,15 @@ class Books0403Source(unittest.TestCase):
         self.assertLess(ci.index('Apply migrations to ephemeral CI database'),
                         ci.index('Qualify Books authority migration in disposable PostgreSQL 18 database'))
         self.assertIn('timeout-minutes: 3', ci)
+
+    def test_books_namespace_is_explicitly_reserved(self):
+        self.assertIn('0500', self.namespaces)
+        self.assertIn('0599', self.namespaces)
+        self.assertIn('500', self.namespaces)
+        self.assertIn('599', self.namespaces)
+        self.assertIn('database/migrations/05??_*.sql', self.namespace_guard)
+        self.assertIn('database/tests/5??_*.sql', self.namespace_guard)
+        self.assertIn('books_*)', self.namespace_guard)
 
 
 if __name__ == '__main__':

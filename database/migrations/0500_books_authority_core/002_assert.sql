@@ -20,7 +20,7 @@ BEGIN
         RAISE EXCEPTION 'BOOKS_AUTHORITY_TARGET_OR_OWNER_MISMATCH';
     END IF;
     IF current_setting('books.authority_expected_checksum',true) !~ '^[0-9a-f]{64}$'
-       OR NOT EXISTS (SELECT FROM public.schema_migration WHERE migration_key='0403_books_authority_core'
+       OR NOT EXISTS (SELECT FROM public.schema_migration WHERE migration_key='0500_books_authority_core'
                      AND checksum=current_setting('books.authority_expected_checksum',true)) THEN
         RAISE EXCEPTION 'BOOKS_AUTHORITY_PROVENANCE_MISMATCH';
     END IF;

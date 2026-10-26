@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0403: install only the Books authority component. No runtime grants or seed data.
+-- 0500: install only the Books authority component. No runtime grants or seed data.
 -- A complete known component is verified without changes; partial/foreign state is HOLD.
 \if :{?migration_checksum}
 \else
@@ -29,6 +29,7 @@ DECLARE
     owner_id oid := (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user);
     public_id oid := pg_catalog.to_regnamespace('public');
     stored text; known boolean;
+    reader_id oid := (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='bridge_school_reader');
 BEGIN
     IF current_database() IS DISTINCT FROM current_setting('books.authority_expected_database')
        OR current_user IS DISTINCT FROM current_setting('books.authority_expected_owner') OR current_user<>session_user
@@ -40,6 +41,7 @@ BEGIN
             (nspowner=owner_id OR nspowner=COALESCE((SELECT oid FROM pg_catalog.pg_roles WHERE rolname='pg_database_owner'),0))) THEN
         RAISE EXCEPTION 'BOOKS_AUTHORITY_TARGET_OR_OWNER_MISMATCH';
     END IF;
+    IF reader_id IS NULL THEN RAISE EXCEPTION 'BOOKS_AUTHORITY_READER_ROLE_REQUIRED'; END IF;
     IF current_setting('books.authority_expected_checksum')!~'^[0-9a-f]{64}$' THEN
         RAISE EXCEPTION 'BOOKS_AUTHORITY_CHECKSUM_REQUIRED';
     END IF;
@@ -48,7 +50,7 @@ BEGIN
         RAISE EXCEPTION 'BOOKS_AUTHORITY_MIGRATION_BUSY';
     END IF;
     LOCK TABLE public.schema_migration IN SHARE ROW EXCLUSIVE MODE NOWAIT;
-    SELECT checksum INTO stored FROM public.schema_migration WHERE migration_key='0403_books_authority_core';
+    SELECT checksum INTO stored FROM public.schema_migration WHERE migration_key='0500_books_authority_core';
     known:=FOUND;
     IF known THEN
         IF stored IS DISTINCT FROM current_setting('books.authority_expected_checksum') THEN
@@ -69,7 +71,10 @@ BEGIN
         END IF;
         IF EXISTS (SELECT FROM pg_catalog.pg_default_acl d CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) x
                    WHERE d.defaclrole=owner_id AND d.defaclnamespace IN(0,public_id) AND d.defaclobjtype IN('r','f')
-                     AND x.grantee<>owner_id AND NOT(d.defaclobjtype='f'AND x.grantee=0 AND x.privilege_type='EXECUTE'AND NOT x.is_grantable)) THEN
+                     AND x.grantee<>owner_id
+                     AND NOT(d.defaclobjtype='f'AND x.grantee=0 AND x.privilege_type='EXECUTE'AND NOT x.is_grantable)
+                     AND NOT(d.defaclobjtype='r' AND d.defaclnamespace=public_id
+                             AND x.grantee=reader_id AND x.privilege_type='SELECT' AND NOT x.is_grantable)) THEN
             RAISE EXCEPTION 'BOOKS_AUTHORITY_DEFAULT_ACL_HOLD';
         END IF;
         PERFORM set_config('books.authority_apply','true',true);
@@ -77,10 +82,10 @@ BEGIN
 END $books_preflight$;
 SELECT current_setting('books.authority_apply')::boolean AS books_authority_apply \gset
 \if :books_authority_apply
-\ir 0403_books_authority_core/001_core.sql
+\ir 0500_books_authority_core/001_core.sql
 INSERT INTO public.schema_migration(migration_key,checksum)
-VALUES ('0403_books_authority_core',current_setting('books.authority_expected_checksum'));
+VALUES ('0500_books_authority_core',current_setting('books.authority_expected_checksum'));
 \endif
-\ir 0403_books_authority_core/002_assert.sql
+\ir 0500_books_authority_core/002_assert.sql
 COMMIT;
 \echo BOOKS_AUTHORITY_CORE_VERIFIED

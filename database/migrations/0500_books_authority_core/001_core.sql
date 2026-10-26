@@ -35,6 +35,11 @@ CREATE TABLE public.books_authority_phase (
     receipt jsonb NOT NULL CHECK (jsonb_typeof(receipt) = 'object'),
     PRIMARY KEY (grant_id, phase)
 );
+-- 0005's public default ACL gives bridge_school_reader SELECT on future tables.
+-- Remove it only from the five tables created above, in this same transaction.
+REVOKE SELECT ON TABLE public.books_authority_object, public.books_authority_state,
+    public.books_authority_state_audit, public.books_authority_attempt,
+    public.books_authority_phase FROM bridge_school_reader;
 CREATE FUNCTION public.books_authority_immutable() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog AS $$
 BEGIN
     RAISE EXCEPTION 'BOOK_AUTHORITY_IMMUTABLE';
