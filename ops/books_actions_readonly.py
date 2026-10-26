@@ -395,6 +395,267 @@ def connect_only(driver,env,now=None,*,resolve=socket.getaddrinfo,
     return result
 
 
+
+READ_SQL_CODES=frozenset({'BOOKS_SQL_FAILURE','BOOKS_SQL_PROTOCOL','BOOKS_SQL_DEADLINE',
+ 'BOOKS_RESULT_BOUNDS','BOOKS_ROLLBACK_UNKNOWN','BOOKS_SQL_READONLY_OK','BOOKS_CLEANUP_DEADLINE'})
+READ_LOCAL_SQL=(
+ b"SET LOCAL statement_timeout = '2000ms'",
+ b"SET LOCAL lock_timeout = '500ms'",
+ b"SET LOCAL idle_in_transaction_session_timeout = '5000ms'",
+ b"SET LOCAL default_transaction_read_only = on",
+ b"SET LOCAL search_path = pg_catalog",
+)
+READ_IDENTITY_SQL=b"""SELECT
+ (pg_catalog.current_database()=$1::pg_catalog.name) AS c01,
+ (session_user=$2::pg_catalog.name) AS c02, (current_user=$3::pg_catalog.name) AS c03,
+ (pg_catalog.current_setting('transaction_read_only')='on') AS c04,
+ (pg_catalog.current_setting('transaction_isolation')='repeatable read') AS c05,
+ (pg_catalog.current_setting('statement_timeout')='2s') AS c06,
+ (pg_catalog.current_setting('lock_timeout')='500ms') AS c07,
+ (pg_catalog.current_setting('idle_in_transaction_session_timeout')='5s') AS c08,
+ (pg_catalog.current_setting('search_path')='pg_catalog') AS c09,
+ (pg_catalog.current_setting('default_transaction_read_only')='on') AS c10,
+ pg_catalog.pg_has_role(current_user,$4::pg_catalog.name,'USAGE') AS c11,
+ NOT (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname=current_user) AS c12,
+ NOT (SELECT rolbypassrls FROM pg_catalog.pg_roles WHERE rolname=current_user) AS c13,
+ NOT pg_catalog.has_schema_privilege(current_user,'public','CREATE') AS c14"""
+READ_SCHEMA_SQL=SCHEMA_SQL.replace('%s','$1').encode('ascii')
+READ_PREFIX=(BEGIN.encode('ascii'),)+READ_LOCAL_SQL+(READ_IDENTITY_SQL,READ_SCHEMA_SQL)
+READ_ROLLBACK=b'ROLLBACK'
+READ_ID_PARAMS=(DATABASE.encode('ascii'),ROLE.encode('ascii'),ROLE.encode('ascii'),b'bridge_school_worker')
+READ_TABLE_PARAMS=(('{'+','.join(TABLES)+'}').encode('ascii'),)
+
+
+def _books_exchange(native,driver,command,state,deadline,wait,clock):
+    """Only this fixed nine-statement protocol; no cursor/implicit cancellation."""
+    need(state['protocol_ready']is True,'BOOKS_SQL_PROTOCOL')
+    need(native.status==driver.pq.ConnStatus.OK and native.nonblocking==1,'BOOKS_SQL_PROTOCOL')
+    need(clock()<deadline,'BOOKS_SQL_DEADLINE')
+    if command==READ_ROLLBACK:
+        need(state['tx_may_exist']and not state['rollback_attempted'],'BOOKS_SQL_PROTOCOL')
+        state['rollback_attempted']=True
+    else:
+        index=state['sql_statement_attempts']
+        need(not state['rollback_attempted']and index<len(READ_PREFIX)and command==READ_PREFIX[index],'BOOKS_SQL_PROTOCOL')
+    need(state['sql_statement_attempts']<9,'BOOKS_SQL_PROTOCOL')
+    params=READ_ID_PARAMS if command==READ_IDENTITY_SQL else READ_TABLE_PARAMS if command==READ_SCHEMA_SQL else()
+    types_=(25,25,25,25)if command==READ_IDENTITY_SQL else(1009,)if command==READ_SCHEMA_SQL else()
+    if command in(READ_IDENTITY_SQL,READ_SCHEMA_SQL):
+        need(state['select_count']<2,'BOOKS_SQL_PROTOCOL');state['select_count']+=1
+    if command==READ_PREFIX[0]:state['tx_may_exist']=True
+    state['sql_statement_attempts']+=1
+    state['application_sql_count']+=1
+    state['protocol_ready']=False
+    results=[];spins=0
+    def tick():
+        nonlocal spins
+        spins+=1;need(spins<=2000 and clock()<deadline,'BOOKS_SQL_DEADLINE')
+    def ready(read,write):
+        tick();fd=native.socket;need(type(fd)is int and fd>=0,'BOOKS_SQL_PROTOCOL')
+        value=wait([fd]if read else[],[fd]if write else[],[],min(0.1,max(0.0,deadline-clock())))
+        tick();return value
+    try:
+        native.send_query_params(command,list(params),param_types=list(types_),param_formats=[0]*len(params),result_format=1)
+        tick()
+        while True:
+            flushed=native.flush();tick();need(flushed in(0,1),'BOOKS_SQL_PROTOCOL')
+            if flushed==0:break
+            readable,_,_=ready(True,True)
+            if readable:native.consume_input();tick()
+        while True:
+            tick();native.consume_input();tick()
+            busy=native.is_busy();tick();need(busy in(0,1),'BOOKS_SQL_PROTOCOL')
+            if busy:
+                ready(True,False);continue
+            value=native.get_result()
+            if value is None:
+                state['protocol_ready']=True;tick();break
+            if type(value)is not driver.pq.PGresult:
+                raise Closed('BOOKS_SQL_PROTOCOL')
+            results.append(value)
+            tick();need(len(results)<=2,'BOOKS_SQL_PROTOCOL')
+            # COPY cannot be drained with this closed SELECT/control protocol.
+            need(value.status not in(driver.pq.ExecStatus.COPY_IN,driver.pq.ExecStatus.COPY_OUT,driver.pq.ExecStatus.COPY_BOTH),'BOOKS_SQL_PROTOCOL')
+        need(len(results)==1,'BOOKS_SQL_PROTOCOL');result=results[0]
+        if command not in(READ_IDENTITY_SQL,READ_SCHEMA_SQL):
+            need(result.status==driver.pq.ExecStatus.COMMAND_OK and result.nfields==0 and result.ntuples==0,'BOOKS_SQL_FAILURE')
+            tag=b'BEGIN'if command==READ_PREFIX[0]else b'ROLLBACK'if command==READ_ROLLBACK else b'SET'
+            need(result.command_status==tag,'BOOKS_SQL_PROTOCOL')
+            tick()
+            return None
+        expected=(16,)*14 if command==READ_IDENTITY_SQL else(20,16)
+        need(result.status==driver.pq.ExecStatus.TUPLES_OK,'BOOKS_SQL_FAILURE')
+        need(result.command_status==b'SELECT 1'and result.ntuples==1 and result.nfields==len(expected),'BOOKS_RESULT_BOUNDS')
+        decoded=[];byte_count=0
+        for i,oid in enumerate(expected):
+            need(result.ftype(i)==oid and result.fformat(i)==1,'BOOKS_RESULT_BOUNDS')
+            raw=result.get_value(0,i);tick()
+            need(type(raw)is bytes and len(raw)==(1 if oid==16 else 8),'BOOKS_RESULT_BOUNDS')
+            byte_count+=len(raw)
+            if oid==16:
+                need(raw in(b'\x00',b'\x01'),'BOOKS_RESULT_BOUNDS');decoded.append(raw==b'\x01')
+            else:
+                value=int.from_bytes(raw,'big',signed=True)
+                need(0<=value<=len(TABLES),'BOOKS_RESULT_BOUNDS');decoded.append(value)
+        need(state['result_payload_bytes']+byte_count<=64,'BOOKS_RESULT_BOUNDS')
+        state['result_payload_bytes']+=byte_count;state['result_rows']+=1
+        need(state['result_rows']<=2,'BOOKS_RESULT_BOUNDS')
+        return tuple(decoded)
+    finally:
+        cleared=True
+        for value in results:
+            try:
+                value.clear()
+                if value.pgresult_ptr is not None:cleared=False
+            except BaseException:cleared=False
+        need(cleared,'BOOKS_RESULT_BOUNDS')
+        tick()
+
+
+def readonly_snapshot(driver,env,now=None,*,resolve=socket.getaddrinfo,
+                 wait=select.select,clock=time.monotonic):
+    """One owned native handle, fixed read-only metadata SQL, no payload/retry."""
+    result={'status':'UNKNOWN','code':'BOOKS_CONNECT_ONLY_FAILURE','phase':'PRECHECK',
+      'failure_phase':None,'connect_error_class':None,'connect_error_basis':None,
+      'connect_error_certainty':None,'connect_error_detail':None,'connect_error_parameter':None,
+      'dns_result_selected':False,'native_start_calls':0,
+      'connect_poll_succeeded':False,'tls_established':None,'password_auth_used':None,
+      'native_finish_attempted':False,'client_cleanup':'NOT_CREATED',
+      'server_cleanup':'UNVERIFIED','application_sql_count':0,'retry_allowed':False,
+      'write_admitted':False,'Books_authority_attested':False}
+    result.update(sql_statement_attempts=0,select_count=0,tx_may_exist=False,tx_started=False,
+      protocol_ready=False,rollback_attempted=False,rollback_verified=False,
+      identity_verified=False,schema_verified=False,result_rows=0,result_payload_bytes=0,
+      books_payload_queries=0,cleanup_within_budget=None)
+    started=clock();work_deadline=started+25.0;cleanup_deadline=started+28.0
+    native=None;owned=False;phase='PRECHECK'
+    try:
+        execution_identity(env)
+        route_attested(env.get('BOOKS_ROUTE_ATTESTATION',''),now or datetime.datetime.now(datetime.timezone.utc))
+        need(not any(k.startswith('PG')for k in env),'BOOKS_LIBPQ_ENVIRONMENT_FORBIDDEN')
+        raw=env.get('BRIDGE_WORKER_DATABASE_URL','');need(bool(raw),'BOOKS_SOURCE_MISSING')
+        raw=strict_dsn(raw)
+        phase='RESOLVE'
+        rows=resolve(HOST,5432,type=socket.SOCK_STREAM,proto=socket.IPPROTO_TCP)
+        need(type(rows)is list and 0<len(rows)<=64,'BOOKS_DRIVER_UNQUALIFIED')
+        first=rows[0]
+        need(type(first)is tuple and len(first)==5 and first[0]in(socket.AF_INET,socket.AF_INET6)
+             and first[1]==socket.SOCK_STREAM and first[2]==socket.IPPROTO_TCP
+             and type(first[4])is tuple and len(first[4])>=2
+             and type(first[4][0])is str and type(first[4][1])is int and first[4][1]==5432,'BOOKS_DRIVER_UNQUALIFIED')
+        address=ipaddress.ip_address(first[4][0])
+        need(address.is_global and not address.is_multicast
+             and address.version==(4 if first[0]==socket.AF_INET else 6),'BOOKS_DRIVER_UNQUALIFIED')
+        result['dns_result_selected']=True
+        phase='BUILD_PARAMETERS'
+        # Preserve the original host for SNI/auth semantics. One hostaddr prevents
+        # the high-level connect() loop over multiple resolved addresses.
+        # No startup GUC bundle: this mode establishes and verifies local policy
+        # inside the explicit read-only transaction before the schema SELECT.
+        info=driver.conninfo.make_conninfo(raw,host=HOST,hostaddr=str(address),port=5432,
+             connect_timeout=5,sslmode='require',channel_binding='require',
+             gssencmode='disable',options='',
+             application_name='books-connect-diag-'+env['BOOKS_REQUEST_ID'][:8])
+        need(type(info)is str and len(info)<=32768,'BOOKS_DRIVER_UNQUALIFIED')
+        encoded=urlsplit(raw).password.encode('utf-8')
+        decoded=unquote_to_bytes(urlsplit(raw).password)
+        scrub=(raw.encode('utf-8'),info.encode('utf-8'),encoded,decoded,
+               decoded.replace(b'\\',b'\\\\').replace(b"'",b"\\'"))
+        deadline=min(clock()+5.0,work_deadline)
+        need(clock()<deadline,'BOOKS_SQL_DEADLINE')
+        phase='START';result['native_start_calls']=1
+        native=driver.pq.PGconn.connect_start(info.encode('utf-8'))
+        need(type(native)is driver.pq.PGconn,'BOOKS_DRIVER_UNQUALIFIED');owned=True
+        phase='POLL';polls=0
+        while True:
+            remaining=deadline-clock()
+            if remaining<=0:
+                result.update(code='BOOKS_CONNECT_DEADLINE',connect_error_class='timeout',
+                  connect_error_basis='LOCAL_MONOTONIC_DEADLINE',connect_error_certainty='stage')
+                result['failure_phase']=phase;break
+            polls+=1;need(polls<=1000,'BOOKS_DRIVER_UNQUALIFIED')
+            state=native.connect_poll()
+            if clock()>=deadline:
+                result.update(code='BOOKS_CONNECT_DEADLINE',connect_error_class='timeout',
+                  connect_error_basis='LOCAL_MONOTONIC_DEADLINE',connect_error_certainty='stage')
+                result['failure_phase']=phase;break
+            if state==driver.pq.PollingStatus.OK:
+                need(native.status==driver.pq.ConnStatus.OK,'BOOKS_SESSION_POLICY')
+                result['connect_poll_succeeded']=True
+                result['tls_established']=native.ssl_in_use is True
+                result['password_auth_used']=native.used_password is True
+                if not result['tls_established']or not result['password_auth_used']:
+                    result.update(code='BOOKS_SESSION_POLICY',connect_error_class='tls'if not result['tls_established']else'auth',
+                      connect_error_basis='TLS_NOT_ACTIVE'if not result['tls_established']else'PASSWORD_USE_NOT_OBSERVED',
+                      connect_error_certainty='stage',failure_phase=phase)
+                    break
+                need(native.transaction_status==0,'BOOKS_SESSION_POLICY')
+                native.nonblocking=1;need(native.nonblocking==1,'BOOKS_SQL_PROTOCOL')
+                result['protocol_ready']=True
+                phase='BEGIN'
+                _books_exchange(native,driver,READ_PREFIX[0],result,min(clock()+2.0,work_deadline),wait,clock)
+                need(native.transaction_status==2,'BOOKS_SESSION_POLICY');result['tx_started']=True
+                phase='LOCAL_POLICY'
+                for statement in READ_LOCAL_SQL:
+                    _books_exchange(native,driver,statement,result,min(clock()+2.0,work_deadline),wait,clock)
+                    need(native.transaction_status==2,'BOOKS_SESSION_POLICY')
+                phase='IDENTITY'
+                row=_books_exchange(native,driver,READ_IDENTITY_SQL,result,min(clock()+2.0,work_deadline),wait,clock)
+                need(row==(True,)*14 and native.transaction_status==2,'BOOKS_SESSION_POLICY')
+                result['identity_verified']=True
+                phase='SCHEMA'
+                row=_books_exchange(native,driver,READ_SCHEMA_SQL,result,min(clock()+2.0,work_deadline),wait,clock)
+                need(row==(14,True)and native.transaction_status==2,'BOOKS_SCHEMA_UNAVAILABLE')
+                result['schema_verified']=True
+                result.update(status='READONLY_METADATA_COMPLETE_NOT_AUTHORITY',code='BOOKS_SQL_READONLY_OK')
+                break
+            if state==driver.pq.PollingStatus.FAILED:
+                category,basis,certainty,detail,parameter=libpq_failure_diagnostic(native.error_message,scrub)
+                result.update(code='BOOKS_CONNECT_POLL_FAILED',connect_error_class=category,
+                              connect_error_basis=basis,connect_error_certainty=certainty,
+                              connect_error_detail=detail,connect_error_parameter=parameter)
+                result['failure_phase']=phase;break
+            need(state in(driver.pq.PollingStatus.READING,driver.pq.PollingStatus.WRITING),'BOOKS_DRIVER_UNQUALIFIED')
+            fd=native.socket;need(type(fd)is int and fd>=0,'BOOKS_DRIVER_UNQUALIFIED')
+            remaining=deadline-clock()
+            if remaining>0:
+                read=[fd]if state==driver.pq.PollingStatus.READING else[]
+                write=[fd]if state==driver.pq.PollingStatus.WRITING else[]
+                wait(read,write,[],min(0.25,remaining))
+    except BaseException as exc:
+        if phase in('PRECHECK','RESOLVE','BUILD_PARAMETERS','START','POLL'):
+            category,basis,_=classify_connect_failure(exc,driver)
+            result.update(connect_error_class=category,connect_error_basis=basis,
+                          connect_error_certainty='typed'if category!='other'else'unknown')
+        result['code']=exc.args[0]if type(exc)is Closed and len(exc.args)==1 and type(exc.args[0])is str and exc.args[0]in(SAFE|READ_SQL_CODES)else'BOOKS_SQL_FAILURE'
+        result['failure_phase']=phase
+    finally:
+        if owned:
+            if result['tx_may_exist']:
+                phase='ROLLBACK'
+                try:
+                    need(result['protocol_ready']is True and native.status==driver.pq.ConnStatus.OK
+                         and native.transaction_status in(0,2,3),'BOOKS_ROLLBACK_UNKNOWN')
+                    _books_exchange(native,driver,READ_ROLLBACK,result,min(clock()+2.0,cleanup_deadline),wait,clock)
+                    need(native.transaction_status==0,'BOOKS_ROLLBACK_UNKNOWN')
+                    result['rollback_verified']=True
+                except BaseException:
+                    result.update(status='UNKNOWN',code='BOOKS_ROLLBACK_UNKNOWN')
+            result['native_finish_attempted']=True
+            try:
+                native.finish()
+                closed=native.pgconn_ptr is None
+            except BaseException:closed=False
+            result['client_cleanup']=('ROLLBACK_AND_FINISH_CONFIRMED'if result['rollback_verified']else'FINISHED_ROLLBACK_UNVERIFIED'if result['tx_may_exist']else'FINISHED_POINTER_NONE')if closed else'UNKNOWN'
+            if not closed:result.update(status='UNKNOWN',code='BOOKS_CLIENT_CLEANUP_UNKNOWN')
+            result['cleanup_within_budget']=clock()<=cleanup_deadline
+            if not result['cleanup_within_budget']:result.update(status='UNKNOWN',code='BOOKS_CLEANUP_DEADLINE')
+        elif result['native_start_calls']:
+            result.update(status='UNKNOWN',code='BOOKS_CLIENT_CLEANUP_UNKNOWN',client_cleanup='UNKNOWN')
+        result['phase']='FINISHED'if result['client_cleanup']in('FINISHED_POINTER_NONE','ROLLBACK_AND_FINISH_CONFIRMED','FINISHED_ROLLBACK_UNVERIFIED')else phase
+    need(len(json.dumps(result,separators=(',',':')).encode())<=2048,'BOOKS_RUNTIME_FAILURE')
+    return result
+
 def main():
     # Mute native/provider stdout/stderr before it can access the selected input.
     output=os.dup(1);null=os.open(os.devnull,os.O_RDWR)
@@ -412,13 +673,13 @@ def main():
         exclusive(folder/'intent.json',{'state':'INTENT_OUTCOME_UNKNOWN','retry_allowed':False})
         # No application module import, dotenv, alternate URI or untrusted input code.
         driver=driver_from_target(str(root/'books-driver'))
-        result=connect_only(driver,os.environ)
+        result=readonly_snapshot(driver,os.environ)
         exclusive(folder/'result.json',result)
     except BaseException as exc:
-        code=exc.args[0]if type(exc)is Closed and len(exc.args)==1 and type(exc.args[0])is str and exc.args[0]in SAFE else'BOOKS_RUNTIME_FAILURE'
+        code=exc.args[0]if type(exc)is Closed and len(exc.args)==1 and type(exc.args[0])is str and exc.args[0]in(SAFE|READ_SQL_CODES)else'BOOKS_RUNTIME_FAILURE'
         result={'status':'UNKNOWN'if folder is not None else'CLOSED','code':code,'retry_allowed':False,'write_admitted':False}
     finally:
         raw=(json.dumps(result,separators=(',',':'))+'\n').encode()
         os.write(output,raw if len(raw)<=4096 else b'{"status":"UNKNOWN","retry_allowed":false}\n');os.close(output)
-    return 0 if result.get('status')=='CONNECT_ONLY_CLIENT_CLOSED'else 1
+    return 0 if result.get('status')=='READONLY_METADATA_COMPLETE_NOT_AUTHORITY'else 1
 if __name__=='__main__':raise SystemExit(main())
