@@ -10,7 +10,7 @@ import ast
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from bridge_vision.gambler_classic_reference import VARIANT_CARD_SIZE
@@ -19,6 +19,9 @@ from tools.diana20_scale_contract import validate_native_scale_response
 
 PROFILE_VERSION = "diana20-scale-pbn-source-profile/v1-installed-margin"
 BUNDLE_VERSION = "diana20-pixel-scale-source-v1-installed-margin"
+STAGED_CONTENT_MANIFEST_SHA256 = "04802ed4f4f5cb0d86b00aafb9014bd3cd5962382febf75333114125d1b2ae83"
+STAGED_PROFILE_SHA256 = "45bb8d3f9d50c866890d5204dfdcbc12a0abf0d95deac36c5887d9b2979e62ac"
+STAGED_OWNER_POLICY = "ROOT_OWNED_IMMUTABLE_INPUTS_EXECUTOR_993_985_V1"
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _SEAL = object()
 
@@ -85,6 +88,32 @@ def _literal(raw, name):
     return ast.literal_eval(values[0])
 
 
+def _staged_identity(binding, expected_run_id):
+    # This implementation belongs to Video. Its sealed recheck must enforce
+    # actual owner/mode/process/content observations, not a JSON claim alone.
+    try:
+        from video_adapters.diana20.staged_binding import StagedBinding
+    except ImportError as exc:
+        raise ValueError("DIANA20_SCALE_PBN_STAGED_BINDING_IMPLEMENTATION_REQUIRED") from exc
+    _need(type(binding) is StagedBinding, "STAGED_BINDING_REQUIRED")
+    _need(binding.recheck() is None, "STAGED_BINDING_RECHECK_CONTRACT")
+    _need(type(expected_run_id) is str and 0 < len(expected_run_id) <= 256, "STAGED_RUN_REQUIRED")
+    names = ("staged_root", "run_id", "source_video_sha256", "content_manifest_sha256",
+             "target_binding_sha256", "owner_policy")
+    identity = {name: getattr(binding, name, None) for name in names}
+    _need(all(type(value) is str and value for value in identity.values()), "STAGED_BINDING_FIELDS")
+    root = Path(identity["staged_root"])
+    _need(root.is_absolute() and str(root) == identity["staged_root"] and ".." not in root.parts,
+          "STAGED_ROOT")
+    _need(identity["run_id"] == expected_run_id, "STAGED_RUN_BINDING")
+    _need(identity["content_manifest_sha256"] == STAGED_CONTENT_MANIFEST_SHA256,
+          "STAGED_CONTENT_MANIFEST")
+    _need(identity["owner_policy"] == STAGED_OWNER_POLICY, "STAGED_OWNER_POLICY")
+    _need(all(_SHA.fullmatch(identity[name]) for name in
+              ("source_video_sha256", "target_binding_sha256")), "STAGED_BINDING_HASH")
+    return json.dumps(identity, sort_keys=True).encode()
+
+
 @dataclass(frozen=True, init=False)
 class VerifiedScalePBNProfile:
     """Immutable source snapshot capability; only the loader constructs it."""
@@ -94,6 +123,8 @@ class VerifiedScalePBNProfile:
     checks: tuple
     source_sha256: str
     _seal: object
+    _staged_binding: object = field(default=None, repr=False, compare=False)
+    _staged_identity_json: bytes | None = field(default=None, repr=False, compare=False)
 
     def __init__(self, *, _seal=None, **fields):
         _need(_seal is _SEAL, "VERIFIED_PROFILE_REQUIRED")
@@ -103,10 +134,17 @@ class VerifiedScalePBNProfile:
 
     def verify_payload(self, payload):
         _need(self._seal is _SEAL, "VERIFIED_PROFILE_REQUIRED")
+        if self._staged_binding is not None:
+            identity = _json(self._staged_identity_json)
+            _need(_staged_identity(self._staged_binding, identity["run_id"]) == self._staged_identity_json,
+                  "STAGED_BINDING_CHANGED")
         # Rehash the snapshot at use time: a loaded profile is not a permission
         # to consume changed files later. These are source bytes, not live pins.
         for path, digest, size, limit in self.checks:
             _read(path, digest, size, limit)
+        if self._staged_binding is not None:
+            _need(_staged_identity(self._staged_binding, identity["run_id"]) == self._staged_identity_json,
+                  "STAGED_BINDING_CHANGED")
         pins = {v: (pinned_sprite_sha256(v), *size) for v, size in VARIANT_CARD_SIZE.items()}
         _need(validate_native_scale_response(payload, pins), "SCALE_RESPONSE")
         status = payload["card_scale"]["selection_status"]
@@ -129,9 +167,13 @@ class VerifiedScalePBNProfile:
         return expected
 
     def provenance(self):
-        return {"profile_version": PROFILE_VERSION, "profile_sha256": self.profile_sha256,
+        result = {"profile_version": PROFILE_VERSION, "profile_sha256": self.profile_sha256,
                 "source_files_verified": len(self.checks), "runtime_qualified": False,
                 "installation_verified": False, "runtime_status": "HOLD"}
+        if self._staged_binding is not None:
+            result["staged_path_binding"] = {"factory_version": "diana20-staged-scale-pbn-factory/v1",
+                **_json(self._staged_identity_json), "runtime_admission_granted": False}
+        return result
 
 
 def load_scale_pbn_profile(profile_path, *, expected_sha256, bundle_root, caller_root, asset_root):
@@ -260,3 +302,45 @@ def load_scale_pbn_profile(profile_path, *, expected_sha256, bundle_root, caller
     return VerifiedScalePBNProfile(_seal=_SEAL, profile_sha256=expected_sha256,
         runtime_json=json.dumps(expected, sort_keys=True).encode(), vendor_json=json.dumps(vendor_modules, sort_keys=True).encode(),
         checks=tuple(checks), source_sha256=profile["source_sha256"])
+
+
+def load_staged_scale_pbn_profile(profile_path, *, expected_sha256, staged_binding, expected_run_id):
+    """Bind frozen source bytes to independently enrolled staged runtime paths.
+
+    The exact StagedBinding must come from Video's sealed owner loader. Its
+    recheck() returns None on success and raises on invalid seal, changed bytes,
+    owner/mode/process/root/run or owner-binding observations. It is called at
+    construction and on every use. Missing implementation has no legacy fallback.
+    No live ACTIVE/CURRENT file is opened, ownership granted or receipt issued.
+    """
+    identity_raw = _staged_identity(staged_binding, expected_run_id)
+    identity = _json(identity_raw)
+    root = Path(identity["staged_root"])
+    _need(expected_sha256 == STAGED_PROFILE_SHA256, "STAGED_PROFILE_PIN")
+    _need(str(Path(profile_path).absolute()) == str(root / "SOURCE_SCALE_PROFILE.json"),
+          "STAGED_PROFILE_PATH")
+    original = load_scale_pbn_profile(profile_path, expected_sha256=expected_sha256,
+        bundle_root=root / "bundle", caller_root=root / "caller", asset_root=root / "assets")
+    _need(original.source_sha256 == identity["source_video_sha256"], "STAGED_SOURCE_BINDING")
+    runtime = _json(original.runtime_json)
+    old_root = str(PurePosixPath(runtime["worker_path"]).parent.parent)
+    geometry = root / "bundle" / "geometry"
+    runtime["worker_path"] = str(geometry / "diana20_geometry_worker.py")
+    runtime["helpers"] = {name: {"path": str(geometry / name), "sha256": value["sha256"]}
+                          for name, value in runtime["helpers"].items()}
+    vendor = _json(original.vendor_json)
+    prefix = old_root + "/geometry/vendor/"
+    relocated = {}
+    for name, value in vendor.items():
+        _need(value["path"].startswith(prefix), "STAGED_VENDOR_SOURCE_PATH")
+        relative = value["path"][len(prefix):]
+        _need(relative and all(part not in ("", ".", "..") for part in relative.split("/")),
+              "STAGED_VENDOR_SOURCE_PATH")
+        relocated[name] = {"path": str(geometry / "vendor" / PurePosixPath(relative)),
+                           "sha256": value["sha256"]}
+    _need(_staged_identity(staged_binding, expected_run_id) == identity_raw, "STAGED_BINDING_CHANGED")
+    return VerifiedScalePBNProfile(_seal=_SEAL, profile_sha256=expected_sha256,
+        runtime_json=json.dumps(runtime, sort_keys=True).encode(),
+        vendor_json=json.dumps(relocated, sort_keys=True).encode(),
+        checks=original.checks, source_sha256=original.source_sha256,
+        _staged_binding=staged_binding, _staged_identity_json=identity_raw)
