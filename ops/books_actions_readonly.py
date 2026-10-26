@@ -526,7 +526,8 @@ def readonly_snapshot(driver,env,now=None,*,resolve=socket.getaddrinfo,
     result.update(sql_statement_attempts=0,select_count=0,tx_may_exist=False,tx_started=False,
       protocol_ready=False,rollback_attempted=False,rollback_verified=False,
       identity_verified=False,schema_verified=False,result_rows=0,result_payload_bytes=0,
-      books_payload_queries=0,cleanup_within_budget=None)
+      books_payload_queries=0,cleanup_within_budget=None,
+      schema_relation_count=None,schema_policy_all=None,schema_transaction_intrans=None)
     started=clock();work_deadline=started+25.0;cleanup_deadline=started+28.0
     native=None;owned=False;phase='PRECHECK'
     try:
@@ -605,7 +606,11 @@ def readonly_snapshot(driver,env,now=None,*,resolve=socket.getaddrinfo,
                 result['identity_verified']=True
                 phase='SCHEMA'
                 row=_books_exchange(native,driver,READ_SCHEMA_SQL,result,min(clock()+2.0,work_deadline),wait,clock)
-                need(row==(14,True)and native.transaction_status==2,'BOOKS_SCHEMA_UNAVAILABLE')
+                schema_matches=row==(14,True)
+                result.update(schema_relation_count=row[0],schema_policy_all=row[1])
+                schema_intrans=native.transaction_status==2 if schema_matches else None
+                result['schema_transaction_intrans']=schema_intrans
+                need(schema_matches and schema_intrans,'BOOKS_SCHEMA_UNAVAILABLE')
                 result['schema_verified']=True
                 result.update(status='READONLY_METADATA_COMPLETE_NOT_AUTHORITY',code='BOOKS_SQL_READONLY_OK')
                 break
