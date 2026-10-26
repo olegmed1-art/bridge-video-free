@@ -397,7 +397,7 @@ def connect_only(driver,env,now=None,*,resolve=socket.getaddrinfo,
 
 
 READ_SQL_CODES=frozenset({'BOOKS_SQL_FAILURE','BOOKS_SQL_PROTOCOL','BOOKS_SQL_DEADLINE',
- 'BOOKS_RESULT_BOUNDS','BOOKS_ROLLBACK_UNKNOWN','BOOKS_SQL_READONLY_OK','BOOKS_CLEANUP_DEADLINE'})
+ 'BOOKS_RESULT_BOUNDS','BOOKS_ROLLBACK_UNKNOWN','BOOKS_SCHEMA_NAMES_OK','BOOKS_CLEANUP_DEADLINE'})
 READ_LOCAL_SQL=(
  b"SET LOCAL statement_timeout = '2000ms'",
  b"SET LOCAL lock_timeout = '500ms'",
@@ -419,11 +419,12 @@ READ_IDENTITY_SQL=b"""SELECT
  NOT (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname=current_user) AS c12,
  NOT (SELECT rolbypassrls FROM pg_catalog.pg_roles WHERE rolname=current_user) AS c13,
  NOT pg_catalog.has_schema_privilege(current_user,'public','CREATE') AS c14"""
-READ_SCHEMA_SQL=SCHEMA_SQL.replace('%s','$1').encode('ascii')
+# Exact fourteen public names, supplied as fixed typed parameters; no relation contents.
+READ_SCHEMA_SQL=('SELECT '+', '.join('pg_catalog.to_regclass($'+str(i)+'::text) IS NOT NULL' for i in range(1,15))).encode('ascii')
 READ_PREFIX=(BEGIN.encode('ascii'),)+READ_LOCAL_SQL+(READ_IDENTITY_SQL,READ_SCHEMA_SQL)
 READ_ROLLBACK=b'ROLLBACK'
 READ_ID_PARAMS=(DATABASE.encode('ascii'),ROLE.encode('ascii'),ROLE.encode('ascii'),b'bridge_school_worker')
-READ_TABLE_PARAMS=(('{'+','.join(TABLES)+'}').encode('ascii'),)
+READ_TABLE_PARAMS=tuple(name.encode('ascii')for name in TABLES)
 
 
 def _books_exchange(native,driver,command,state,deadline,wait,clock):
@@ -439,7 +440,7 @@ def _books_exchange(native,driver,command,state,deadline,wait,clock):
         need(not state['rollback_attempted']and index<len(READ_PREFIX)and command==READ_PREFIX[index],'BOOKS_SQL_PROTOCOL')
     need(state['sql_statement_attempts']<9,'BOOKS_SQL_PROTOCOL')
     params=READ_ID_PARAMS if command==READ_IDENTITY_SQL else READ_TABLE_PARAMS if command==READ_SCHEMA_SQL else()
-    types_=(25,25,25,25)if command==READ_IDENTITY_SQL else(1009,)if command==READ_SCHEMA_SQL else()
+    types_=(25,25,25,25)if command==READ_IDENTITY_SQL else(25,)*14 if command==READ_SCHEMA_SQL else()
     if command in(READ_IDENTITY_SQL,READ_SCHEMA_SQL):
         need(state['select_count']<2,'BOOKS_SQL_PROTOCOL');state['select_count']+=1
     if command==READ_PREFIX[0]:state['tx_may_exist']=True
@@ -483,7 +484,7 @@ def _books_exchange(native,driver,command,state,deadline,wait,clock):
             need(result.command_status==tag,'BOOKS_SQL_PROTOCOL')
             tick()
             return None
-        expected=(16,)*14 if command==READ_IDENTITY_SQL else(20,16)
+        expected=(16,)*14  # identity and fixed relation-resolution booleans only
         need(result.status==driver.pq.ExecStatus.TUPLES_OK,'BOOKS_SQL_FAILURE')
         need(result.command_status==b'SELECT 1'and result.ntuples==1 and result.nfields==len(expected),'BOOKS_RESULT_BOUNDS')
         decoded=[];byte_count=0
@@ -527,7 +528,8 @@ def readonly_snapshot(driver,env,now=None,*,resolve=socket.getaddrinfo,
       protocol_ready=False,rollback_attempted=False,rollback_verified=False,
       identity_verified=False,schema_verified=False,result_rows=0,result_payload_bytes=0,
       books_payload_queries=0,cleanup_within_budget=None,
-      schema_relation_count=None,schema_policy_all=None,schema_transaction_intrans=None)
+      schema_relation_count=None,schema_policy_all=None,schema_transaction_intrans=None,
+      schema_unresolved_names=None,schema_resolution_complete=False)
     started=clock();work_deadline=started+25.0;cleanup_deadline=started+28.0
     native=None;owned=False;phase='PRECHECK'
     try:
@@ -606,13 +608,14 @@ def readonly_snapshot(driver,env,now=None,*,resolve=socket.getaddrinfo,
                 result['identity_verified']=True
                 phase='SCHEMA'
                 row=_books_exchange(native,driver,READ_SCHEMA_SQL,result,min(clock()+2.0,work_deadline),wait,clock)
-                schema_matches=row==(14,True)
-                result.update(schema_relation_count=row[0],schema_policy_all=row[1])
-                schema_intrans=native.transaction_status==2 if schema_matches else None
-                result['schema_transaction_intrans']=schema_intrans
-                need(schema_matches and schema_intrans,'BOOKS_SCHEMA_UNAVAILABLE')
-                result['schema_verified']=True
-                result.update(status='READONLY_METADATA_COMPLETE_NOT_AUTHORITY',code='BOOKS_SQL_READONLY_OK')
+                # These are fixed-name resolution facts, never a schema/authority admission.
+                need(type(row)is tuple and len(row)==14 and all(type(v)is bool for v in row),'BOOKS_RESULT_BOUNDS')
+                result.update(schema_relation_count=sum(row),
+                              schema_unresolved_names=[name for name,present in zip(TABLES,row)if not present])
+                result['schema_transaction_intrans']=native.transaction_status==2
+                need(result['schema_transaction_intrans'],'BOOKS_SESSION_POLICY')
+                result['schema_resolution_complete']=True
+                result.update(status='READONLY_NAMES_COMPLETE_NOT_AUTHORITY',code='BOOKS_SCHEMA_NAMES_OK')
                 break
             if state==driver.pq.PollingStatus.FAILED:
                 category,basis,certainty,detail,parameter=libpq_failure_diagnostic(native.error_message,scrub)
@@ -686,5 +689,5 @@ def main():
     finally:
         raw=(json.dumps(result,separators=(',',':'))+'\n').encode()
         os.write(output,raw if len(raw)<=4096 else b'{"status":"UNKNOWN","retry_allowed":false}\n');os.close(output)
-    return 0 if result.get('status')=='READONLY_METADATA_COMPLETE_NOT_AUTHORITY'else 1
+    return 0 if result.get('status')=='READONLY_NAMES_COMPLETE_NOT_AUTHORITY'else 1
 if __name__=='__main__':raise SystemExit(main())
