@@ -1,0 +1,737 @@
+{
+  "schema": "pinned-definition-staging-successor-source-v1",
+  "source_repository": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-22\\task-2\\temporal-recovery",
+  "files": [
+    {
+      "path": "vendor/bridge_contracts/__init__.py",
+      "bytes": 830,
+      "sha256": "742c611d5fb5f4d2903cdc387b533d11237d1f4e3060831d5c05069a80da85bc"
+    },
+    {
+      "path": "vendor/bridge_contracts/assistant_lab.py",
+      "bytes": 10891,
+      "sha256": "f842b683aefadb836de321f9af31ff373fcb0c6962cd8fc0bde67eacf626a080"
+    },
+    {
+      "path": "vendor/bridge_contracts/book_material.py",
+      "bytes": 15905,
+      "sha256": "48b4ca62083e55677c294cb04e8df616a84d02c00089d0d2588c7820c0ec4b46"
+    },
+    {
+      "path": "vendor/bridge_contracts/book_source_identity.py",
+      "bytes": 1580,
+      "sha256": "f27e96c8b1e968e56c09a48c86fc372019a294d85e2e58bcec11c47aa9718ccf"
+    },
+    {
+      "path": "vendor/bridge_contracts/book_source_review.py",
+      "bytes": 3084,
+      "sha256": "5bc901a88f4f7da12568b742815da23d9028d7de571a66d25320e818c4fdf868"
+    },
+    {
+      "path": "vendor/bridge_contracts/book_world.py",
+      "bytes": 14224,
+      "sha256": "95be1fe9385ce373950c467defab59fa241a370577c376aa4e94799fd2af53e3"
+    },
+    {
+      "path": "vendor/bridge_contracts/book_world_events.py",
+      "bytes": 10999,
+      "sha256": "ef6f37e551bf757454588c67c7ea72a58aab90929d624f3c3b30c9487e1b212f"
+    },
+    {
+      "path": "vendor/bridge_contracts/canon_source_domain_policy.py",
+      "bytes": 3436,
+      "sha256": "a1df5a8f9b665e900d4e83017af37a97e9bf1c336c54ca7c2d16084d17e5bcca"
+    },
+    {
+      "path": "vendor/bridge_contracts/card_play_definition.py",
+      "bytes": 11195,
+      "sha256": "2c010c45c2396959c30ef7dc284af8e9d6a77b6dc43727999b367c0db8b4ca22"
+    },
+    {
+      "path": "vendor/bridge_contracts/card_play_definition_admission.py",
+      "bytes": 14083,
+      "sha256": "a8cdff7b32225a7e83a07243a843cf675529f39ee704ef8adec8ae46c6de34ce"
+    },
+    {
+      "path": "vendor/bridge_contracts/definition_staging_identity.py",
+      "bytes": 790,
+      "sha256": "8c4676255f204d679434f435e78139ba2b73ef279327465801b8d297c8037a27"
+    },
+    {
+      "path": "vendor/bridge_contracts/definition_v01_authority.py",
+      "bytes": 14610,
+      "sha256": "dee60258e0a445004538a112bbbc9ef96b99aa5e593ad3fd28bd3045f9605a16"
+    },
+    {
+      "path": "vendor/bridge_contracts/definition_v01_records.py",
+      "bytes": 24659,
+      "sha256": "fe5a305a874249e42a265a8e62592664b3fd70daa66fdd289c6229d73914e567"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_canon_ai_promotion.py",
+      "bytes": 13908,
+      "sha256": "bf88e9f009536bae7e3831debba4ff2b1c332e0d8b3d80336f86d323151ab480"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_canon_auto_pipeline.py",
+      "bytes": 3155,
+      "sha256": "eda17c9dbae196c239c1938af61c3e03b773b9a0bcb5a92772a2274f4f81a42c"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_canon_evidence.py",
+      "bytes": 23196,
+      "sha256": "313e3cac58c68392e091149b9ac45c21915ae7a4e32da830b7b21f158ef1b803"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_canon_replay.py",
+      "bytes": 16359,
+      "sha256": "6ac3843f075ca0e392c42d614294b67d082c995373b5b5eb721970b7657b1d90"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_dds_decision_comparison.py",
+      "bytes": 14196,
+      "sha256": "00702269edf6223aef22c54aa5f6260ccaeef914f77921459324cd0f95ba10e0"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_dds_pinned_executor.py",
+      "bytes": 1925,
+      "sha256": "3316a473f1ae5c60affa8210412141b8ad020f0d48ea09ad113fc13185a54c35"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_deal.py",
+      "bytes": 5765,
+      "sha256": "ace5723d6860e000ef0d8ac05cca03ccfc095651f6789a5f79378ec789154921"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_definition_staging.py",
+      "bytes": 6551,
+      "sha256": "37e69e88ee4cca1ac4251966a59e870b54725f1b3de0ee3bcc1c407dcc7ee91a"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_extended_extraction.py",
+      "bytes": 17312,
+      "sha256": "50660d32a86d367864e549553447c4ed3aae3e84313fd47c442f853b229b87f7"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_frame.py",
+      "bytes": 5608,
+      "sha256": "f609a82d4f03ea2e617c0a6869a08e8538682812878fa194d0ecec803df07b6f"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_learning_candidate.py",
+      "bytes": 13501,
+      "sha256": "507bb3461bfc9d779ad6db0785529f325d24d419c3d830c4b44fe99087ad3b6d"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_learning_feedback.py",
+      "bytes": 9193,
+      "sha256": "9e508cab6cbe0c96268fb0e31c07f1dbc869444d8928ac87bb89c83bdb840a74"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_local_evidence.py",
+      "bytes": 18052,
+      "sha256": "3265084e2626977c4bd6a49d88cde9c074b6b51f061b34253f54dd780d5baecd"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_replay_input.py",
+      "bytes": 13116,
+      "sha256": "92922d8bb6554716b9d7d4131f9c19240dcebedf9c2e4b80b299f406c16c3080"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_source_draft.py",
+      "bytes": 9698,
+      "sha256": "c424d02914ac18303c687a978230bae9a8e7824f53e616e2404bfefb47766715"
+    },
+    {
+      "path": "vendor/bridge_contracts/video_teacher_read.py",
+      "bytes": 13124,
+      "sha256": "0551466f57eb65d43b79930f7a904a39fe7e560a805ba8e1450a356b7f6d39e3"
+    },
+    {
+      "path": "vendor/bridge_neon_persistence.py",
+      "bytes": 6008,
+      "sha256": "2a1aacda3cc8d85ec5c043a53fffe547bcabea4abe61563273c6f112e22ae13c"
+    },
+    {
+      "path": "vendor/bridge_output_scoped_idempotency.py",
+      "bytes": 3605,
+      "sha256": "2de4e36a76b35261a0b775e29ee9444c57f8f88102557250291263a6ecaab0ff"
+    },
+    {
+      "path": "vendor/bridge_report_board_reconstruction.py",
+      "bytes": 14896,
+      "sha256": "e45b3cca1b63ba9926b4510611391ec045a92ee0defdfa41a870c5dc346bea3c"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_1.py",
+      "bytes": 6223,
+      "sha256": "eddb48806ece749b7f1a29e88914d6d38324d869de8a66c78f66168c6de65576"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_14.py",
+      "bytes": 1864,
+      "sha256": "952917d539297c6859b80b61244a11be22ac211e9b53ce7da83a499c9a0a6077"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_15.py",
+      "bytes": 2906,
+      "sha256": "677bee1cacb1482d655251ab65364a348f8605bc765bff349c538457c4befc1d"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_16.py",
+      "bytes": 2188,
+      "sha256": "c1a97cec1c6806433d7fd570b09e41fa18bcc4b754a110d05c5fe1c6b56decc6"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_2.py",
+      "bytes": 8665,
+      "sha256": "6ed658622865b1b1ac5189c2970f2fea6e0d399c4f1111d11cb0677cb8ee708b"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_3.py",
+      "bytes": 3151,
+      "sha256": "5248a3b74584be8af0f24e959e5b13574c5c5d550084d8920b154bf9680a6064"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_4.py",
+      "bytes": 5147,
+      "sha256": "c160d0ced2fa8d9015431c638e15cf9a4ea047eb11b7d7048c177b70ee1aff95"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_6.py",
+      "bytes": 2594,
+      "sha256": "cb4eaa0c250168dafb693f2f6df3063f87174249db8c36c849c756153596d369"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r25_7.py",
+      "bytes": 1484,
+      "sha256": "5d49d048c6c68f454405ff0543096c2bf8b26a439b555d142b58fd4c6a76dc5f"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r26.py",
+      "bytes": 3065,
+      "sha256": "511c92db11e03c15b81bfc48c567e3f76f5bd739a51a6140eabb5cdf35e124f7"
+    },
+    {
+      "path": "vendor/bridge_runtime_hardening_r5.py",
+      "bytes": 3376,
+      "sha256": "d2ed200213615c6fba96331e088adba0f8d9daa6e82f09c60c35be25748fd9d0"
+    },
+    {
+      "path": "vendor/bridge_school_api/__init__.py",
+      "bytes": 38,
+      "sha256": "0edf32c63b3cb112a9674aff74f67be1f1793e9eb9ef121c03a09c8f634049db"
+    },
+    {
+      "path": "vendor/bridge_school_api/ai_worlds.py",
+      "bytes": 8881,
+      "sha256": "3397936a7641d2d590c98b3deeb13525ab77509afddff0a28a7e382bccf2b264"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/__init__.py",
+      "bytes": 1673,
+      "sha256": "c46011bb1e1c56564398754e324ade53536bc32eaaf39f8f481f6d005fe95301"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/image_ingress.py",
+      "bytes": 9011,
+      "sha256": "32efceac38ba264a18f73032c209b4b31b2848577eea2818fd48b63a58c88788"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/model.py",
+      "bytes": 1818,
+      "sha256": "a4e7f90d22b3ee6f8e401275db938b84e843013c6eaf3857789f9617c0d31471"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/position_contract.py",
+      "bytes": 1983,
+      "sha256": "c166ce9a54367b8e8562b5b33cd022dfa0a2b655934fb2196308d72c9ef29782"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/position_runtime.py",
+      "bytes": 8632,
+      "sha256": "a0f6798c2796fd420e1bee5d0992782e94b4572a46b96676d32e31a14367c09e"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/screenshot.py",
+      "bytes": 4501,
+      "sha256": "7e7409727b523013da59fc025e65e704a08ce0e15dc503408752076211333e94"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/service.py",
+      "bytes": 6995,
+      "sha256": "07b7d105aa993bc45770003cd42e8092ea3fa4ac8fee670d5c24c83d7ab94f8f"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/vision_appeals_cross.py",
+      "bytes": 17179,
+      "sha256": "a7647224c538e23a4c97eebd698b51d06321fe19d9cb121baf6bf68eab1da122"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/vision_appeals_cross_v4.py",
+      "bytes": 13962,
+      "sha256": "c9a5cb5516153f50b0c154c0af030d393ce85a8dd37ccc2e4953b881981ec757"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/vision_local.py",
+      "bytes": 11440,
+      "sha256": "182b33ccb006a9dd64a2f779ba6faf1f9875850d41fe86d1b3b69e19f772e8b1"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/vision_named_quadrant.py",
+      "bytes": 14138,
+      "sha256": "24046006948c51bfc5e91165c754e70524fe34e4749cd9fd362abf3bd7120d53"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/vision_publication.py",
+      "bytes": 12356,
+      "sha256": "3e360200f8fd818947f035be9c25fcc78ffd2fceefaaadb5329a80c927a4d260"
+    },
+    {
+      "path": "vendor/bridge_school_api/dds3/vision_publication_grid.py",
+      "bytes": 12493,
+      "sha256": "986e842163ba89d83fbd775880ddaf1f10772304166f29ec81331c390d7816b0"
+    },
+    {
+      "path": "vendor/bridge_semantic_qc.py",
+      "bytes": 12717,
+      "sha256": "206a508cc7da6fa2d947b030cce7d19439c0e0f5da4c2ea485ec0825e3d83336"
+    },
+    {
+      "path": "vendor/bridge_speaker_diarization.py",
+      "bytes": 16714,
+      "sha256": "0c4e08ed8497eaaf8ad5ae801fe2740efa976b992b9dd80f6596e3eb91d8c6bb"
+    },
+    {
+      "path": "vendor/bridge_speaker_diarization_v2.py",
+      "bytes": 19701,
+      "sha256": "aca3fda302446306535c109fd2b42b04d84a8b7414abd940a7381a6eeed12939"
+    },
+    {
+      "path": "vendor/bridge_speaker_diarization_v3.py",
+      "bytes": 21297,
+      "sha256": "7af713b36d2bb4914003c65becc0252e596b04f05c39ae1ceb8ce89e48945862"
+    },
+    {
+      "path": "vendor/bridge_speaker_diarization_v3_core.py",
+      "bytes": 12162,
+      "sha256": "426432f51606a6ffae3c00beca30130644b5c5222d6e55ce65dcbc75a6e9cb95"
+    },
+    {
+      "path": "vendor/bridge_speaker_diarization_v3_repair.py",
+      "bytes": 7712,
+      "sha256": "4d75bf222200c93f3bec8afd5bbf7256fa43bbe7aa3303a67824b311abae7f56"
+    },
+    {
+      "path": "vendor/bridge_vision/__init__.py",
+      "bytes": 809,
+      "sha256": "e82e16cb50211fdf5565818dde664c6278c463d1db40da70284c1dc18fe0c144"
+    },
+    {
+      "path": "vendor/bridge_vision/anchor_registration.py",
+      "bytes": 25153,
+      "sha256": "fccf04ccd3a42bd0ecc51889cf540ae51b97c850063cc107a84edbede88d02c8"
+    },
+    {
+      "path": "vendor/bridge_vision/bridgit_event_frame_selector.py",
+      "bytes": 6116,
+      "sha256": "d20c90df2059ff6be353a7332653d2fdb56cc7b2374cb43fe96268f304075cb3"
+    },
+    {
+      "path": "vendor/bridge_vision/bridgit_gambler_rank_layout.py",
+      "bytes": 10135,
+      "sha256": "5d39e65390242e1af358f5f709e5f83c6233e8de7e9b13527d90348bb53b2a07"
+    },
+    {
+      "path": "vendor/bridge_vision/bridgit_gold_profile.py",
+      "bytes": 12411,
+      "sha256": "f45ba70c0b9a380c19fb2fbc8955a9b71bd776ae27c2f9bc24e5cdc528ee4945"
+    },
+    {
+      "path": "vendor/bridge_vision/bridgit_primary_compat.py",
+      "bytes": 10234,
+      "sha256": "adfbda71b2428e24574b8da327697546fa8e0cfc75f7ac308aec465ae9b593c4"
+    },
+    {
+      "path": "vendor/bridge_vision/bridgit_primary_production.py",
+      "bytes": 7682,
+      "sha256": "d17880eae30110dcbb3e7dd1acfa2a7475178eba8e7351d728481a5bdb951d93"
+    },
+    {
+      "path": "vendor/bridge_vision/bridgit_primary_video.py",
+      "bytes": 17641,
+      "sha256": "51d18a437e864c08822cd254fe4fb902189107ccef47a10297d486241627ac97"
+    },
+    {
+      "path": "vendor/bridge_vision/bridgit_rank_layout.py",
+      "bytes": 104567,
+      "sha256": "2e60908be4185d075a18bc0eb174f2cc17dfd41a1a147a2f2a31f75fe43b9bf3"
+    },
+    {
+      "path": "vendor/bridge_vision/deal_evidence.py",
+      "bytes": 26255,
+      "sha256": "9881cd0b8fb56f44bf108ac2db9bb71c41210feeb2d3cfb1938244ac1bcb141c"
+    },
+    {
+      "path": "vendor/bridge_vision/deal_review_pdf.py",
+      "bytes": 21763,
+      "sha256": "df69998435ec9b7fae89a635748011ed4202e4ec23660a350314d0f254852b11"
+    },
+    {
+      "path": "vendor/bridge_vision/engine.py",
+      "bytes": 8861,
+      "sha256": "bdcc3a6050182e6154302dcd4ddacde02e36fab4d1e55828e78cb55fb764fe96"
+    },
+    {
+      "path": "vendor/bridge_vision/evidence_fusion.py",
+      "bytes": 20882,
+      "sha256": "549c1cb9045aa574aa2ad5e3b833337a47705c247214be48ef8e879da7cad8e7"
+    },
+    {
+      "path": "vendor/bridge_vision/gambler_classic_reference.py",
+      "bytes": 13863,
+      "sha256": "2aa4b512a9c455fefe87bc0d40da75fa2fe7acddaceb8a308d53979f09975825"
+    },
+    {
+      "path": "vendor/bridge_vision/gambler_reference_authority.py",
+      "bytes": 3132,
+      "sha256": "e63386a691431ca5834d7290ae51b1d283dae492512abcbaf752a7c6775be8c6"
+    },
+    {
+      "path": "vendor/bridge_vision/multiframe.py",
+      "bytes": 12227,
+      "sha256": "970e602da4ce4c9f7f3ab074e8d621aeefff64670218d68babcf171712eb9575"
+    },
+    {
+      "path": "vendor/bridge_vision/native_cards.py",
+      "bytes": 8154,
+      "sha256": "cfa4955b1d2101ead452ea55e97961cd85b2c14e9d6a74fb5652d776ec12bc9e"
+    },
+    {
+      "path": "vendor/bridge_vision/profiled_challenger.py",
+      "bytes": 53380,
+      "sha256": "6133415a02432b68fab24a88df37dc111e7d0a2866aa5b3d70bc05d786b10fe8"
+    },
+    {
+      "path": "vendor/bridge_worker_3_1_free.py",
+      "bytes": 28561,
+      "sha256": "b55a7510cc13ce7f83c897b968a4c51a8f638723f3c6847d89c20e1a7a5af2d3"
+    },
+    {
+      "path": "vendor/database/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "vendor/database/book_world_event_readback.py",
+      "bytes": 1893,
+      "sha256": "8d66b1bb62cefae4a03f0a6b0a72ead83a74776100b34193b82894424a6a07eb"
+    },
+    {
+      "path": "vendor/database/definition_candidate_producer.py",
+      "bytes": 1455,
+      "sha256": "381ed99c34ee745f5757ba249868a0d6ecf3f6eeac9c6a6fc7fbfa5b2427e5b9"
+    },
+    {
+      "path": "vendor/database/definition_contract_postgres.py",
+      "bytes": 14931,
+      "sha256": "d5bb6be25a886cb74b0b138e6a6838ed9e24e6541fcb8f244d73a34a10d098e5"
+    },
+    {
+      "path": "vendor/database/definition_contract_store.py",
+      "bytes": 21730,
+      "sha256": "e3eacff30e7b78a0ecfd7dc00f3c243047a930d4e9df540de448f0068b82755c"
+    },
+    {
+      "path": "vendor/database/definition_current_receipt_reader.py",
+      "bytes": 3975,
+      "sha256": "dc5dd29e5c09c0290c48747c120f70dcc6cf17980fefe83ea51fd09baf98f858"
+    },
+    {
+      "path": "vendor/database/definition_initial_admission.py",
+      "bytes": 17646,
+      "sha256": "a700ad6641d20d5d510fdd7f5978554025824b62f415e7dac5a6a25510490c95"
+    },
+    {
+      "path": "vendor/database/definition_initial_postgres.py",
+      "bytes": 21104,
+      "sha256": "d1a98ea20b7388af17a240abeef7ba3d6a906117d363f3ede2489fba3edc5318"
+    },
+    {
+      "path": "vendor/database/outbox_publication_decision.py",
+      "bytes": 1514,
+      "sha256": "9945a0f7cdbabc5631113d4eea09847b463e069db10fdd3f7adc964abf27c37a"
+    },
+    {
+      "path": "vendor/database/outbox_publisher.py",
+      "bytes": 7175,
+      "sha256": "02d28c9f055710d8ae77500332a1ca609566cf335a9bd224b68d2c3c05419209"
+    },
+    {
+      "path": "vendor/database/run_checkpoint_persistence.py",
+      "bytes": 8435,
+      "sha256": "6a4c2badaf99549d896dbd56d55e48d815945536bf13e00d65d661079b821872"
+    },
+    {
+      "path": "vendor/database/runtime_worker_preflight.py",
+      "bytes": 6025,
+      "sha256": "cd014286fc88786c97792d8924deb804d0e5c590b353db4c1ffd791d3a325cf7"
+    },
+    {
+      "path": "vendor/database/source_identity_persistence.py",
+      "bytes": 3849,
+      "sha256": "e10731528c55afa034dc3bcbc63280d03b0e21bfbe576a0c78de9e6853acf372"
+    },
+    {
+      "path": "vendor/database/video_candidate_persistence.py",
+      "bytes": 11615,
+      "sha256": "7ce1c5832d3158ab931c444082ef1dedea8bedee939cb1d94747ea4f7be315ed"
+    },
+    {
+      "path": "vendor/database/video_correction_review_store.py",
+      "bytes": 2465,
+      "sha256": "64f0290e5157cb8b2ffb040c9328606dff6bbb28c0217ad60fcf96eecbdf81ba"
+    },
+    {
+      "path": "vendor/database/video_definition_staging_lineage.py",
+      "bytes": 1880,
+      "sha256": "39cc18d67c1c2b677e94be8b63ba59757ffb92b24d4952e05888e3050d3a940a"
+    },
+    {
+      "path": "vendor/database/video_result_persistence.py",
+      "bytes": 36605,
+      "sha256": "700a7303bf6f563958c01746892c244d0c437d11508ddcf7c6553194ac17f0b2"
+    },
+    {
+      "path": "vendor/database/video_staging_handoff.py",
+      "bytes": 3186,
+      "sha256": "6940af19e3404a2e07fef57be39fa584ad44376d552c9ad6b6f06aafb8b72f7f"
+    },
+    {
+      "path": "vendor/database/video_staging_lineage.py",
+      "bytes": 4090,
+      "sha256": "0c91b0fee9bf0eb71c44db41e7921672e0058539fceb3f5ec630f0051cb65de1"
+    },
+    {
+      "path": "vendor/database/video_staging_read.py",
+      "bytes": 10216,
+      "sha256": "15cbc018dabfe0e814c8aeb4a97ecbcb6304251baceaf85d4a3c6e4684e95330"
+    },
+    {
+      "path": "vendor/database/video_staging_receipt_read.py",
+      "bytes": 4165,
+      "sha256": "687b6d91c472438a27c1b7909e391dba8baa95213d236f0dc543794d6e73a25f"
+    },
+    {
+      "path": "vendor/diana_longitudinal_postprocess.py",
+      "bytes": 30124,
+      "sha256": "14df793f439a7176708beba6b92350d3a65b1f2bc0da294478227e3d217859ee"
+    },
+    {
+      "path": "vendor/diana_longitudinal_postprocess_v3.py",
+      "bytes": 2231,
+      "sha256": "daf643af668e4458081c294571559e034bf7742aa548a048751daf46c40ca0a9"
+    },
+    {
+      "path": "vendor/diana_longitudinal_postprocess_v4_2.py",
+      "bytes": 18451,
+      "sha256": "204417b9ffaa36c21f3e071cd4779deaf19daf424a80480a688affea280ca446"
+    },
+    {
+      "path": "vendor/diana_longitudinal_quality_v2.py",
+      "bytes": 57557,
+      "sha256": "d63158167b9be2ff17f0710ba3d1fd16cb88a47f040b87585ca31ab198f05917"
+    },
+    {
+      "path": "vendor/diana_longitudinal_quality_v3.py",
+      "bytes": 38323,
+      "sha256": "b49624f45cf517b77f75da42c3348e475af1a10944105f1e79fb6a0a3a77e976"
+    },
+    {
+      "path": "vendor/diana_longitudinal_quality_v4.py",
+      "bytes": 27872,
+      "sha256": "d26d93727c013f9875f8e31aeb9978c20e080ddec8657b41207b33e08f8d3567"
+    },
+    {
+      "path": "vendor/diana_longitudinal_quality_v4_1.py",
+      "bytes": 14953,
+      "sha256": "c7db3dd596aa25762dd8e4431c666f9b7c78c19456b7187f7ce100f892dcfc97"
+    },
+    {
+      "path": "vendor/diana_longitudinal_quality_v4_2.py",
+      "bytes": 13112,
+      "sha256": "db520b83d6570875dbe2e935f9c61291552f5639d2ebd60c080529f55eaeb7a1"
+    },
+    {
+      "path": "vendor/run_drive_3_1_free.py",
+      "bytes": 16566,
+      "sha256": "713c4e18e76e9c8cb2ce1d5d3b85851b502c3b68fc1a85eea8b7b4664261aa7f"
+    },
+    {
+      "path": "vendor/run_drive_3_1_free_generic.py",
+      "bytes": 205,
+      "sha256": "3d35321bedca4fa686f5c9e281aa40f8b3bc1756784bd4a4a59f9ffcafe39665"
+    },
+    {
+      "path": "vendor/run_drive_3_1_free_oidc.py",
+      "bytes": 3581,
+      "sha256": "318d9ea39224d3decffb32a5bb0eebaa960f52e4cfa1407ccf575bd53f252776"
+    },
+    {
+      "path": "vendor/run_master_3_1_free.py",
+      "bytes": 35724,
+      "sha256": "135cbd2f5a686da6da88319c16dd11c5ccfbfc26abe8292dffe6055744f9aa27"
+    },
+    {
+      "path": "vendor/run_master_3_1_free_semantic.py",
+      "bytes": 15176,
+      "sha256": "cee0ebdc8f550d6b3bd2c4b16fdff0de82ae03a8250d6caeb368a1b4f8bda91b"
+    },
+    {
+      "path": "vendor/run_master_3_1_free_semantic_v2.py",
+      "bytes": 10814,
+      "sha256": "e55873764a7f57a06a61b10af2f736770862ccf358af26a3703f6d75bdf87e3b"
+    },
+    {
+      "path": "vendor/tests/test_diana_longitudinal_quality_v4_2.py",
+      "bytes": 18046,
+      "sha256": "7f12b79870b7c26f05c1ba757ce4c97d0c11112c8cc0cd26e5de9e3c773171a9"
+    },
+    {
+      "path": "vendor/tests/test_video_candidate_persistence_revision.py",
+      "bytes": 1976,
+      "sha256": "0096c88262f014381b340949f19383be16ef5e13826f4781dc0c541ade687345"
+    },
+    {
+      "path": "vendor/tests/test_video_canon_replay.py",
+      "bytes": 19074,
+      "sha256": "729f90b14dee63c023f26bde248a0fc1d38022aab962ea371f9cbec6c0933157"
+    },
+    {
+      "path": "vendor/tests/test_video_replay_input.py",
+      "bytes": 13685,
+      "sha256": "bf192787636530afe70181f39059ea36bb06fc7255beea43a3214f1e766dbd22"
+    },
+    {
+      "path": "vendor/tests/test_video_source_draft.py",
+      "bytes": 11552,
+      "sha256": "e028894929ef367c760e9b6a9f9322058436feef4723e65b9fc384d20b575cd2"
+    },
+    {
+      "path": "vendor/tests/test_video_staging_handoff.py",
+      "bytes": 9830,
+      "sha256": "ae945b6e0c8c6e4747d76b2d3c06f3153bba9c4aadb8ec044483e0f082d184f2"
+    },
+    {
+      "path": "vendor/tools/replay_video_canon.py",
+      "bytes": 5586,
+      "sha256": "752e8002de9ba84de7917a8fbf0d9c4c2fdc14781d5afb6e7723cd712ab2bd68"
+    },
+    {
+      "path": "vendor/transcript_stage_checkpoint_v1.py",
+      "bytes": 6927,
+      "sha256": "ce6f916fdc6e97a014ba57c8f6f20f0de1d15684bbea09a4e1d1f8879dc81b53"
+    },
+    {
+      "path": "vendor/universal_video/__init__.py",
+      "bytes": 494,
+      "sha256": "6ca265934f0e583c5a9fd3bdf0245c142b45b716b67b16008cd7b33f6fd4f686"
+    },
+    {
+      "path": "vendor/universal_video/algorithm_3_1_test.py",
+      "bytes": 10613,
+      "sha256": "b80ac1d9a41b68d12049d50f768f686b211fc6315c8f0b91af3d41466a9ff234"
+    },
+    {
+      "path": "vendor/universal_video/comparison_artifacts.py",
+      "bytes": 45271,
+      "sha256": "5cfcb4e7ed0416d79c5a464141dd4db2dc82c34da2cee2e840e82b94de556d87"
+    },
+    {
+      "path": "vendor/universal_video/comparison_requirement.py",
+      "bytes": 1776,
+      "sha256": "7db2a9b6e94d4fee20ecfb68c977127482d52cd4d2ad82d94b8a601367882ded"
+    },
+    {
+      "path": "vendor/universal_video/contract.py",
+      "bytes": 8345,
+      "sha256": "589e8a0b6eae43dfa5f72b72f274feab5c29ec5497b6531afdba6714de278717"
+    },
+    {
+      "path": "vendor/universal_video/profiles.py",
+      "bytes": 2911,
+      "sha256": "bad20dccaa5056e1b2ac457d146c498cd014dd2e795670dc1beeda6cfa05d6e3"
+    },
+    {
+      "path": "vendor/universal_video/readiness.py",
+      "bytes": 4104,
+      "sha256": "c362e69ee45d39a5c37e2a953ead25788b94a2412d65b82facee195a1b434b0b"
+    },
+    {
+      "path": "vendor/universal_video/result_conformance.py",
+      "bytes": 69675,
+      "sha256": "cd4d63bf8b0b1d4416d0c888d37fa9c7a349ec564da95dcf81ef089a34588006"
+    },
+    {
+      "path": "vendor/universal_video/source_parts_manifest.py",
+      "bytes": 5603,
+      "sha256": "d0a77b7e08f226b326050ec7a8ec0064feda83a64c83cf6d554aca334855516d"
+    },
+    {
+      "path": "vendor/universal_video/speaker_role_verifier.py",
+      "bytes": 9502,
+      "sha256": "3c58f7cc704566eb3d445ad482dfb196124e2a5684ce76c47f106bd75a9afaf4"
+    },
+    {
+      "path": "vendor/universal_video/speaker_structure.py",
+      "bytes": 19754,
+      "sha256": "d71f809a4f4633268802ea5056f4284209d80928e5ef9eeae3735e6ce249722a"
+    },
+    {
+      "path": "vendor/video_completed_staging_handoff.py",
+      "bytes": 1997,
+      "sha256": "dee1875af818f01391e7eed97b3ba7ee6422c2e5cf5565956b7d33145e2209f0"
+    },
+    {
+      "path": "staging_runner.py",
+      "bytes": 22252,
+      "sha256": "4894570f6ee6a3f08cc505e3d4be39f86140aa77b7ded192274b9c889902036f"
+    },
+    {
+      "path": "write_bounds.py",
+      "bytes": 4198,
+      "sha256": "433ce80fb98f4315d02509654ff9f118af3b0c4e471d582ce1338de98b7a4354"
+    },
+    {
+      "path": "injected_transactions.py",
+      "bytes": 3576,
+      "sha256": "73cbd0367cabac3c86162fd793705bcd027052fb58277e25d3b54ad3313d7641"
+    }
+  ],
+  "source_bundle": "C:\\Users\\Oleg\\Documents\\Codex\\2026-10-22\\task-2\\video-staging-input-handoff-r1\\SOURCE_BUNDLE.json",
+  "source_bundle_sha256": "7f3250426f41d644da75fab104e2dd94c5add9f3f67ffe538e88077268c7d542",
+  "source_inputs_manifest_sha256": "f272c1a6e37b8e44c33cc7bcab62e9a484307eb34f1958cd2f1b833b7c0974dd",
+  "source_package_manifest_sha256": "6c68a446bd6428393e555b0487a1d199be5350f4caa3df2e8f482545a267efa2",
+  "product_files_modified": [
+    "vendor/bridge_contracts/card_play_definition.py",
+    "vendor/bridge_contracts/card_play_definition_admission.py",
+    "vendor/bridge_contracts/definition_staging_identity.py",
+    "vendor/bridge_contracts/definition_v01_authority.py",
+    "vendor/bridge_contracts/definition_v01_records.py",
+    "vendor/bridge_contracts/video_definition_staging.py",
+    "vendor/bridge_contracts/video_teacher_read.py",
+    "vendor/database/__init__.py",
+    "vendor/database/definition_candidate_producer.py",
+    "vendor/database/definition_contract_postgres.py",
+    "vendor/database/definition_contract_store.py",
+    "vendor/database/definition_current_receipt_reader.py",
+    "vendor/database/definition_initial_admission.py",
+    "vendor/database/definition_initial_postgres.py",
+    "vendor/database/video_definition_staging_lineage.py",
+    "vendor/database/video_staging_read.py",
+    "staging_runner.py"
+  ],
+  "runtime_installation_claimed": false,
+  "successor_scope": "SOURCE_ONLY typed DEFINITION replay/runner/readback, no authority",
+  "predecessor_code_pins_sha256": "b8907dc83b0cae897b4cdbdccf36ef6acaf861cb92ed21fcc4bb13d95c47aad3"
+}

@@ -1,0 +1,1312 @@
+{
+  "schema": "teacher-staging-native-once-manifest-v1",
+  "SOURCE_ONLY": true,
+  "genuine_checks": 0,
+  "base_commit": "c31eb6c9017147da3955b3133792b19591bf47c8",
+  "PG_image": "postgres@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c",
+  "Python_base_image": "python@sha256:e8a38829209aea82774882e5157e1f7c3e8c8393ff53a697b3580896e57f345c",
+  "retained_PG_config_id": "sha256:2e182ed2ff8f5d0835353864264437a26dffc542a9a6c677ec495aa54e491627",
+  "retained_Python_config_id": "sha256:a33c10a97f11005523814c6eee013986119fe41f3122f444518117536675c8e1",
+  "accepted_staging_patch": "f53e93f89d81e7af279272910df8b12165caea3486fc549f7274cd6bc4943360",
+  "install_order": [
+    "database/migrations/0001_global_registry.sql",
+    "database/migrations/0002_learning_core.sql",
+    "database/migrations/0003_event_publication_order.sql",
+    "database/migrations/0004_integrity_guards.sql",
+    "database/migrations/0005_runtime_roles.sql",
+    "database/migrations/0006_event_immutability_hardening.sql",
+    "database/migrations/0007_learning_context.sql",
+    "database/migrations/0008_exercises_homework.sql",
+    "database/migrations/0009_tournament_data.sql",
+    "database/migrations/0010_knowledge_media.sql",
+    "database/migrations/0049_analysis_candidate_staging.sql",
+    "database/migrations/0200_bidding_knowledge_v0.sql",
+    "database/migrations/0329_workflow_video_canon_ai_promotion.sql",
+    "database/migrations/0330_workflow_canon_source_domain_policy.sql",
+    "database/migrations/0331_workflow_definition_contract_store.sql",
+    "database/migrations/0332_workflow_definition_bundle_store_successor.sql",
+    "database/proposals/definition_staging_identity_v2.sql"
+  ],
+  "SQL_files": [
+    "database/migrations/0001_global_registry.sql",
+    "database/migrations/0002_learning_core.sql",
+    "database/migrations/0003_event_publication_order.sql",
+    "database/migrations/0004_integrity_guards.sql",
+    "database/migrations/0005_runtime_roles.sql",
+    "database/migrations/0006_event_immutability_hardening.sql",
+    "database/migrations/0007_learning_context.sql",
+    "database/migrations/0008_exercises_homework.sql",
+    "database/migrations/0009_tournament_data.sql",
+    "database/migrations/0010_knowledge_media.sql",
+    "database/migrations/0049_analysis_candidate_staging.sql",
+    "database/migrations/0200_bidding_knowledge_v0.sql",
+    "database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql",
+    "database/migrations/0200_bidding_knowledge_v0/02_tests_conflicts_activation.sql",
+    "database/migrations/0200_bidding_knowledge_v0/03_activation_immutability_trace.sql",
+    "database/migrations/0200_bidding_knowledge_v0/04_ingestion_audit.sql",
+    "database/migrations/0200_bidding_knowledge_v0/05_runtime_views.sql",
+    "database/migrations/0200_bidding_knowledge_v0/06_privileges.sql",
+    "database/migrations/0200_bidding_knowledge_v0/07_function_acl.sql",
+    "database/migrations/0200_bidding_knowledge_v0/08_internal_acl_and_registry.sql",
+    "database/migrations/0329_workflow_video_canon_ai_promotion.sql",
+    "database/migrations/0330_workflow_canon_source_domain_policy.sql",
+    "database/migrations/0331_workflow_definition_contract_store.sql",
+    "database/migrations/0332_workflow_definition_bundle_store_successor.sql",
+    "database/rollback/0332_workflow_definition_bundle_store_successor.sql",
+    "database/proposals/definition_staging_identity_v2.sql",
+    "database/rollback/definition_staging_identity_v2.sql"
+  ],
+  "files": [
+    {
+      "path": ".github/workflows/teacher-staging-native-once.yml",
+      "bytes": 1448,
+      "sha256": "991d4a11d87220e4d1f9f23a7adcd0ba76fd9cb8fa86827b01a9af13a3195733",
+      "git_blob": "c8b5133995c5c60ba426d13d30f7262f931b63ac"
+    },
+    {
+      "path": "database/migrations/0001_global_registry.sql",
+      "bytes": 10105,
+      "sha256": "b5aa773212d6593171d728fb93906f49ea5abf684fc851ceb6996e88bbd7b308",
+      "git_blob": "8b6bc273ecb91c1a8e6753c46f1dfafa240890ec"
+    },
+    {
+      "path": "database/migrations/0002_learning_core.sql",
+      "bytes": 12518,
+      "sha256": "16fbeb4b60f661e1cdb17f186a92217f36c14ac4ad139c0728791e2e0076f4fb",
+      "git_blob": "f43e3b13f84dc12a961b8b87abf4a08247198a7b"
+    },
+    {
+      "path": "database/migrations/0003_event_publication_order.sql",
+      "bytes": 2259,
+      "sha256": "72094e7a65bd35c97d099225d93c768057113f0417e2ba36360a54351cb3e307",
+      "git_blob": "7eee1a0bd9bd86147053d2a8b40fe5869bd1d413"
+    },
+    {
+      "path": "database/migrations/0004_integrity_guards.sql",
+      "bytes": 3516,
+      "sha256": "9c2c57d4680e8d5a24ddfc6270b1b16bd5b2da01a8d82714d26705cd3511394f",
+      "git_blob": "404cfeb1c85f7b6cb7df23d109d5926735b7b147"
+    },
+    {
+      "path": "database/migrations/0005_runtime_roles.sql",
+      "bytes": 5209,
+      "sha256": "fc9b3ded9b382744772c0075712c407701901a2eb425fab483e859feeab59aee",
+      "git_blob": "3c0d04a1492ce35272ae5d9a3797f36c6331c5d6"
+    },
+    {
+      "path": "database/migrations/0006_event_immutability_hardening.sql",
+      "bytes": 1064,
+      "sha256": "899f183142d4c039bf7e7e244c1ed200ca455f77fca5a64987a164a654998906",
+      "git_blob": "406212d24ab60a2c433a40a982df04a23ea9f917"
+    },
+    {
+      "path": "database/migrations/0007_learning_context.sql",
+      "bytes": 10849,
+      "sha256": "57ae70a5ae7e4d9010cc62f543f4bb9bf0f54cae2f8522358381fad1b9a581ad",
+      "git_blob": "8bcbf0c5f4a60c8c35e43d693c976f63f3a1adce"
+    },
+    {
+      "path": "database/migrations/0008_exercises_homework.sql",
+      "bytes": 13168,
+      "sha256": "7e67e090e6208c43e12247739037234cf3d3a9af6eba53f7a99d57a07292c6c3",
+      "git_blob": "1f95cf3d87675e77d3508835da6333781043c064"
+    },
+    {
+      "path": "database/migrations/0009_tournament_data.sql",
+      "bytes": 20459,
+      "sha256": "89ff9c937cf0710073e8e5536f88e7e4aba99336057db4cae826ea023ac43f05",
+      "git_blob": "1c31edf6aaaaaf4248dfd9fc1c30c38e5ed9ba0c"
+    },
+    {
+      "path": "database/migrations/0010_knowledge_media.sql",
+      "bytes": 29102,
+      "sha256": "82827aa0855ef03f4f101aecdba1c179d80b56c890a8c14a8e254922c1ba6899",
+      "git_blob": "62fc87d04a21643a53ea2ac7927d31dbcfb1b7af"
+    },
+    {
+      "path": "database/migrations/0049_analysis_candidate_staging.sql",
+      "bytes": 3074,
+      "sha256": "939a2d8948350eedd518b4a3a0ae8d370f35f9bf626b5fcea6f6fe9afe387414",
+      "git_blob": "9085533d2f21234c5ef9befb7a1c7b3d648bf14f"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql",
+      "bytes": 35627,
+      "sha256": "33708210b2bdd146ca48a99396a7b4fba87012cd72214315fe30759cb68b5c85",
+      "git_blob": "bbe41cbb98055a2827818b5aa3b919960d90e04a"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/02_tests_conflicts_activation.sql",
+      "bytes": 7897,
+      "sha256": "b0b1357d441bdcf8264587056ad10c38f42ac9f30470f0c63dd9425f503f184d",
+      "git_blob": "2a4bc01e5f12934369ff4186c51741275bcef4af"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/03_activation_immutability_trace.sql",
+      "bytes": 16812,
+      "sha256": "22f53e1f772bb4607ec1eaf4d624f3169d0af9c1460014b0138ab747b7df535f",
+      "git_blob": "5d6569022cb12427d5e56f730afb51942a869801"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/04_ingestion_audit.sql",
+      "bytes": 6122,
+      "sha256": "3f82fb7620201b7aded7ebfbb52fd888950865853e20209ff58cf5305d1b77b1",
+      "git_blob": "891950b9190e19a2a682b20c3fe0975f8fc8f673"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/05_runtime_views.sql",
+      "bytes": 6795,
+      "sha256": "ea397213b87f7001ffcc5b6f78d9483dc3547678845b59747790dd5fc6212296",
+      "git_blob": "7ceb425f37236a6c4755cb1a50ed29908a2c9982"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/06_privileges.sql",
+      "bytes": 1840,
+      "sha256": "96a45de92019240387a7ee1931149327964ba9fba6bd67c5d8fd043fea0dfd4b",
+      "git_blob": "f5de1d4bfc49636aa1a2a16137f2529c17b0098f"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/07_function_acl.sql",
+      "bytes": 1529,
+      "sha256": "4e9c414f2b3291305f2f1a9537cc1c4e1392410564d1f0dfa57ee0f1825d33be",
+      "git_blob": "76e83266eea29f8569649c30cd4e334ce1977781"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0/08_internal_acl_and_registry.sql",
+      "bytes": 2196,
+      "sha256": "b76c821e14c365684f0f8694463c34138e26b5e5a95a9ba92678cabf43469a19",
+      "git_blob": "519fcc51e262f487570ceb74367f41f8eafc515c"
+    },
+    {
+      "path": "database/migrations/0200_bidding_knowledge_v0.sql",
+      "bytes": 623,
+      "sha256": "68d4207d2f02f68de93d46b00dd8a564a74f72b32092ce0c257296e5b5b0a5fd",
+      "git_blob": "e4f406219f399e9b773bc7668accd48853eb1536"
+    },
+    {
+      "path": "database/migrations/0329_workflow_video_canon_ai_promotion.sql",
+      "bytes": 111881,
+      "sha256": "8436640539e288aeae70c6c6dc66dd4465f241dbb38bb63fa85515a9354bb4be",
+      "git_blob": "976833b7e42066734ca48be4a0c5d28703952e9d"
+    },
+    {
+      "path": "database/migrations/0330_workflow_canon_source_domain_policy.sql",
+      "bytes": 4996,
+      "sha256": "f61d0a224099ad53fae1e123b63854e723245a953bf861adfee22c0492422557",
+      "git_blob": "1a4a5bdf66822828155f438bae0f5face790b9ef"
+    },
+    {
+      "path": "database/migrations/0331_workflow_definition_contract_store.sql",
+      "bytes": 7411,
+      "sha256": "8949edf6c11b5e9a876eca1360bd2c8b45f5c4ded3a3f1e935e555583d4f051e",
+      "git_blob": "9d7e2d25749099f383845c7f44731e0b4772a7ce"
+    },
+    {
+      "path": "database/migrations/0332_workflow_definition_bundle_store_successor.sql",
+      "bytes": 87410,
+      "sha256": "6710e2f93b0d410aaa3fcca7eeb2a6107d2470a6588f76248fb39398c0eeb4bf",
+      "git_blob": "73431ea359d47af7113d89f6ee8f0bc1624450ff"
+    },
+    {
+      "path": "database/proposals/definition_staging_identity_v2.sql",
+      "bytes": 12522,
+      "sha256": "05f54c1b82a1095111f07c8e5aa2b35351a42377dc965df99c3f0c4f18c072b4",
+      "git_blob": "b76d65c3fa9c36d04ba0b9053d47a0adc23ecf2f"
+    },
+    {
+      "path": "database/rollback/0332_workflow_definition_bundle_store_successor.sql",
+      "bytes": 17873,
+      "sha256": "7a4715b278b6fb5bcdcb9edd2c9a353037d0171b2d9146a01a5a1bef71336d1b",
+      "git_blob": "aab118f120465c980ea069b737f00a4d4a2041fd"
+    },
+    {
+      "path": "database/rollback/definition_staging_identity_v2.sql",
+      "bytes": 12274,
+      "sha256": "d14063280c04c14e2de57c4fe9a89d1d0ef3f746ac0d5595b0a4eae6e21a5e77",
+      "git_blob": "682d77cddbd0090317d8499ba30c57d55c689525"
+    },
+    {
+      "path": "tools/teacher_staging_native/Dockerfile",
+      "bytes": 956,
+      "sha256": "77b2c379558dc8cbf13a533fbc3166625674677efada6286f588b03480331cda",
+      "git_blob": "0cd2761ea895ac4f23210f88dd604801d5355250"
+    },
+    {
+      "path": "tools/teacher_staging_native/host_driver.py",
+      "bytes": 15374,
+      "sha256": "e496507a842f7a84949eef30f27147e7df58b54fb63a6e213471d739422c8fe4",
+      "git_blob": "1374c310487673257bbef150e478814af08086f6"
+    },
+    {
+      "path": "tools/teacher_staging_native/native_cases.py",
+      "bytes": 26895,
+      "sha256": "c2bee81153a6eb514069900ce52d96d7bdf1fec0882d4a99691a3b386a9353c2",
+      "git_blob": "f773a359f2349dc6b655e124772402a8c51a65ab"
+    },
+    {
+      "path": "tools/teacher_staging_native/native_fixture.py",
+      "bytes": 6720,
+      "sha256": "9de262c9356690618f7065e48198aa2802bff73d11a237d2c35347a4681266ca",
+      "git_blob": "b278792702060c5555a5806119ca87ad7c13ebd2"
+    },
+    {
+      "path": "tools/teacher_staging_native/r3_driver.py",
+      "bytes": 26474,
+      "sha256": "843c1b5bb7651ee7a1429279603027fb849e889d5abdff25e5ce2f8fdfe99df9",
+      "git_blob": "2ba51d43a7b4a495e00392d79763062bac001beb"
+    },
+    {
+      "path": "tools/teacher_staging_native/requirements.lock",
+      "bytes": 300,
+      "sha256": "e46dd6cca8850ddeb83da34f690bbd98418ed14295a8af8fba8649c99006b7d5",
+      "git_blob": "b6ad109b0da7911a01859778102241e5b4db8671"
+    },
+    {
+      "path": "tools/teacher_staging_native/seed.sql",
+      "bytes": 1636,
+      "sha256": "882028a63319c1afaa2a8d4fc63299477ba9c709d5774db8ccd861001f10bc30",
+      "git_blob": "ba950bc3baf16a3eb4bc3064e05641002ef4017b"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/DEPENDENCY_PINS.json",
+      "bytes": 26867,
+      "sha256": "e484e0e3cc5f165d88bb41bbfa52045ea8b8e02e2ce70369718250bbae5c84b0",
+      "git_blob": "952da4b5cb7925961d6923daff21f1828f3b4eef"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/injected_transactions.py",
+      "bytes": 3576,
+      "sha256": "73cbd0367cabac3c86162fd793705bcd027052fb58277e25d3b54ad3313d7641",
+      "git_blob": "0dea11798eea7dcf565be35899a681814d6698d0"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/staging_runner.py",
+      "bytes": 22252,
+      "sha256": "4894570f6ee6a3f08cc505e3d4be39f86140aa77b7ded192274b9c889902036f",
+      "git_blob": "d319762c276dc297360e9aea643a159bed8ae35e"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/__init__.py",
+      "bytes": 830,
+      "sha256": "742c611d5fb5f4d2903cdc387b533d11237d1f4e3060831d5c05069a80da85bc",
+      "git_blob": "ab60f5992bfd19458b5152cde6899058cac5d3e7"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/assistant_lab.py",
+      "bytes": 10891,
+      "sha256": "f842b683aefadb836de321f9af31ff373fcb0c6962cd8fc0bde67eacf626a080",
+      "git_blob": "d9aa8f20f005fc5395264530b3b55a5a6eb0c542"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/book_material.py",
+      "bytes": 15905,
+      "sha256": "48b4ca62083e55677c294cb04e8df616a84d02c00089d0d2588c7820c0ec4b46",
+      "git_blob": "e0ca35262de2c701af6c86e1b537929dcf05f27c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/book_source_identity.py",
+      "bytes": 1580,
+      "sha256": "f27e96c8b1e968e56c09a48c86fc372019a294d85e2e58bcec11c47aa9718ccf",
+      "git_blob": "a9264ae01771401d1e1d911ed029696d50695308"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/book_source_review.py",
+      "bytes": 3084,
+      "sha256": "5bc901a88f4f7da12568b742815da23d9028d7de571a66d25320e818c4fdf868",
+      "git_blob": "dae4396b26a487ae0f5c3716234a07c6d3e9e45c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/book_world.py",
+      "bytes": 14224,
+      "sha256": "95be1fe9385ce373950c467defab59fa241a370577c376aa4e94799fd2af53e3",
+      "git_blob": "4c3c9a1dedc863ece8f41c283bf96badfc2b6a47"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/book_world_events.py",
+      "bytes": 10999,
+      "sha256": "ef6f37e551bf757454588c67c7ea72a58aab90929d624f3c3b30c9487e1b212f",
+      "git_blob": "486392f262fe7ca0177b6103d16074d6a50bcf60"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/canon_source_domain_policy.py",
+      "bytes": 3436,
+      "sha256": "a1df5a8f9b665e900d4e83017af37a97e9bf1c336c54ca7c2d16084d17e5bcca",
+      "git_blob": "7796b27ecd3e81f62c13ce4f92b280f996c0dbb2"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/card_play_definition.py",
+      "bytes": 11195,
+      "sha256": "2c010c45c2396959c30ef7dc284af8e9d6a77b6dc43727999b367c0db8b4ca22",
+      "git_blob": "3e306d2c1c0ba09abddd5c975f39a8a5349c95f0"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/card_play_definition_admission.py",
+      "bytes": 14083,
+      "sha256": "a8cdff7b32225a7e83a07243a843cf675529f39ee704ef8adec8ae46c6de34ce",
+      "git_blob": "6d114711c63712dd7538685155064ccd56737601"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/definition_staging_identity.py",
+      "bytes": 790,
+      "sha256": "8c4676255f204d679434f435e78139ba2b73ef279327465801b8d297c8037a27",
+      "git_blob": "91dccb22ed88891fde26a4bec82ae46bdcad3422"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/definition_v01_authority.py",
+      "bytes": 14610,
+      "sha256": "dee60258e0a445004538a112bbbc9ef96b99aa5e593ad3fd28bd3045f9605a16",
+      "git_blob": "1aa779690a198722e44c7ff2bcc0499d08a7d5e1"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/definition_v01_records.py",
+      "bytes": 24659,
+      "sha256": "fe5a305a874249e42a265a8e62592664b3fd70daa66fdd289c6229d73914e567",
+      "git_blob": "de0787d0a93eed8b9d3e28408747c63d2ad1f21d"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_ai_promotion.py",
+      "bytes": 13908,
+      "sha256": "bf88e9f009536bae7e3831debba4ff2b1c332e0d8b3d80336f86d323151ab480",
+      "git_blob": "a25bd02c779b60c69e8ae37326726ed75d3dde0b"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_auto_pipeline.py",
+      "bytes": 3155,
+      "sha256": "eda17c9dbae196c239c1938af61c3e03b773b9a0bcb5a92772a2274f4f81a42c",
+      "git_blob": "a3219c850ee9735d08cc180d835e99d66c5bded6"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_evidence.py",
+      "bytes": 23196,
+      "sha256": "313e3cac58c68392e091149b9ac45c21915ae7a4e32da830b7b21f158ef1b803",
+      "git_blob": "d1d5fd1b10c836a0313b183c3b77d3e4155794b5"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_replay.py",
+      "bytes": 16359,
+      "sha256": "6ac3843f075ca0e392c42d614294b67d082c995373b5b5eb721970b7657b1d90",
+      "git_blob": "362e40903b99e05336c83ea6d5d8566991410ab8"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_dds_decision_comparison.py",
+      "bytes": 14196,
+      "sha256": "00702269edf6223aef22c54aa5f6260ccaeef914f77921459324cd0f95ba10e0",
+      "git_blob": "68867f8f0a6dd36b207434ab718a72f77dbf064a"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_dds_pinned_executor.py",
+      "bytes": 1925,
+      "sha256": "3316a473f1ae5c60affa8210412141b8ad020f0d48ea09ad113fc13185a54c35",
+      "git_blob": "46aead490361c341540d9a7fed5d265067e68f03"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_deal.py",
+      "bytes": 5765,
+      "sha256": "ace5723d6860e000ef0d8ac05cca03ccfc095651f6789a5f79378ec789154921",
+      "git_blob": "cc161be8a334bb02f2aec1b95e4ea5836f72865c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_definition_staging.py",
+      "bytes": 6551,
+      "sha256": "37e69e88ee4cca1ac4251966a59e870b54725f1b3de0ee3bcc1c407dcc7ee91a",
+      "git_blob": "27c6896e50052861bacabe82ca4ba5708f6ae32c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_extended_extraction.py",
+      "bytes": 17312,
+      "sha256": "50660d32a86d367864e549553447c4ed3aae3e84313fd47c442f853b229b87f7",
+      "git_blob": "5007f7c0d183d040dcce98d5d7774f77152b6a60"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_frame.py",
+      "bytes": 5608,
+      "sha256": "f609a82d4f03ea2e617c0a6869a08e8538682812878fa194d0ecec803df07b6f",
+      "git_blob": "7770f019f90744215fd002ebca5be2b93a28fa77"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_learning_candidate.py",
+      "bytes": 13501,
+      "sha256": "507bb3461bfc9d779ad6db0785529f325d24d419c3d830c4b44fe99087ad3b6d",
+      "git_blob": "0c9473fddddd9363028c5472f7bcbc81c061b26d"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_learning_feedback.py",
+      "bytes": 9193,
+      "sha256": "9e508cab6cbe0c96268fb0e31c07f1dbc869444d8928ac87bb89c83bdb840a74",
+      "git_blob": "92bdd36e4cc8533c944d6a997954011c19a55548"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_local_evidence.py",
+      "bytes": 18052,
+      "sha256": "3265084e2626977c4bd6a49d88cde9c074b6b51f061b34253f54dd780d5baecd",
+      "git_blob": "d42437fa18aa902db05299efc823f7a74592d9c8"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_replay_input.py",
+      "bytes": 13116,
+      "sha256": "92922d8bb6554716b9d7d4131f9c19240dcebedf9c2e4b80b299f406c16c3080",
+      "git_blob": "552bd8260ae4da83f86786090c7ee1ae091a9303"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_source_draft.py",
+      "bytes": 9698,
+      "sha256": "c424d02914ac18303c687a978230bae9a8e7824f53e616e2404bfefb47766715",
+      "git_blob": "169a824c4608cc97556db303f6747fdc0c25ab09"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_contracts/video_teacher_read.py",
+      "bytes": 13124,
+      "sha256": "0551466f57eb65d43b79930f7a904a39fe7e560a805ba8e1450a356b7f6d39e3",
+      "git_blob": "7a742ee9f6fa9deba34fe15144e8ad50a600af3a"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_neon_persistence.py",
+      "bytes": 6008,
+      "sha256": "2a1aacda3cc8d85ec5c043a53fffe547bcabea4abe61563273c6f112e22ae13c",
+      "git_blob": "9d7530d39bed284d41a8612fa24eccf8121bfc19"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_output_scoped_idempotency.py",
+      "bytes": 3605,
+      "sha256": "2de4e36a76b35261a0b775e29ee9444c57f8f88102557250291263a6ecaab0ff",
+      "git_blob": "d4322350541ee2747553d02732a92b90d17c4b67"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_report_board_reconstruction.py",
+      "bytes": 14896,
+      "sha256": "e45b3cca1b63ba9926b4510611391ec045a92ee0defdfa41a870c5dc346bea3c",
+      "git_blob": "3560575851fd69820b1b136e66446b9cf9afdde2"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_1.py",
+      "bytes": 6223,
+      "sha256": "eddb48806ece749b7f1a29e88914d6d38324d869de8a66c78f66168c6de65576",
+      "git_blob": "29939ebbabcb2e1b29c9fee0e3c9f3d567e25312"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_14.py",
+      "bytes": 1864,
+      "sha256": "952917d539297c6859b80b61244a11be22ac211e9b53ce7da83a499c9a0a6077",
+      "git_blob": "2249a35679d59ab6230f3e6ebe8f6adfbbfa9185"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_15.py",
+      "bytes": 2906,
+      "sha256": "677bee1cacb1482d655251ab65364a348f8605bc765bff349c538457c4befc1d",
+      "git_blob": "6837f885b6246bec4565c3390f9de345728ae173"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_16.py",
+      "bytes": 2188,
+      "sha256": "c1a97cec1c6806433d7fd570b09e41fa18bcc4b754a110d05c5fe1c6b56decc6",
+      "git_blob": "0f5f81d4fe2103c69ba909c7333864ba6b7f26da"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_2.py",
+      "bytes": 8665,
+      "sha256": "6ed658622865b1b1ac5189c2970f2fea6e0d399c4f1111d11cb0677cb8ee708b",
+      "git_blob": "842cfe05c7f899bae7b56cc5b5876f5b66af1025"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_3.py",
+      "bytes": 3151,
+      "sha256": "5248a3b74584be8af0f24e959e5b13574c5c5d550084d8920b154bf9680a6064",
+      "git_blob": "7b2a6c9ce6dfe44fbfb76daa0f12c35bdcfdcc1b"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_4.py",
+      "bytes": 5147,
+      "sha256": "c160d0ced2fa8d9015431c638e15cf9a4ea047eb11b7d7048c177b70ee1aff95",
+      "git_blob": "e74e7ff820e18b339247c2ecce1f048dcee3d9ef"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_6.py",
+      "bytes": 2594,
+      "sha256": "cb4eaa0c250168dafb693f2f6df3063f87174249db8c36c849c756153596d369",
+      "git_blob": "c97956abac823f5ffdf3c19e717787db3ce1b3fb"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_7.py",
+      "bytes": 1484,
+      "sha256": "5d49d048c6c68f454405ff0543096c2bf8b26a439b555d142b58fd4c6a76dc5f",
+      "git_blob": "a30aaa4de0a6ff0b41533110ce1aa4cd1462afa0"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r26.py",
+      "bytes": 3065,
+      "sha256": "511c92db11e03c15b81bfc48c567e3f76f5bd739a51a6140eabb5cdf35e124f7",
+      "git_blob": "5de2ad78a37e8cb6124001fcd1ecf73ab6c388f8"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r5.py",
+      "bytes": 3376,
+      "sha256": "d2ed200213615c6fba96331e088adba0f8d9daa6e82f09c60c35be25748fd9d0",
+      "git_blob": "c26daa923e0bff726002782b046eec1cbb54420c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/__init__.py",
+      "bytes": 38,
+      "sha256": "0edf32c63b3cb112a9674aff74f67be1f1793e9eb9ef121c03a09c8f634049db",
+      "git_blob": "73187ba6cc4a7d1324aeaf01748c254bdfe8f6e3"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/ai_worlds.py",
+      "bytes": 8881,
+      "sha256": "3397936a7641d2d590c98b3deeb13525ab77509afddff0a28a7e382bccf2b264",
+      "git_blob": "dd118e01467e5401369a4cfd3b757d93e82b8d24"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/__init__.py",
+      "bytes": 1673,
+      "sha256": "c46011bb1e1c56564398754e324ade53536bc32eaaf39f8f481f6d005fe95301",
+      "git_blob": "8c8015c7bbabcdf087b89e2a2a8733fa4f550506"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/image_ingress.py",
+      "bytes": 9011,
+      "sha256": "32efceac38ba264a18f73032c209b4b31b2848577eea2818fd48b63a58c88788",
+      "git_blob": "eb082ce044a9c7143b0af9eb19fd5b4b75964971"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/model.py",
+      "bytes": 1818,
+      "sha256": "a4e7f90d22b3ee6f8e401275db938b84e843013c6eaf3857789f9617c0d31471",
+      "git_blob": "e280d13dd9522c2206579f22e3597a54b02f2764"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/position_contract.py",
+      "bytes": 1983,
+      "sha256": "c166ce9a54367b8e8562b5b33cd022dfa0a2b655934fb2196308d72c9ef29782",
+      "git_blob": "182d09760c4aa7f3648207c5a8e01a9ad5a0f5b6"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/position_runtime.py",
+      "bytes": 8632,
+      "sha256": "a0f6798c2796fd420e1bee5d0992782e94b4572a46b96676d32e31a14367c09e",
+      "git_blob": "6e3e4e24c5de2cf4faae4e8ffa99dc3c4ff9e698"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/screenshot.py",
+      "bytes": 4501,
+      "sha256": "7e7409727b523013da59fc025e65e704a08ce0e15dc503408752076211333e94",
+      "git_blob": "98f02daf4c31286077881e37dd68740579563032"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/service.py",
+      "bytes": 6995,
+      "sha256": "07b7d105aa993bc45770003cd42e8092ea3fa4ac8fee670d5c24c83d7ab94f8f",
+      "git_blob": "1f2a3f3eac3822ed38adbeacb2a4d681e15665db"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_appeals_cross.py",
+      "bytes": 17179,
+      "sha256": "a7647224c538e23a4c97eebd698b51d06321fe19d9cb121baf6bf68eab1da122",
+      "git_blob": "a8884605ca51662fc11c720bccc19db699e183ea"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_appeals_cross_v4.py",
+      "bytes": 13962,
+      "sha256": "c9a5cb5516153f50b0c154c0af030d393ce85a8dd37ccc2e4953b881981ec757",
+      "git_blob": "65301e8f9741ff38240495847cceadeb324d25d4"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_local.py",
+      "bytes": 11440,
+      "sha256": "182b33ccb006a9dd64a2f779ba6faf1f9875850d41fe86d1b3b69e19f772e8b1",
+      "git_blob": "75ddcf96b3becd1f08a19771a444acb694116a50"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_named_quadrant.py",
+      "bytes": 14138,
+      "sha256": "24046006948c51bfc5e91165c754e70524fe34e4749cd9fd362abf3bd7120d53",
+      "git_blob": "053ee00d159463957d5ccd921443d16d74899ffa"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_publication.py",
+      "bytes": 12356,
+      "sha256": "3e360200f8fd818947f035be9c25fcc78ffd2fceefaaadb5329a80c927a4d260",
+      "git_blob": "992cd97f1b75a165ceb6fd26cc76aceedc220769"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_publication_grid.py",
+      "bytes": 12493,
+      "sha256": "986e842163ba89d83fbd775880ddaf1f10772304166f29ec81331c390d7816b0",
+      "git_blob": "1c0b7636a9aeb0f4e571f88dc24d30fead878c70"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_semantic_qc.py",
+      "bytes": 12717,
+      "sha256": "206a508cc7da6fa2d947b030cce7d19439c0e0f5da4c2ea485ec0825e3d83336",
+      "git_blob": "3644d8d70d7f97b273cfe57375baf0876e0026c1"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization.py",
+      "bytes": 16714,
+      "sha256": "0c4e08ed8497eaaf8ad5ae801fe2740efa976b992b9dd80f6596e3eb91d8c6bb",
+      "git_blob": "7ea139200f3b62eeba725333c369b1d52d46e3cb"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v2.py",
+      "bytes": 19701,
+      "sha256": "aca3fda302446306535c109fd2b42b04d84a8b7414abd940a7381a6eeed12939",
+      "git_blob": "a81ba580fd0bc732feeafd3eeeee9a0f74244f93"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v3.py",
+      "bytes": 21297,
+      "sha256": "7af713b36d2bb4914003c65becc0252e596b04f05c39ae1ceb8ce89e48945862",
+      "git_blob": "012287f93184862b6daafea248113e64915d578f"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v3_core.py",
+      "bytes": 12162,
+      "sha256": "426432f51606a6ffae3c00beca30130644b5c5222d6e55ce65dcbc75a6e9cb95",
+      "git_blob": "6e0bdf638ee06c5670188270aac5b27328995fcc"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v3_repair.py",
+      "bytes": 7712,
+      "sha256": "4d75bf222200c93f3bec8afd5bbf7256fa43bbe7aa3303a67824b311abae7f56",
+      "git_blob": "0daaba2ae62dd16af908fb470519dd132b7f513c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/__init__.py",
+      "bytes": 809,
+      "sha256": "e82e16cb50211fdf5565818dde664c6278c463d1db40da70284c1dc18fe0c144",
+      "git_blob": "bf598b623e5af178b9c12b20c47b9db015dd35c8"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/anchor_registration.py",
+      "bytes": 25153,
+      "sha256": "fccf04ccd3a42bd0ecc51889cf540ae51b97c850063cc107a84edbede88d02c8",
+      "git_blob": "b585e9ce0f15f714d25a18da019f5fe1f5da7c0f"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_event_frame_selector.py",
+      "bytes": 6116,
+      "sha256": "d20c90df2059ff6be353a7332653d2fdb56cc7b2374cb43fe96268f304075cb3",
+      "git_blob": "65fa40e86da7a247647e8b922185150b6b956612"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_gambler_rank_layout.py",
+      "bytes": 10135,
+      "sha256": "5d39e65390242e1af358f5f709e5f83c6233e8de7e9b13527d90348bb53b2a07",
+      "git_blob": "411ecfb698e455e4fb383e22b74fc0e7c34c6e38"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_gold_profile.py",
+      "bytes": 12411,
+      "sha256": "f45ba70c0b9a380c19fb2fbc8955a9b71bd776ae27c2f9bc24e5cdc528ee4945",
+      "git_blob": "25b56605f9b7d634349956ceb3c7a00ea9bf492a"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_primary_compat.py",
+      "bytes": 10234,
+      "sha256": "adfbda71b2428e24574b8da327697546fa8e0cfc75f7ac308aec465ae9b593c4",
+      "git_blob": "80122516281964544c25a66f9c2a0431a0725769"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_primary_production.py",
+      "bytes": 7682,
+      "sha256": "d17880eae30110dcbb3e7dd1acfa2a7475178eba8e7351d728481a5bdb951d93",
+      "git_blob": "6faf20ea3455294a5bd2905e91c788412ab2dc16"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_primary_video.py",
+      "bytes": 17641,
+      "sha256": "51d18a437e864c08822cd254fe4fb902189107ccef47a10297d486241627ac97",
+      "git_blob": "6faae59664654270ff104b673cc6b33ae7e6d39a"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_rank_layout.py",
+      "bytes": 104567,
+      "sha256": "2e60908be4185d075a18bc0eb174f2cc17dfd41a1a147a2f2a31f75fe43b9bf3",
+      "git_blob": "b12524d20595a00f3f6ddd3f2a6fc21c2e64c689"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/deal_evidence.py",
+      "bytes": 26255,
+      "sha256": "9881cd0b8fb56f44bf108ac2db9bb71c41210feeb2d3cfb1938244ac1bcb141c",
+      "git_blob": "7c7d31f62591baeb2eda690aa1915f3831a5b587"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/deal_review_pdf.py",
+      "bytes": 21763,
+      "sha256": "df69998435ec9b7fae89a635748011ed4202e4ec23660a350314d0f254852b11",
+      "git_blob": "71af3ed5344b38a82d423cfc99048f2ae3a85f38"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/engine.py",
+      "bytes": 8861,
+      "sha256": "bdcc3a6050182e6154302dcd4ddacde02e36fab4d1e55828e78cb55fb764fe96",
+      "git_blob": "47f203c431bb8933b2774ea5a90aa1451ad458e0"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/evidence_fusion.py",
+      "bytes": 20882,
+      "sha256": "549c1cb9045aa574aa2ad5e3b833337a47705c247214be48ef8e879da7cad8e7",
+      "git_blob": "36dc044655020a74f077a7d3dea77097bf2105f4"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/gambler_classic_reference.py",
+      "bytes": 13863,
+      "sha256": "2aa4b512a9c455fefe87bc0d40da75fa2fe7acddaceb8a308d53979f09975825",
+      "git_blob": "ae9c5bf94c8612d567607c8c1d20ba6f5dbf3778"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/gambler_reference_authority.py",
+      "bytes": 3132,
+      "sha256": "e63386a691431ca5834d7290ae51b1d283dae492512abcbaf752a7c6775be8c6",
+      "git_blob": "3932dd8080d4177df23c0e59929264c855160007"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/multiframe.py",
+      "bytes": 12227,
+      "sha256": "970e602da4ce4c9f7f3ab074e8d621aeefff64670218d68babcf171712eb9575",
+      "git_blob": "04bf9d52cae02908455aacf72ea955ecdf2b87ef"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/native_cards.py",
+      "bytes": 8154,
+      "sha256": "cfa4955b1d2101ead452ea55e97961cd85b2c14e9d6a74fb5652d776ec12bc9e",
+      "git_blob": "bc0f3cd80d775c2b9ce6a08c0eea583ccc9e01c0"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_vision/profiled_challenger.py",
+      "bytes": 53380,
+      "sha256": "6133415a02432b68fab24a88df37dc111e7d0a2866aa5b3d70bc05d786b10fe8",
+      "git_blob": "343ea6641566216714bc1dc90710d8aa91d151b4"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/bridge_worker_3_1_free.py",
+      "bytes": 28561,
+      "sha256": "b55a7510cc13ce7f83c897b968a4c51a8f638723f3c6847d89c20e1a7a5af2d3",
+      "git_blob": "b8103ef661390aaec61bc1cf6f67602b5a6b8cd4"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/book_world_event_readback.py",
+      "bytes": 1893,
+      "sha256": "8d66b1bb62cefae4a03f0a6b0a72ead83a74776100b34193b82894424a6a07eb",
+      "git_blob": "721f1ba1234291d96c08e69fe0c8867ea0adf48f"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/definition_candidate_producer.py",
+      "bytes": 1455,
+      "sha256": "381ed99c34ee745f5757ba249868a0d6ecf3f6eeac9c6a6fc7fbfa5b2427e5b9",
+      "git_blob": "0b4ded0a0ca1068f49463262b320186ed9ec53d6"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/definition_contract_postgres.py",
+      "bytes": 14931,
+      "sha256": "d5bb6be25a886cb74b0b138e6a6838ed9e24e6541fcb8f244d73a34a10d098e5",
+      "git_blob": "65930a0eb5f7e2d1f783c8ec42beaa94ed11ee92"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/definition_contract_store.py",
+      "bytes": 21730,
+      "sha256": "e3eacff30e7b78a0ecfd7dc00f3c243047a930d4e9df540de448f0068b82755c",
+      "git_blob": "838f85cc4312f8becca28713826b4bad739b6b86"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/definition_current_receipt_reader.py",
+      "bytes": 3975,
+      "sha256": "dc5dd29e5c09c0290c48747c120f70dcc6cf17980fefe83ea51fd09baf98f858",
+      "git_blob": "6469318293bd3dab8fc2254d615ee272f616938e"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/definition_initial_admission.py",
+      "bytes": 17646,
+      "sha256": "a700ad6641d20d5d510fdd7f5978554025824b62f415e7dac5a6a25510490c95",
+      "git_blob": "bb8a807b5a46a93ee29c9689a738f75c40f4c9c7"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/definition_initial_postgres.py",
+      "bytes": 21104,
+      "sha256": "d1a98ea20b7388af17a240abeef7ba3d6a906117d363f3ede2489fba3edc5318",
+      "git_blob": "2cd834e68ac4bb011b8f25cd33cb0cce835b7bf7"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/outbox_publication_decision.py",
+      "bytes": 1514,
+      "sha256": "9945a0f7cdbabc5631113d4eea09847b463e069db10fdd3f7adc964abf27c37a",
+      "git_blob": "0e24012e42fcf496a8ac2357aa9323a5cebb2db7"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/outbox_publisher.py",
+      "bytes": 7175,
+      "sha256": "02d28c9f055710d8ae77500332a1ca609566cf335a9bd224b68d2c3c05419209",
+      "git_blob": "4bcc109aee590f66f1692d0fccb104bfcdc51784"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/run_checkpoint_persistence.py",
+      "bytes": 8435,
+      "sha256": "6a4c2badaf99549d896dbd56d55e48d815945536bf13e00d65d661079b821872",
+      "git_blob": "10b46d06c4dbe6cf20b7c474e167d511a6a82ec2"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/runtime_worker_preflight.py",
+      "bytes": 6025,
+      "sha256": "cd014286fc88786c97792d8924deb804d0e5c590b353db4c1ffd791d3a325cf7",
+      "git_blob": "37a5be50c6f567129056c3387dedcd889e7b0cad"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/source_identity_persistence.py",
+      "bytes": 3849,
+      "sha256": "e10731528c55afa034dc3bcbc63280d03b0e21bfbe576a0c78de9e6853acf372",
+      "git_blob": "8f34677b64948e0365e076076ca725c314bdabcb"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_candidate_persistence.py",
+      "bytes": 11615,
+      "sha256": "7ce1c5832d3158ab931c444082ef1dedea8bedee939cb1d94747ea4f7be315ed",
+      "git_blob": "5722c68a8591bc21bf60bc9a7f0b5e78baacbcdd"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_correction_review_store.py",
+      "bytes": 2465,
+      "sha256": "64f0290e5157cb8b2ffb040c9328606dff6bbb28c0217ad60fcf96eecbdf81ba",
+      "git_blob": "f1c29ef50e8ea077c1ef46dbb22d8575ab4b1f43"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_definition_staging_lineage.py",
+      "bytes": 1880,
+      "sha256": "39cc18d67c1c2b677e94be8b63ba59757ffb92b24d4952e05888e3050d3a940a",
+      "git_blob": "84ddbc2c4611e70253425e6aec60d7318cbcd7e6"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_result_persistence.py",
+      "bytes": 36605,
+      "sha256": "700a7303bf6f563958c01746892c244d0c437d11508ddcf7c6553194ac17f0b2",
+      "git_blob": "0b98699a8c35b065822750d822516bd3c4efbbd3"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_staging_handoff.py",
+      "bytes": 3186,
+      "sha256": "6940af19e3404a2e07fef57be39fa584ad44376d552c9ad6b6f06aafb8b72f7f",
+      "git_blob": "860100117cf2d025b13562ddd22be0da34256bff"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_staging_lineage.py",
+      "bytes": 4090,
+      "sha256": "0c91b0fee9bf0eb71c44db41e7921672e0058539fceb3f5ec630f0051cb65de1",
+      "git_blob": "31d740ec0d570976f087c5beb9bc07763d86f81d"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_staging_read.py",
+      "bytes": 10216,
+      "sha256": "15cbc018dabfe0e814c8aeb4a97ecbcb6304251baceaf85d4a3c6e4684e95330",
+      "git_blob": "629d7cc8a7c26110ca7a3de3936c8c60c5c4d8ff"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/database/video_staging_receipt_read.py",
+      "bytes": 4165,
+      "sha256": "687b6d91c472438a27c1b7909e391dba8baa95213d236f0dc543794d6e73a25f",
+      "git_blob": "927a28581a7bfb84427b55b7ed54183598018e47"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_postprocess.py",
+      "bytes": 30124,
+      "sha256": "14df793f439a7176708beba6b92350d3a65b1f2bc0da294478227e3d217859ee",
+      "git_blob": "fcc2a0f478355634dc63bed07dc3b71c7030fd59"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_postprocess_v3.py",
+      "bytes": 2231,
+      "sha256": "daf643af668e4458081c294571559e034bf7742aa548a048751daf46c40ca0a9",
+      "git_blob": "c2919e3b903afe0e011c7369348b859e31779952"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_postprocess_v4_2.py",
+      "bytes": 18451,
+      "sha256": "204417b9ffaa36c21f3e071cd4779deaf19daf424a80480a688affea280ca446",
+      "git_blob": "de2de12e9eff64410f0a9ced6e64eb792e159681"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v2.py",
+      "bytes": 57557,
+      "sha256": "d63158167b9be2ff17f0710ba3d1fd16cb88a47f040b87585ca31ab198f05917",
+      "git_blob": "c911cd1af54f6a8bdfe47e3f9e1185c9e76d8256"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v3.py",
+      "bytes": 38323,
+      "sha256": "b49624f45cf517b77f75da42c3348e475af1a10944105f1e79fb6a0a3a77e976",
+      "git_blob": "736ceb9e2dcba217aeb6bc68db448d88c0e31d2f"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v4.py",
+      "bytes": 27872,
+      "sha256": "d26d93727c013f9875f8e31aeb9978c20e080ddec8657b41207b33e08f8d3567",
+      "git_blob": "4afde5dfb9dbc462f50f0bf67776ae662dd1e786"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v4_1.py",
+      "bytes": 14953,
+      "sha256": "c7db3dd596aa25762dd8e4431c666f9b7c78c19456b7187f7ce100f892dcfc97",
+      "git_blob": "70b7e33a0920ee3e09ad885d39c98e053a0d0676"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v4_2.py",
+      "bytes": 13112,
+      "sha256": "db520b83d6570875dbe2e935f9c61291552f5639d2ebd60c080529f55eaeb7a1",
+      "git_blob": "96b83c268bf5e8e4b07ed3b3be6ee7a859c15a66"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/run_drive_3_1_free.py",
+      "bytes": 16566,
+      "sha256": "713c4e18e76e9c8cb2ce1d5d3b85851b502c3b68fc1a85eea8b7b4664261aa7f",
+      "git_blob": "84ec507c04513688a19ae380d4e725324fa9de1e"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/run_drive_3_1_free_generic.py",
+      "bytes": 205,
+      "sha256": "3d35321bedca4fa686f5c9e281aa40f8b3bc1756784bd4a4a59f9ffcafe39665",
+      "git_blob": "8813f749ced48c7f259e2037ca6e7a7230b1337f"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/run_drive_3_1_free_oidc.py",
+      "bytes": 3581,
+      "sha256": "318d9ea39224d3decffb32a5bb0eebaa960f52e4cfa1407ccf575bd53f252776",
+      "git_blob": "fd3293a1ee5d2ff3f85d0913917e13b16bbc5105"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/run_master_3_1_free.py",
+      "bytes": 35724,
+      "sha256": "135cbd2f5a686da6da88319c16dd11c5ccfbfc26abe8292dffe6055744f9aa27",
+      "git_blob": "78b1a6fc636ef0b39a22fe8797fd510af7d0901e"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/run_master_3_1_free_semantic.py",
+      "bytes": 15176,
+      "sha256": "cee0ebdc8f550d6b3bd2c4b16fdff0de82ae03a8250d6caeb368a1b4f8bda91b",
+      "git_blob": "27cf35f86b84c924f1b0452664a9c06f8431f002"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/run_master_3_1_free_semantic_v2.py",
+      "bytes": 10814,
+      "sha256": "e55873764a7f57a06a61b10af2f736770862ccf358af26a3703f6d75bdf87e3b",
+      "git_blob": "2c8dacff07ab84d8c7214fbec6c78af8576a5846"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/tests/test_diana_longitudinal_quality_v4_2.py",
+      "bytes": 18046,
+      "sha256": "7f12b79870b7c26f05c1ba757ce4c97d0c11112c8cc0cd26e5de9e3c773171a9",
+      "git_blob": "11283a1f89ba809392f10b5805df414f5a4f4d17"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/tests/test_video_candidate_persistence_revision.py",
+      "bytes": 1976,
+      "sha256": "0096c88262f014381b340949f19383be16ef5e13826f4781dc0c541ade687345",
+      "git_blob": "b0446d8109cc921ad380963ea8b83fceb6ff07b0"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/tests/test_video_canon_replay.py",
+      "bytes": 19074,
+      "sha256": "729f90b14dee63c023f26bde248a0fc1d38022aab962ea371f9cbec6c0933157",
+      "git_blob": "25b0815a95a167b923e78d99d292056a29c6598a"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/tests/test_video_replay_input.py",
+      "bytes": 13685,
+      "sha256": "bf192787636530afe70181f39059ea36bb06fc7255beea43a3214f1e766dbd22",
+      "git_blob": "027926d5a4f8342ceca76a100744ff7ccf58c0e1"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/tests/test_video_source_draft.py",
+      "bytes": 11552,
+      "sha256": "e028894929ef367c760e9b6a9f9322058436feef4723e65b9fc384d20b575cd2",
+      "git_blob": "9f898dce38009e24087761b6de6b994277e308a2"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/tests/test_video_staging_handoff.py",
+      "bytes": 9830,
+      "sha256": "ae945b6e0c8c6e4747d76b2d3c06f3153bba9c4aadb8ec044483e0f082d184f2",
+      "git_blob": "ae9f50ff868e761946dfc83c58d0d837c78a673d"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/tools/replay_video_canon.py",
+      "bytes": 5586,
+      "sha256": "752e8002de9ba84de7917a8fbf0d9c4c2fdc14781d5afb6e7723cd712ab2bd68",
+      "git_blob": "3af73f4dfdd6f88ae5be868270ac2d0c39606f1c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/transcript_stage_checkpoint_v1.py",
+      "bytes": 6927,
+      "sha256": "ce6f916fdc6e97a014ba57c8f6f20f0de1d15684bbea09a4e1d1f8879dc81b53",
+      "git_blob": "f5bf5cd53fb9b14875a108ff2491ac182207108c"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/__init__.py",
+      "bytes": 494,
+      "sha256": "6ca265934f0e583c5a9fd3bdf0245c142b45b716b67b16008cd7b33f6fd4f686",
+      "git_blob": "aac76b2f4fd01b7f281186b3068b9ef4b3e83f00"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/algorithm_3_1_test.py",
+      "bytes": 10613,
+      "sha256": "b80ac1d9a41b68d12049d50f768f686b211fc6315c8f0b91af3d41466a9ff234",
+      "git_blob": "564566758b75a3aeb8b3365304082cc66f8621d9"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/comparison_artifacts.py",
+      "bytes": 45271,
+      "sha256": "5cfcb4e7ed0416d79c5a464141dd4db2dc82c34da2cee2e840e82b94de556d87",
+      "git_blob": "a9c705a49af9a7ca9a0e803f27d9106797280d25"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/comparison_requirement.py",
+      "bytes": 1776,
+      "sha256": "7db2a9b6e94d4fee20ecfb68c977127482d52cd4d2ad82d94b8a601367882ded",
+      "git_blob": "f42896e42032a2324a646fac56adcb965e09253a"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/contract.py",
+      "bytes": 8345,
+      "sha256": "589e8a0b6eae43dfa5f72b72f274feab5c29ec5497b6531afdba6714de278717",
+      "git_blob": "c46c956fd20bb7954faaa2e8c2690a24cadc5add"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/profiles.py",
+      "bytes": 2911,
+      "sha256": "bad20dccaa5056e1b2ac457d146c498cd014dd2e795670dc1beeda6cfa05d6e3",
+      "git_blob": "5b446a5d6376160bc587cd5d6eb7f198e2a3fc95"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/readiness.py",
+      "bytes": 4104,
+      "sha256": "c362e69ee45d39a5c37e2a953ead25788b94a2412d65b82facee195a1b434b0b",
+      "git_blob": "4107c5e0bcddc3eb266602b635aaba0cb76e8481"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/result_conformance.py",
+      "bytes": 69675,
+      "sha256": "cd4d63bf8b0b1d4416d0c888d37fa9c7a349ec564da95dcf81ef089a34588006",
+      "git_blob": "5a75b1bd5e1aeff3b84c141921ce83ac88fb9000"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/source_parts_manifest.py",
+      "bytes": 5603,
+      "sha256": "d0a77b7e08f226b326050ec7a8ec0064feda83a64c83cf6d554aca334855516d",
+      "git_blob": "466a2e344cce2b04f39945ae5d779f19f563b47e"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/speaker_role_verifier.py",
+      "bytes": 9502,
+      "sha256": "3c58f7cc704566eb3d445ad482dfb196124e2a5684ce76c47f106bd75a9afaf4",
+      "git_blob": "f7db2336cb25665a45f4bb34f03ce347696c3989"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/universal_video/speaker_structure.py",
+      "bytes": 19754,
+      "sha256": "d71f809a4f4633268802ea5056f4284209d80928e5ef9eeae3735e6ce249722a",
+      "git_blob": "bd71e661d8e4f0a7c17292d36ee1b766d03050a6"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/vendor/video_completed_staging_handoff.py",
+      "bytes": 1997,
+      "sha256": "dee1875af818f01391e7eed97b3ba7ee6422c2e5cf5565956b7d33145e2209f0",
+      "git_blob": "48a1679054e079cecdace8acda8246134084f207"
+    },
+    {
+      "path": "tools/teacher_staging_native/source/write_bounds.py",
+      "bytes": 4198,
+      "sha256": "433ce80fb98f4315d02509654ff9f118af3b0c4e471d582ce1338de98b7a4354",
+      "git_blob": "b98f06922bc0828db30c3698f67d46fe6f3763be"
+    },
+    {
+      "path": "tools/teacher_staging_native/sql/down.sql",
+      "bytes": 12274,
+      "sha256": "d14063280c04c14e2de57c4fe9a89d1d0ef3f746ac0d5595b0a4eae6e21a5e77",
+      "git_blob": "682d77cddbd0090317d8499ba30c57d55c689525"
+    },
+    {
+      "path": "tools/teacher_staging_native/sql/up.sql",
+      "bytes": 12522,
+      "sha256": "05f54c1b82a1095111f07c8e5aa2b35351a42377dc965df99c3f0c4f18c072b4",
+      "git_blob": "b76d65c3fa9c36d04ba0b9053d47a0adc23ecf2f"
+    },
+    {
+      "path": "tools/teacher_staging_native/verify_wheels.py",
+      "bytes": 1013,
+      "sha256": "5f1cfd6c45c5f0bda83787346e96e88e32f816473197362a05215f806b9aaf12",
+      "git_blob": "06ef541e033fd9560741dcc150e3172f950a9472"
+    },
+    {
+      "path": "tools/teacher_staging_native/WHEEL_PINS.json",
+      "bytes": 1431,
+      "sha256": "bfecff69a607c9184fcf0ec0e0524f719acc736757536f1e0de43b25923c69be",
+      "git_blob": "7299473789c9510281b0f88105809c9688a233b2"
+    }
+  ],
+  "publication_files": [
+    ".github/workflows/teacher-staging-native-once.yml",
+    "database/proposals/definition_staging_identity_v2.sql",
+    "database/rollback/definition_staging_identity_v2.sql",
+    "tools/teacher_staging_native/Dockerfile",
+    "tools/teacher_staging_native/MANIFEST.json",
+    "tools/teacher_staging_native/WHEEL_PINS.json",
+    "tools/teacher_staging_native/host_driver.py",
+    "tools/teacher_staging_native/native_cases.py",
+    "tools/teacher_staging_native/native_fixture.py",
+    "tools/teacher_staging_native/r3_driver.py",
+    "tools/teacher_staging_native/requirements.lock",
+    "tools/teacher_staging_native/seed.sql",
+    "tools/teacher_staging_native/source/DEPENDENCY_PINS.json",
+    "tools/teacher_staging_native/source/injected_transactions.py",
+    "tools/teacher_staging_native/source/staging_runner.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/__init__.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/assistant_lab.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/book_material.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/book_source_identity.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/book_source_review.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/book_world.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/book_world_events.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/canon_source_domain_policy.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/card_play_definition.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/card_play_definition_admission.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/definition_staging_identity.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/definition_v01_authority.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/definition_v01_records.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_ai_promotion.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_auto_pipeline.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_evidence.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_canon_replay.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_dds_decision_comparison.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_dds_pinned_executor.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_deal.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_definition_staging.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_extended_extraction.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_frame.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_learning_candidate.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_learning_feedback.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_local_evidence.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_replay_input.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_source_draft.py",
+    "tools/teacher_staging_native/source/vendor/bridge_contracts/video_teacher_read.py",
+    "tools/teacher_staging_native/source/vendor/bridge_neon_persistence.py",
+    "tools/teacher_staging_native/source/vendor/bridge_output_scoped_idempotency.py",
+    "tools/teacher_staging_native/source/vendor/bridge_report_board_reconstruction.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_1.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_14.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_15.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_16.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_2.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_3.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_4.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_6.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r25_7.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r26.py",
+    "tools/teacher_staging_native/source/vendor/bridge_runtime_hardening_r5.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/__init__.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/ai_worlds.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/__init__.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/image_ingress.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/model.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/position_contract.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/position_runtime.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/screenshot.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/service.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_appeals_cross.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_appeals_cross_v4.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_local.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_named_quadrant.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_publication.py",
+    "tools/teacher_staging_native/source/vendor/bridge_school_api/dds3/vision_publication_grid.py",
+    "tools/teacher_staging_native/source/vendor/bridge_semantic_qc.py",
+    "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization.py",
+    "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v2.py",
+    "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v3.py",
+    "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v3_core.py",
+    "tools/teacher_staging_native/source/vendor/bridge_speaker_diarization_v3_repair.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/__init__.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/anchor_registration.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_event_frame_selector.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_gambler_rank_layout.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_gold_profile.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_primary_compat.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_primary_production.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_primary_video.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/bridgit_rank_layout.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/deal_evidence.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/deal_review_pdf.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/engine.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/evidence_fusion.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/gambler_classic_reference.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/gambler_reference_authority.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/multiframe.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/native_cards.py",
+    "tools/teacher_staging_native/source/vendor/bridge_vision/profiled_challenger.py",
+    "tools/teacher_staging_native/source/vendor/bridge_worker_3_1_free.py",
+    "tools/teacher_staging_native/source/vendor/database/__init__.py",
+    "tools/teacher_staging_native/source/vendor/database/book_world_event_readback.py",
+    "tools/teacher_staging_native/source/vendor/database/definition_candidate_producer.py",
+    "tools/teacher_staging_native/source/vendor/database/definition_contract_postgres.py",
+    "tools/teacher_staging_native/source/vendor/database/definition_contract_store.py",
+    "tools/teacher_staging_native/source/vendor/database/definition_current_receipt_reader.py",
+    "tools/teacher_staging_native/source/vendor/database/definition_initial_admission.py",
+    "tools/teacher_staging_native/source/vendor/database/definition_initial_postgres.py",
+    "tools/teacher_staging_native/source/vendor/database/outbox_publication_decision.py",
+    "tools/teacher_staging_native/source/vendor/database/outbox_publisher.py",
+    "tools/teacher_staging_native/source/vendor/database/run_checkpoint_persistence.py",
+    "tools/teacher_staging_native/source/vendor/database/runtime_worker_preflight.py",
+    "tools/teacher_staging_native/source/vendor/database/source_identity_persistence.py",
+    "tools/teacher_staging_native/source/vendor/database/video_candidate_persistence.py",
+    "tools/teacher_staging_native/source/vendor/database/video_correction_review_store.py",
+    "tools/teacher_staging_native/source/vendor/database/video_definition_staging_lineage.py",
+    "tools/teacher_staging_native/source/vendor/database/video_result_persistence.py",
+    "tools/teacher_staging_native/source/vendor/database/video_staging_handoff.py",
+    "tools/teacher_staging_native/source/vendor/database/video_staging_lineage.py",
+    "tools/teacher_staging_native/source/vendor/database/video_staging_read.py",
+    "tools/teacher_staging_native/source/vendor/database/video_staging_receipt_read.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_postprocess.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_postprocess_v3.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_postprocess_v4_2.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v2.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v3.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v4.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v4_1.py",
+    "tools/teacher_staging_native/source/vendor/diana_longitudinal_quality_v4_2.py",
+    "tools/teacher_staging_native/source/vendor/run_drive_3_1_free.py",
+    "tools/teacher_staging_native/source/vendor/run_drive_3_1_free_generic.py",
+    "tools/teacher_staging_native/source/vendor/run_drive_3_1_free_oidc.py",
+    "tools/teacher_staging_native/source/vendor/run_master_3_1_free.py",
+    "tools/teacher_staging_native/source/vendor/run_master_3_1_free_semantic.py",
+    "tools/teacher_staging_native/source/vendor/run_master_3_1_free_semantic_v2.py",
+    "tools/teacher_staging_native/source/vendor/tests/test_diana_longitudinal_quality_v4_2.py",
+    "tools/teacher_staging_native/source/vendor/tests/test_video_candidate_persistence_revision.py",
+    "tools/teacher_staging_native/source/vendor/tests/test_video_canon_replay.py",
+    "tools/teacher_staging_native/source/vendor/tests/test_video_replay_input.py",
+    "tools/teacher_staging_native/source/vendor/tests/test_video_source_draft.py",
+    "tools/teacher_staging_native/source/vendor/tests/test_video_staging_handoff.py",
+    "tools/teacher_staging_native/source/vendor/tools/replay_video_canon.py",
+    "tools/teacher_staging_native/source/vendor/transcript_stage_checkpoint_v1.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/__init__.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/algorithm_3_1_test.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/comparison_artifacts.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/comparison_requirement.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/contract.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/profiles.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/readiness.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/result_conformance.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/source_parts_manifest.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/speaker_role_verifier.py",
+    "tools/teacher_staging_native/source/vendor/universal_video/speaker_structure.py",
+    "tools/teacher_staging_native/source/vendor/video_completed_staging_handoff.py",
+    "tools/teacher_staging_native/source/write_bounds.py",
+    "tools/teacher_staging_native/sql/down.sql",
+    "tools/teacher_staging_native/sql/up.sql",
+    "tools/teacher_staging_native/verify_wheels.py"
+  ],
+  "native_cases": 24,
+  "native_executed": false,
+  "financial_gate": "OPEN_NOT_AUTHORIZED_TO_PUBLISH_OR_RUN",
+  "connection": "Separate official rootfs, libpq over exact owned tmpfs Unix socket; actual handshake/import/permissions are NOT_RUN.",
+  "source_only_fixture": true,
+  "private_teaching_materials": false
+}
