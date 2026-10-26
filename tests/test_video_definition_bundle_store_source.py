@@ -268,5 +268,16 @@ class SourceTests(unittest.TestCase):
         self.assertIn('a.grantee<>t.relowner',SQL)
         self.assertIn('a.grantee<>p.proowner',SQL)
 
+    def test_19_both_release_migrations_register_before_commit(self):
+        for number, name in (("0375", "contract_store"), ("0376", "bundle_store_successor")):
+            migration = ROOT / f'database/migrations/{number}_workflow_definition_{name}.sql'
+            body = migration.read_text(encoding='utf-8')
+            key = f'{number}_workflow_definition_{name}'
+            self.assertEqual(body.count("schema_migration(migration_key)"), 1)
+            self.assertIn(f"VALUES ('{key}')", body.replace('VALUES(', 'VALUES ('))
+            self.assertLess(body.index('schema_migration(migration_key)'), body.rindex('COMMIT;'))
+            self.assertTrue(any(isinstance(statement.stmt, InsertStmt)
+                                for statement in parse_sql(body)))
+
 
 if __name__=='__main__':unittest.main()

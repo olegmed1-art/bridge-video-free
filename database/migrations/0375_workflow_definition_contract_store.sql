@@ -118,4 +118,6 @@ REVOKE ALL ON bidding.video_canon_definition_state,bidding.video_canon_definitio
 REVOKE ALL ON FUNCTION bidding.guard_definition_contract_state(),bidding.guard_definition_contract_audit() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.reject_definition_contract_truncate() FROM PUBLIC;
 -- No GRANT, EXECUTE capability expansion, CREATE ROLE or active route here.
+INSERT INTO public.schema_migration(migration_key)
+VALUES ('0375_workflow_definition_contract_store') ON CONFLICT DO NOTHING;
 COMMIT;
