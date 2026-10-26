@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Unaccepted CARD_PLAY definition content in existing knowledge_version proposal",
+  "$comment": "Source-only shape. Never an authority receipt or admission command. Cross-field byte hashes, interval ordering and firewall require the Python validator; JSON Schema alone is insufficient.",
+  "x-gate-source": "bridge_contracts.video_canon_ai_promotion.REQUIRED_CHECKS @54bfb792e5f7d0374ef02240b4a436e37bc1fbe2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "knowledge_domain",
+    "knowledge_kind",
+    "statement_text",
+    "statement_sha256",
+    "source_binding",
+    "owner_confirmation",
+    "scope",
+    "requires_52_cards",
+    "semantic_confidence",
+    "source_authorization",
+    "admission"
+  ],
+  "properties": {
+    "schema": {
+      "const": "card-play-definition-proposal-v1"
+    },
+    "knowledge_domain": {
+      "const": "CARD_PLAY"
+    },
+    "knowledge_kind": {
+      "const": "DEFINITION"
+    },
+    "statement_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "statement_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_candidate_id",
+        "source_drive_id",
+        "source_sha256",
+        "source_segment_id",
+        "interval_seconds",
+        "raw_text",
+        "raw_text_sha256"
+      ],
+      "properties": {
+        "source_candidate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_drive_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_segment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interval_seconds": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "raw_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "raw_text_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "owner_confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "message_ref",
+        "record_sha256",
+        "confirmed_role",
+        "named_person",
+        "independent_audio_review"
+      ],
+      "properties": {
+        "status": {
+          "const": "OWNER_CONFIRMED"
+        },
+        "message_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "record_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "confirmed_role": {
+          "const": "teacher"
+        },
+        "named_person": {
+          "type": "null"
+        },
+        "independent_audio_review": {
+          "const": false
+        }
+      }
+    },
+    "scope": {
+      "const": "DEFINITION_RECOGNITION_ONLY"
+    },
+    "requires_52_cards": {
+      "const": false
+    },
+    "semantic_confidence": {
+      "type": "null"
+    },
+    "source_authorization": {
+      "type": "null"
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "required_checks",
+        "verification_receipts"
+      ],
+      "properties": {
+        "status": {
+          "const": "BLOCKED"
+        },
+        "required_checks": {
+          "const": [
+            "BOUNDARY_TESTS",
+            "BRIDGE_LOGIC",
+            "CANON_CONFLICT_SCAN",
+            "CANON_INTEGRITY",
+            "CANON_REGRESSION",
+            "EXPLANATION_COMPLETENESS",
+            "HIDDEN_INFORMATION_FIREWALL",
+            "INTERFERENCE_TESTS",
+            "NEGATIVE_TESTS",
+            "POSITIVE_TESTS",
+            "ROLLBACK_RESTORE",
+            "SEMANTIC_PARSE",
+            "SOURCE_AUTHORITY",
+            "SOURCE_BINDING",
+            "SPEAKER_IDENTITY",
+            "TRANSCRIPT_BINDING"
+          ]
+        },
+        "verification_receipts": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    }
+  }
+}
