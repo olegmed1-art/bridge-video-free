@@ -66,6 +66,57 @@ class LeaseHeaderError(RuntimeError):
         super().__init__()
 
 
+class HostKeyScanReason(Enum):
+    NONZERO_EXIT = 'SCANNER_NONZERO_EXIT'
+    SIGNALLED = 'SCANNER_SIGNALLED'
+    TIMEOUT = 'SCANNER_TIMEOUT'
+    EXECUTABLE_MISSING = 'SCANNER_EXECUTABLE_MISSING'
+    EXECUTION_DENIED = 'SCANNER_EXECUTION_DENIED'
+    OS_ERROR = 'SCANNER_OS_ERROR'
+    RESULT_INVALID = 'SCANNER_RESULT_INVALID'
+    UNKNOWN = 'SCANNER_UNKNOWN'
+
+
+def safe_scanner_exit_code(value):
+    # No coercion/stringification; bool and foreign/oversized values are invalid.
+    return value if type(value) is int and -64 <= value <= 255 and value != 0 else None
+
+
+class HostKeyScanError(RuntimeError):
+    def __init__(self, reason, exit_code=None):
+        self.reason = reason if type(reason) is HostKeyScanReason else HostKeyScanReason.UNKNOWN
+        self.exit_code = safe_scanner_exit_code(exit_code)
+        super().__init__()
+
+
+def run_known_hosts_scanner(scanner, host, fingerprint, output):
+    try:
+        completed = subprocess.run(['bash',str(scanner),host,fingerprint,str(output)],
+            check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+    except subprocess.CalledProcessError as exc:
+        code = safe_scanner_exit_code(exc.returncode)
+        reason = (HostKeyScanReason.RESULT_INVALID if code is None else
+                  HostKeyScanReason.SIGNALLED if code < 0 else HostKeyScanReason.NONZERO_EXIT)
+        raise HostKeyScanError(reason, code) from None
+    except subprocess.TimeoutExpired:
+        raise HostKeyScanError(HostKeyScanReason.TIMEOUT) from None
+    except FileNotFoundError:
+        raise HostKeyScanError(HostKeyScanReason.EXECUTABLE_MISSING) from None
+    except PermissionError:
+        raise HostKeyScanError(HostKeyScanReason.EXECUTION_DENIED) from None
+    except OSError:
+        raise HostKeyScanError(HostKeyScanReason.OS_ERROR) from None
+    except Exception:
+        raise HostKeyScanError(HostKeyScanReason.UNKNOWN) from None
+    if type(completed) is not subprocess.CompletedProcess or type(completed.returncode) is not int:
+        raise HostKeyScanError(HostKeyScanReason.RESULT_INVALID)
+    if completed.returncode != 0:
+        code = safe_scanner_exit_code(completed.returncode)
+        reason = (HostKeyScanReason.RESULT_INVALID if code is None else
+                  HostKeyScanReason.SIGNALLED if code < 0 else HostKeyScanReason.NONZERO_EXIT)
+        raise HostKeyScanError(reason, code)
+
+
 _failure_stage = RoutingStage.ARGUMENTS
 
 
@@ -93,6 +144,11 @@ def report_routing_failure(exc=None, *, reason=None):
     print('AUTOPILOT_DATABASE_ROUTING_FAILED stage='+stage.value+detail, file=sys.stderr)
     if stage is RoutingStage.LEASE_HEADER and type(reason) is LeaseHeaderReason:
         print('AUTOPILOT_LEASE_HEADER_DIAGNOSTIC reason='+reason.value, file=sys.stderr)
+    if stage is RoutingStage.SSH_HOST_KEY and type(exc) is HostKeyScanError:
+        scan_reason = exc.reason if type(exc.reason) is HostKeyScanReason else HostKeyScanReason.UNKNOWN
+        code = safe_scanner_exit_code(exc.exit_code)
+        print('AUTOPILOT_SSH_HOST_KEY_DIAGNOSTIC reason='+scan_reason.value+
+              ' exit_code='+('NONE' if code is None else str(code)), file=sys.stderr)
 
 
 def mask(value):
@@ -282,8 +338,7 @@ def main(selection):
         subprocess.run(['ssh-keygen','-y','-P','','-f',str(key)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
         _failure_stage = RoutingStage.SSH_HOST_KEY
         scanner = Path(__file__).resolve().parents[1]/'ops/oracle_known_hosts_from_scan.sh'
-        subprocess.run(['bash',str(scanner),HOST,'SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go',str(work/'known_hosts')],
-                       check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+        run_known_hosts_scanner(scanner,HOST,'SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go',work/'known_hosts')
         ssh = ['ssh','-F','/dev/null','-i',str(key),'-o','BatchMode=yes','-o','IdentitiesOnly=yes',
                '-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+str(work/'known_hosts'),
                '-o','ConnectTimeout=15','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2',
