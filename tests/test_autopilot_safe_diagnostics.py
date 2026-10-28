@@ -285,7 +285,7 @@ class DiagnosticContract(unittest.TestCase):
             route.tempfile, "TemporaryDirectory"
         ) as temporary:
             temporary.return_value.__enter__.return_value = "/synthetic-only"
-            self.assert_stage(self.cli("health"), "SSH_HOST_KEY")
+            self.assertEqual(self.cli("health"), (1, "", "AUTOPILOT_DATABASE_ROUTING_FAILED stage=SSH_HOST_KEY\nAUTOPILOT_SSH_HOST_KEY_DIAGNOSTIC reason=SCANNER_UNKNOWN exit_code=NONE\n"))
         self.assertEqual(self.run.call_count, 2)
         self.assertEqual(self.run.call_args_list[0].args[0][0], "ssh-keygen")
         self.assertEqual(self.run.call_args_list[1].args[0][0], "bash")
