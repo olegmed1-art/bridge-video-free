@@ -6,6 +6,7 @@ on:
       - '.github/workflows/oracle-operator-v3.yml'
       - 'ops/install_ben_runtime.sh'
       - 'ops/oracle_known_hosts_from_scan.sh'
+      - 'tests/test_oracle_known_hosts_from_scan.sh'
   issue_comment:
     types: [created]
 
@@ -39,6 +40,7 @@ jobs:
           grep -F '/oracle-v3 rollout-worker' .github/workflows/oracle-operator-v3.yml >/dev/null
           grep -F '/oracle-v3 rollout-ben' .github/workflows/oracle-operator-v3.yml >/dev/null
           bash -n ops/install_ben_runtime.sh ops/oracle_known_hosts_from_scan.sh
+          bash tests/test_oracle_known_hosts_from_scan.sh
           grep -F '127.0.0.1:8085:8085' ops/install_ben_runtime.sh >/dev/null
 
   operate:
