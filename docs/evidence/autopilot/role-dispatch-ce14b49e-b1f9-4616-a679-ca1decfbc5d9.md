@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=ce14b49e-b1f9-4616-a679-ca1decfbc5d9
+dispatch_epoch=36
+role=RECOGNIZER
+task_fingerprint=25ab4c5e69de64847ed26498defe145af06f2ba30305beb6b8a653529ba6ec46
+target_pr=1106
+mode=VERIFY
+repair_attempt=1
+origin_task_id=7e19d397-ba6f-4aa9-bea0-3a6d0c12a544
+prior_task_id=1d729a66-aa1a-45db-bef1-dc3858d09238
+blocked_result_code=REQUIRED_CHECK_FAILED
+blocked_summary=Exact head has 0 unresolved threads, but Issue 881 Current-Main Authoritative CI failed after main advanced.
+instruction=READ_ONLY_VERIFY_REPAIR_NO_MUTATION
