@@ -8,6 +8,9 @@ from unittest.mock import MagicMock, patch
 
 from database import runtime_health_preflight as health
 from ops import github_autopilot_db_route as route
+# Keep the Oracle route gate and scanner regressions in the selected Database CI suite.
+from ops.test_autopilot_github_db_route import HostKeyScanDiagnostic
+from ops.test_oracle_light_route_install_trigger import OracleInstallEventGate
 
 PRIVATE = "SYNTHETIC_PRIVATE_VALUE"
 BAD_TEXT = "postgresql://synthetic:" + PRIVATE + "@example.invalid/db\npassword=" + PRIVATE
