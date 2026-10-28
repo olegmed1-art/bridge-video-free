@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=aa3654de-72fa-4b7d-8836-72a0062f701e
+dispatch_epoch=20
+role=RECOGNIZER
+task_fingerprint=973b2d71b9fa766b53f725c521f19a6f6e3c3fa776bf3ae196188404d5e2eb38
+target_pr=1106
+mode=REPAIR
+repair_attempt=1
+origin_task_id=2133de7d-e266-4bd4-bf1c-312db6aefbda
+prior_task_id=2133de7d-e266-4bd4-bf1c-312db6aefbda
+blocked_result_code=MALFORMED_DISPATCH_ENVELOPE
+blocked_summary=Dispatch body lacks repository, mailbox_pr, and expected_head_sha; the RECOGNIZER audit was rejected fail-closed without changing the target branch.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
