@@ -68,6 +68,7 @@ class LeaseHeaderError(RuntimeError):
 
 class HostKeyScanReason(Enum):
     NONZERO_EXIT = 'SCANNER_NONZERO_EXIT'
+    CANDIDATE_STAGE = 'SCANNER_CANDIDATE_STAGE_FAILED'
     SIGNALLED = 'SCANNER_SIGNALLED'
     TIMEOUT = 'SCANNER_TIMEOUT'
     EXECUTABLE_MISSING = 'SCANNER_EXECUTABLE_MISSING'
@@ -80,6 +81,16 @@ class HostKeyScanReason(Enum):
 def safe_scanner_exit_code(value):
     # No coercion/stringification; bool and foreign/oversized values are invalid.
     return value if type(value) is int and -64 <= value <= 255 and value != 0 else None
+
+
+def scanner_exit_reason(code):
+    if code is None:
+        return HostKeyScanReason.RESULT_INVALID
+    if code < 0:
+        return HostKeyScanReason.SIGNALLED
+    # Scanner exit 6 means its candidate fingerprint pipeline failed; it does
+    # not identify which command in that pipeline returned nonzero.
+    return HostKeyScanReason.CANDIDATE_STAGE if code == 6 else HostKeyScanReason.NONZERO_EXIT
 
 
 class HostKeyScanError(RuntimeError):
@@ -95,8 +106,7 @@ def run_known_hosts_scanner(scanner, host, fingerprint, output):
             check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
     except subprocess.CalledProcessError as exc:
         code = safe_scanner_exit_code(exc.returncode)
-        reason = (HostKeyScanReason.RESULT_INVALID if code is None else
-                  HostKeyScanReason.SIGNALLED if code < 0 else HostKeyScanReason.NONZERO_EXIT)
+        reason = scanner_exit_reason(code)
         raise HostKeyScanError(reason, code) from None
     except subprocess.TimeoutExpired:
         raise HostKeyScanError(HostKeyScanReason.TIMEOUT) from None
@@ -112,8 +122,7 @@ def run_known_hosts_scanner(scanner, host, fingerprint, output):
         raise HostKeyScanError(HostKeyScanReason.RESULT_INVALID)
     if completed.returncode != 0:
         code = safe_scanner_exit_code(completed.returncode)
-        reason = (HostKeyScanReason.RESULT_INVALID if code is None else
-                  HostKeyScanReason.SIGNALLED if code < 0 else HostKeyScanReason.NONZERO_EXIT)
+        reason = scanner_exit_reason(code)
         raise HostKeyScanError(reason, code)
 
 

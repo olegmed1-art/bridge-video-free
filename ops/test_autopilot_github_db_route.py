@@ -100,6 +100,30 @@ class HostKeyScanDiagnostic(unittest.TestCase):
                          'AUTOPILOT_SSH_HOST_KEY_DIAGNOSTIC reason=SCANNER_NONZERO_EXIT exit_code=4\n')
         self.assertNotIn(secret, output.getvalue())
 
+        legacy = self.scan(error=subprocess.CalledProcessError(255, [secret], stderr=secret.encode()))
+        self.assertEqual((legacy.reason, legacy.exit_code), (target.HostKeyScanReason.NONZERO_EXIT, 255))
+
+    def test_candidate_stage_exit_is_fixed_and_does_not_identify_pipeline_command(self):
+        secret = 'SYNTHETIC_SECRET_NEVER_PRINT'
+        cases = (
+            {'error': subprocess.CalledProcessError(6, [secret], output=secret.encode(), stderr=secret.encode())},
+            {'result': subprocess.CompletedProcess([secret], 6, stdout=secret.encode(), stderr=secret.encode())},
+        )
+        for case in cases:
+            with self.subTest(source=next(iter(case))):
+                caught = self.scan(**case)
+                self.assertEqual((caught.reason, caught.exit_code),
+                                 (target.HostKeyScanReason.CANDIDATE_STAGE, 6))
+                self.assertEqual(caught.args, ())
+                with patch.object(target, '_failure_stage', target.RoutingStage.SSH_HOST_KEY), \
+                        contextlib.redirect_stderr(io.StringIO()) as output:
+                    target.report_routing_failure(caught)
+                self.assertEqual(output.getvalue(),
+                                 'AUTOPILOT_DATABASE_ROUTING_FAILED stage=SSH_HOST_KEY\n'
+                                 'AUTOPILOT_SSH_HOST_KEY_DIAGNOSTIC '
+                                 'reason=SCANNER_CANDIDATE_STAGE_FAILED exit_code=6\n')
+                self.assertNotIn(secret, output.getvalue())
+
     def test_timeout_spawn_failure_signal_and_invalid_result_fail_closed(self):
         secret = 'SYNTHETIC_SECRET_NEVER_PRINT'
         cases = (
@@ -109,6 +133,7 @@ class HostKeyScanDiagnostic(unittest.TestCase):
             (PermissionError(13, secret, secret), target.HostKeyScanReason.EXECUTION_DENIED, None),
             (subprocess.CalledProcessError(-9, [secret]), target.HostKeyScanReason.SIGNALLED, -9),
             (subprocess.CalledProcessError('4', [secret]), target.HostKeyScanReason.RESULT_INVALID, None),
+            (subprocess.CalledProcessError(999, [secret]), target.HostKeyScanReason.RESULT_INVALID, None),
         )
         for error, reason, exit_code in cases:
             with self.subTest(reason=reason):
