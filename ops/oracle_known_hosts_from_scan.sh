@@ -41,6 +41,8 @@ done
 : > "$output"
 sort -u "$scanned" | while IFS= read -r line; do
   [[ -n "$line" ]] || continue
+  # ssh-keyscan may emit a banner comment on stdout; it is not a key record.
+  [[ "$line" == \#* ]] && continue
   printf '%s\n' "$line" > "$candidate"
   if ! fingerprint="$(ssh-keygen -lf "$candidate" 2>/dev/null | awk 'NR == 1 {print $2}' 2>/dev/null)"; then
     : > "$output"
