@@ -42,7 +42,11 @@ done
 sort -u "$scanned" | while IFS= read -r line; do
   [[ -n "$line" ]] || continue
   printf '%s\n' "$line" > "$candidate"
-  fingerprint="$(ssh-keygen -lf "$candidate" 2>/dev/null | awk 'NR == 1 {print $2}')"
+  if ! fingerprint="$(ssh-keygen -lf "$candidate" 2>/dev/null | awk 'NR == 1 {print $2}' 2>/dev/null)"; then
+    : > "$output"
+    echo "Oracle SSH candidate fingerprint stage failed" >&2
+    exit 6
+  fi
   if [[ "$fingerprint" == "$expected_fingerprint" ]]; then
     printf '%s\n' "$line" >> "$output"
   fi
