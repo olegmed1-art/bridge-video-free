@@ -8,9 +8,11 @@ To prevent repeated sequence collisions between parallel Bridge School workstrea
 - `0100–0199`: **Club / Member / Identity / Auth** only. New files in this range must start with `identity_`, `club_`, `member_`, or `auth_` after the numeric prefix.
 - `0300–0399`: **School Autopilot / durable workflow orchestration** only. New files in this range must start with `autopilot_` or `workflow_` after the numeric prefix.
 - `0400–0499`: **Video pipeline and evidence contracts**. New files in this range start with `video_` after the numeric prefix.
+- `0500–0599`: **Books authority and catalog contracts**. New files in this range start with `books_` after the numeric prefix.
 - `090–099` SQL tests: **Club / Member / Identity / Auth** regression tests only, with the same allowed name prefixes.
 - `300–399` SQL tests: **School Autopilot / durable workflow orchestration** regression tests only, with `autopilot_` or `workflow_` after the numeric prefix.
 - `400–499` SQL tests: **Video pipeline and evidence contracts** regression tests only, with `video_` after the numeric prefix.
+- `500–599` SQL tests: **Books authority and catalog contracts** regression tests only, with `books_` after the numeric prefix.
 - Other future ranges must be reserved here before first use if a parallel workstream needs collision-free numbering.
 
 The GitHub workflow `migration-namespace-guard.yml` enforces these reservations on pull requests and pushes to `main`. This reservation is organizational only; it does not promote migrations to production. Production remains controlled by the separate manual `database-production` workflow and its explicit `MIGRATE` confirmation gate.
@@ -24,3 +26,4 @@ filename and SHA256
 `bea4b407a63256f83f5eecbd8b220406070046edb34d87f849d645b39134dcc7`.
 This does not reserve additional Autopilot numbers in the Video range or
 permit modified historical source. Use 0300-0399 for new Autopilot migrations.
+
