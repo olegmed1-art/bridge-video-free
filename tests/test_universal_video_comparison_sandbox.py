@@ -210,11 +210,22 @@ def test_cgroup_missing_descendant_observation_refuses(tmp_path, monkeypatch):
     with pytest.raises(ComparisonProducerError, match="incomplete"):
         sandbox.group_pids(Path("/synthetic"))
 
+def _fstat_with_uid(uid):
+    original_fstat = os.fstat
+
+    def fake_fstat(fd):
+        stat = original_fstat(fd)
+        # Preserve st_size and the other real fields used by Python file I/O.
+        return os.stat_result(stat[:4] + (uid,) + stat[5:])
+
+    return fake_fstat
+
+
 def test_inventory_accepts_shared_helper_device_return(tmp_path, monkeypatch):
     path = tmp_path / "module.py"
     path.write_bytes(b"source")
     monkeypatch.setattr(sandbox, "private_directory", lambda *a, **k: 123)
-    monkeypatch.setattr(sandbox.os, "fstat", lambda fd: SimpleNamespace(st_uid=0))
+    monkeypatch.setattr(sandbox.os, "fstat", _fstat_with_uid(0))
     monkeypatch.setattr(sandbox.artifacts, "checked", lambda path: None)
     monkeypatch.setattr(sandbox, "protected_read", lambda path, *args: path.read_bytes())
     records = {"module.py": {"bytes": 6,
@@ -224,7 +235,7 @@ def test_inventory_accepts_shared_helper_device_return(tmp_path, monkeypatch):
 
 def test_inventory_refuses_non_root_owned_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox, "private_directory", lambda *a, **k: 123)
-    monkeypatch.setattr(sandbox.os, "fstat", lambda fd: SimpleNamespace(st_uid=12345))
+    monkeypatch.setattr(sandbox.os, "fstat", _fstat_with_uid(12345))
     with pytest.raises(ComparisonProducerError, match="root-owned"):
         sandbox.root_owned_directory(tmp_path)
 
