@@ -96,6 +96,7 @@ def validate_line_bearing_prediction(task: dict, prediction: dict, *, require_li
 
 
 def make_continuation_task(base_task: dict, play_prefix: Sequence[str], *, decision_id: str, information_mode: str = "double_dummy") -> dict:
+    """Return an internal DDS task; use continuation_student_view for delivery."""
     # Delegate after installing the partial-position parser, then revalidate the
     # visible-information mask as a fail-closed postcondition.
     task = core.make_continuation_task(
@@ -128,6 +129,8 @@ audit_lineage = core.audit_lineage
 crossfit_training_families = core.crossfit_training_families
 mask_information = core.mask_information
 audit_information_mask = core.audit_information_mask
+continuation_student_view = core.continuation_student_view
+validate_continuation_student_view = core.validate_continuation_student_view
 calibration_report = core.calibration_report
 fit_histogram_calibrator = core.fit_histogram_calibrator
 apply_calibrator = core.apply_calibrator

@@ -391,6 +391,11 @@ def crossfit_training_families(tasks: Iterable[dict], held_out_fold: int, *, fol
 
 
 def make_continuation_task(base_task: dict, play_prefix: Sequence[str], *, decision_id: str, information_mode: str = "double_dummy") -> dict:
+    """Build a private DDS task, including full deals even in human mode.
+
+    Only continuation_student_view() is a student delivery projection. Never
+    serialize this internal object as a learner prompt.
+    """
     first = base_task.get("first_to_play", base_task.get("leader", base_task.get("next_to_play")))
     if first is None:
         raise ValueError("Base task lacks first_to_play/leader/next_to_play")
@@ -464,6 +469,7 @@ def mask_information(task: dict, *, viewer: int | str, mode: str) -> dict:
 
 
 def audit_information_mask(task: dict) -> dict:
+    """Audit the internal hand mask only, not the task's delivery envelope."""
     visible = task.get("visible_information") or {}
     if visible.get("mode") != "human":
         return {"status": "not_applicable", "issues": []}
@@ -473,6 +479,166 @@ def audit_information_mask(task: dict) -> dict:
         if seat not in allowed and hand is not None:
             issues.append({"code": "HIDDEN_HAND_LEAK", "seat": seat})
     return {"status": "ok" if not issues else "error", "issues": issues}
+
+
+CONTINUATION_STUDENT_SCHEMA = "bridge-continuation-student-v1"
+_STUDENT_FIELDS = frozenset({
+    "schema", "task_type", "information_mode", "declarer", "strain",
+    "next_to_play", "completed_tricks", "legal_cards", "visible_information",
+})
+_STUDENT_MASK_FIELDS = frozenset({
+    "mode", "viewer", "visible_hands", "hands", "auction", "public_play", "current_trick",
+})
+_STUDENT_CALLS = frozenset({"PASS", "X", "XX"}) | frozenset(
+    f"{level}{strain}" for level in range(1, 8) for strain in (*SUITS, "NT")
+)
+
+
+def _student_require(condition: bool) -> None:
+    if not condition:
+        # Never echo rejected field names or values: they may contain a secret hand.
+        raise ValueError("Invalid continuation student envelope")
+
+
+def _student_keys(value: object, keys: frozenset | set) -> None:
+    _student_require(type(value) is dict)
+    _student_require(all(type(key) is str for key in value) and value.keys() == keys)
+
+
+def _student_cards(value: object, maximum: int) -> None:
+    _student_require(type(value) is list and len(value) <= maximum)
+    _student_require(all(type(card) is str and len(card) == 2
+                         and card[0] in SUITS and card[1] in RANKS for card in value))
+    _student_require(len(set(value)) == len(value))
+
+
+def _validate_student_shape(view: dict) -> None:
+    """Validate all JSON slots, including nested objects and public text."""
+    _student_keys(view, _STUDENT_FIELDS)
+    for key, expected in (("schema", CONTINUATION_STUDENT_SCHEMA),
+                          ("task_type", "play_decision"), ("information_mode", "human")):
+        _student_require(type(view[key]) is str and view[key] == expected)
+    for key, limit in (("declarer", 4), ("next_to_play", 4), ("strain", 5)):
+        _student_require(type(view[key]) is int and 0 <= view[key] < limit)
+    _student_require(type(view["completed_tricks"]) is int)
+    visible = view["visible_information"]
+    _student_keys(visible, _STUDENT_MASK_FIELDS)
+    _student_require(type(visible["mode"]) is str and visible["mode"] == "human")
+    _student_require(type(visible["viewer"]) is str
+                     and visible["viewer"] == SEATS[view["next_to_play"]])
+    played = visible["public_play"]
+    _student_cards(played, 52)
+    _student_require(view["completed_tricks"] == len(played) // 4)
+    trick = visible["current_trick"]
+    _student_require(type(trick) is list and len(trick) == len(played) % 4)
+    for index, row in enumerate(trick):
+        _student_keys(row, {"seat", "card"})
+        _student_require(type(row["seat"]) is str and row["seat"] in tuple(SEATS))
+        _student_cards([row["card"]], 1)
+        _student_require(row["card"] == played[len(played) - len(trick) + index])
+        _student_require((SEATS.index(row["seat"]) + len(trick) - index) % 4
+                         == view["next_to_play"])
+    allowed = {SEATS[view["next_to_play"]]}
+    if played:
+        allowed.add(SEATS[(view["declarer"] + 2) % 4])
+    _student_require(type(visible["visible_hands"]) is list
+                     and all(type(seat) is str for seat in visible["visible_hands"])
+                     and visible["visible_hands"] == sorted(allowed))
+    _student_keys(visible["hands"], set(SEATS))
+    seen = set(played)
+    for seat, hand in visible["hands"].items():
+        if seat not in allowed:
+            _student_require(hand is None)
+            continue
+        _student_require(type(hand) is list and len(hand) == 4)
+        for ranks in hand:
+            _student_require(type(ranks) is str and len(ranks) <= 13
+                             and all(rank in RANKS for rank in ranks))
+            _student_require(ranks == "".join(rank for rank in RANKS if rank in ranks))
+        cards = hand_cards(hand)
+        _student_require(len(cards) <= 13 and not seen.intersection(cards))
+        seen.update(cards)
+    auction = visible["auction"]
+    _student_require(auction is None or (type(auction) is list and len(auction) <= 320
+                     and all(type(call) is str and call in _STUDENT_CALLS for call in auction)))
+    _student_cards(view["legal_cards"], 13)
+    own = {view["next_to_play"]: visible["hands"][visible["viewer"]]}
+    expected_legal = legal_cards(own, view["next_to_play"],
+                                [(SEATS.index(row["seat"]), row["card"]) for row in trick])
+    _student_require(bool(expected_legal) and view["legal_cards"] == expected_legal)
+
+
+def continuation_student_view(task: dict) -> dict:
+    """Project a private human-mode continuation into an allowlisted prompt.
+
+    Rebuild the mask and legal cards from the position, never from a supplied
+    visible_information object. Only public play reveals dummy; arbitrary
+    dummy_revealed metadata cannot expose it before the lead. Auction accepts
+    canonical call tokens only (PASS/X/XX, 1S..7NT), never explanations.
+
+    Internal IDs/lineage, full deals, answers, metadata and free text are omitted.
+    The serving adapter must retain assignment binding server-side and validate
+    the entire final envelope against that private task immediately before JSON
+    serialization. This is additive: internal DDS objects remain unchanged.
+    """
+    _student_require(type(task) is dict and task.get("task_type") == "play_decision"
+                     and task.get("information_mode") == "human")
+    try:
+        seats = []
+        for value in (task["declarer"], task["next_to_play"]):
+            _student_require((type(value) is int and value in range(4))
+                             or (type(value) is str and value in tuple(SEATS)))
+            seats.append(_seat_index(value))
+        declarer, viewer = seats
+        strain = task["strain"]
+        _student_require((type(strain) is int and strain in range(5))
+                         or (type(strain) is str and strain in (*SUITS, "NT")))
+        strain = (*SUITS, "NT").index(strain) if type(strain) is str else strain
+        _student_require(type(task["deal"]) is str)
+        hands = parse_deal(task["deal"])
+        played = task["play_prefix"]
+        _student_cards(played, 52)
+        trick = task["current_trick"]
+        _student_require(type(trick) is list and len(trick) <= 3)
+        _student_require(all(type(row) is dict for row in trick))
+        public_trick = [{"seat": row["seat"], "card": row["card"]} for row in trick]
+        auction = task.get("auction")
+        _student_require(auction is None or type(auction) is list)
+        allowed = {viewer} | ({(declarer + 2) % 4} if played else set())
+        view = {
+            "schema": CONTINUATION_STUDENT_SCHEMA,
+            "task_type": "play_decision",
+            "information_mode": "human",
+            "declarer": declarer,
+            "strain": strain,
+            "next_to_play": viewer,
+            "completed_tricks": task["completed_tricks"],
+            "legal_cards": legal_cards(hands, viewer,
+                [(_seat_index(row["seat"]), normalize_card(row["card"])) for row in public_trick]),
+            "visible_information": {
+                "mode": "human", "viewer": SEATS[viewer],
+                "visible_hands": sorted(SEATS[seat] for seat in allowed),
+                "hands": {SEATS[seat]: list(hands[seat]) if seat in allowed else None for seat in range(4)},
+                "auction": list(auction) if auction is not None else None,
+                "public_play": list(played), "current_trick": public_trick,
+            },
+        }
+        _validate_student_shape(view)
+    except (KeyError, TypeError, ValueError, IndexError):
+        raise ValueError("Invalid private continuation for student projection") from None
+    return view
+
+
+def validate_continuation_student_view(envelope: dict, *, source_task: dict) -> None:
+    """Fail closed on the entire final delivery, bound to its private source.
+
+    Unlike audit_information_mask(), this rejects an internal task even when
+    human masking passes. Exact nested keys/types block metadata/explanation
+    channels; source equality also detects substituted cards in allowed slots.
+    A schema-shaped object alone is not evidence that its visible cards are true.
+    """
+    _validate_student_shape(envelope)
+    _student_require(envelope == continuation_student_view(source_task))
 
 
 # ---------------------------------------------------------------------------
