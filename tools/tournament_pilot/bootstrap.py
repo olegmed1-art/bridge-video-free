@@ -46,6 +46,10 @@ def main():
     # Fixture membership permits SET ROLE; no capability is added to app/worker.
     run("exec",cid,"psql","-U","postgres","-d","tournament_rehearsal","-v","ON_ERROR_STOP=1","-c",
         "GRANT bridge_school_worker, bridge_school_app_principal TO tournament_rehearsal_owner WITH INHERIT FALSE, SET TRUE")
+    # Actual teacher login for the disposable behavior qualification only.
+    # No role substitution is accepted by the read-only behavior checker.
+    run("exec",cid,"psql","-U","postgres","-d","tournament_rehearsal","-v","ON_ERROR_STOP=1","-c",
+        "ALTER ROLE bridge_school_app_principal LOGIN")
     print("Repository migrations applied as non-superuser owner; no production connection.")
 
 

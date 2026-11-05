@@ -46,16 +46,16 @@ class Flow:
 
 
 def test_lifecycle_http_only_and_every_phase_pending(tmp_path, capsys):
-    env = b.intent(environment())
+    env = b.intent(environment()) | {"BRIDGE_API_TOKEN": SECRET}
     flow, sleeps = Flow(), []
     result = b.lifecycle(env, opener=flow, sleep=sleeps.append, now=NOW, claim=tmp_path / "claim")
     lines = [json.loads(s) for s in capsys.readouterr().out.splitlines()]
-    assert [r.get("phase") for r in lines] == [None, "baseline", "active", "revoked", "reactivated", "all_requests"]
+    assert [r.get("phase") for r in lines if r.get("phase") != "poll"] == [None, "baseline", "active", "revoked", "reactivated", "all_requests"]
     assert all(r["status"] == "pending_deployment_correlation" for r in lines)
     assert result == {"status": "pending_external_final_acceptance", "requests": 13}
     assert len(lines[-1]["receipts"]) == flow.n
     assert SECRET not in json.dumps(lines)
-    assert sleeps and all(seconds == 8 for seconds in sleeps)
+    assert sleeps == [16, 8, 8, 8]
 
 
 @pytest.mark.parametrize("message", ["ordinary commit", "", "prefix " + b.MARKER])
@@ -73,8 +73,8 @@ def test_nonmain_and_wrong_project_do_not_start():
 def test_phase_timeout_bounded_and_no_activation_claim(tmp_path, capsys):
     flow = Flow(states=[None] * 20)
     with pytest.raises(v.Rejected, match="phase_deadline_exceeded"):
-        b.lifecycle(b.intent(environment()), opener=flow, sleep=lambda _: None, now=NOW, claim=tmp_path / "claim")
-    assert flow.n == 11
+        b.lifecycle(b.intent(environment()) | {"BRIDGE_API_TOKEN": SECRET}, opener=flow, sleep=lambda _: None, now=NOW, claim=tmp_path / "claim")
+    assert flow.n == 13
     assert '"phase": "active"' not in capsys.readouterr().out
 
 
@@ -107,7 +107,7 @@ def test_network_request_budget():
     assert transport.n == 40
 
 
-@pytest.mark.parametrize("message", [b.MARKER, b.MARKER + "\ntruncated",
+@pytest.mark.parametrize("message", ["CANON_ACCEPTANCE_20261004_ONCE", b.MARKER, b.MARKER + "\ntruncated",
     b.MARKER + "\nobserved_at=2026-10-04T12:00:00Z\nbase=" + "0" * 40])
 def test_malformed_marked_build_fails_closed(message):
     with pytest.raises(v.Rejected, match="build_intent_malformed"):
@@ -117,6 +117,8 @@ def test_malformed_marked_build_fails_closed(message):
 def test_successful_marked_build_never_promotes(monkeypatch, capsys):
     monkeypatch.setattr(b, "intent", lambda _: {})
     monkeypatch.setattr(b, "lifecycle", lambda _: {"status": "pending_external_final_acceptance"})
+    monkeypatch.setattr(v, "validate_intent", lambda *_: None)
+    monkeypatch.setattr(b.os, "environ", {"BRIDGE_API_TOKEN": SECRET})
     monkeypatch.setattr(b.signal, "SIGALRM", 14, raising=False)
     monkeypatch.setattr(b.signal, "signal", lambda *_: None)
     monkeypatch.setattr(b.signal, "alarm", lambda *_: None, raising=False)
@@ -132,5 +134,40 @@ def test_duplicate_receipt_stops_before_next_phase(tmp_path, capsys):
                 response.headers["x-vercel-id"] = "fra1::test4-1791113746799-e295f3ece609"
             return response
     with pytest.raises(v.Rejected, match="duplicate_request_id"):
-        b.lifecycle(b.intent(environment()), opener=Reused(), sleep=lambda _: None, now=NOW, claim=tmp_path / "claim")
+        b.lifecycle(b.intent(environment()) | {"BRIDGE_API_TOKEN": SECRET}, opener=Reused(), sleep=lambda _: None, now=NOW, claim=tmp_path / "claim")
     assert '"phase": "baseline"' not in capsys.readouterr().out
+
+
+def test_actual_expired_entrypoint_never_copies_environment_or_reads_credentials(monkeypatch, capsys):
+    class GuardedEnvironment(dict):
+        def __iter__(self): pytest.fail("Never copy the whole environment")
+        def keys(self): pytest.fail("Never copy the whole environment")
+        def get(self, key, default=None):
+            if key in ("BRIDGE_API_TOKEN", "BRIDGE_APP_DATABASE_URL"):
+                pytest.fail("Expired entrypoint must not read credentials")
+            return super().get(key, default)
+    class Clock:
+        @staticmethod
+        def now(tz): return v.DEADLINE
+    env = GuardedEnvironment(environment())
+    monkeypatch.setattr(b.os, "environ", env)
+    monkeypatch.setattr(b, "datetime", Clock)
+    monkeypatch.setattr(b.signal, "alarm", lambda *_: None, raising=False)
+    def forbidden(*args, **kwargs): pytest.fail("Expired entrypoint must not start lifecycle/HTTP/claim")
+    monkeypatch.setattr(b, "lifecycle", forbidden)
+    assert b.main() == 1
+    assert '"code": "intent_rejected"' in capsys.readouterr().out
+
+
+def test_intent_returns_only_public_context_without_iteration_or_credential_lookup():
+    class GuardedEnvironment(dict):
+        def __iter__(self): pytest.fail("Never copy the whole environment")
+        def keys(self): pytest.fail("Never copy the whole environment")
+        def get(self, key, default=None):
+            if key == "BRIDGE_API_TOKEN": pytest.fail("Intent must not read token")
+            return super().get(key, default)
+    result = b.intent(GuardedEnvironment(environment()))
+    assert set(result) == {"VERCEL_ENV", "VERCEL_PROJECT_ID", "CANON_VALIDATION_INTENT",
+        "CANON_READY_SHA", "CANON_READY_DEPLOYMENT", "CANON_READY_STATE",
+        "CANON_READY_ORIGIN", "CANON_READY_OBSERVED_AT"}
+    assert SECRET not in json.dumps(result)
