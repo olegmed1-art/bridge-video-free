@@ -27,6 +27,7 @@ jobs:
         run: |
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/issue_881_external_precanary_workflow.sh
+          bash tests/test_oracle_known_hosts_from_scan.sh
           python -m universal_video.precanary imports
           python -m universal_video.precanary synthetic-result-contract
           python -m pytest -q \

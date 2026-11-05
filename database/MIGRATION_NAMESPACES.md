@@ -26,4 +26,3 @@ filename and SHA256
 `bea4b407a63256f83f5eecbd8b220406070046edb34d87f849d645b39134dcc7`.
 This does not reserve additional Autopilot numbers in the Video range or
 permit modified historical source. Use 0300-0399 for new Autopilot migrations.
-

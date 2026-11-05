@@ -41,8 +41,14 @@ done
 : > "$output"
 sort -u "$scanned" | while IFS= read -r line; do
   [[ -n "$line" ]] || continue
+  # ssh-keyscan may emit a banner comment on stdout; it is not a key record.
+  [[ "$line" == \#* ]] && continue
   printf '%s\n' "$line" > "$candidate"
-  fingerprint="$(ssh-keygen -lf "$candidate" 2>/dev/null | awk 'NR == 1 {print $2}')"
+  if ! fingerprint="$(ssh-keygen -lf "$candidate" 2>/dev/null | awk 'NR == 1 {print $2}' 2>/dev/null)"; then
+    : > "$output"
+    echo "Oracle SSH candidate fingerprint stage failed" >&2
+    exit 6
+  fi
   if [[ "$fingerprint" == "$expected_fingerprint" ]]; then
     printf '%s\n' "$line" >> "$output"
   fi
@@ -53,10 +59,27 @@ sort -u -o "$output" "$output"
   echo "Oracle SSH fingerprint mismatch" >&2
   exit 4
 }
+# A process substitution hides the verifier's exit status from the while loop.
+# Capture and validate the complete pipeline before accepting known_hosts.
+if ! verified_fingerprints="$(ssh-keygen -lf "$output" 2>/dev/null | awk '{print $2}')"; then
+  echo "Oracle SSH known_hosts verification failed" >&2
+  exit 5
+fi
+[[ -n "$verified_fingerprints" ]] || {
+  echo "Oracle SSH known_hosts verification failed" >&2
+  exit 5
+}
+verified_count=0
 while IFS= read -r fingerprint; do
   [[ "$fingerprint" == "$expected_fingerprint" ]] || {
     echo "unverified Oracle SSH key reached known_hosts" >&2
     exit 5
   }
-done < <(ssh-keygen -lf "$output" | awk '{print $2}')
+  ((verified_count += 1))
+done <<< "$verified_fingerprints"
+selected_count="$(wc -l < "$output")"
+[[ "$verified_count" -eq "$selected_count" ]] || {
+  echo "Oracle SSH known_hosts verification failed" >&2
+  exit 5
+}
 chmod 0600 "$output"

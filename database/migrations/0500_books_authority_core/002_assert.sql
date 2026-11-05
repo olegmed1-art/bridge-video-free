@@ -95,7 +95,8 @@ BEGIN
            OR row_.prolang<>(SELECT oid FROM pg_catalog.pg_language WHERE lanname='plpgsql') OR row_.prokind<>'f'
            OR row_.prosecdef OR row_.proisstrict OR row_.proleakproof OR row_.provolatile<>'v' OR row_.proparallel<>'u'
            OR row_.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog']::text[]
-           OR pg_catalog.btrim(pg_catalog.replace(row_.prosrc,E'\r\n',E'\n')) IS DISTINCT FROM item.value#>>'{}' THEN
+           OR pg_catalog.replace(row_.prosrc,E'\r\n',E'\n') IS DISTINCT FROM
+              E'\n' || (item.value#>>'{}') || E'\n' THEN
             RAISE EXCEPTION 'BOOKS_AUTHORITY_FUNCTION_DRIFT';
         END IF;
     END LOOP;

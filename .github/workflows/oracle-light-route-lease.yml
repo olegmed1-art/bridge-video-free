@@ -2,11 +2,17 @@ name: Oracle Light autopilot routing lease
 
 on:
   pull_request:
-    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py', 'ops/test_autopilot_cutover_routing_inventory.py', '.github/workflows/autopilot-reconcile-diagnostic.yml', '.github/workflows/autopilot-chatgpt-role-callback.yml', '.github/workflows/autopilot-codex-event-callback.yml', '.github/workflows/autopilot-paused-reconcile.yml', '.github/workflows/autopilot-mailbox-pre-rotation.yml', '.github/workflows/database-health-monitor.yml']
+    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py', 'ops/test_autopilot_cutover_routing_inventory.py', 'ops/test_oracle_light_route_install_trigger.py', '.github/workflows/autopilot-reconcile-diagnostic.yml', '.github/workflows/autopilot-chatgpt-role-callback.yml', '.github/workflows/autopilot-codex-event-callback.yml', '.github/workflows/autopilot-paused-reconcile.yml', '.github/workflows/autopilot-mailbox-pre-rotation.yml', '.github/workflows/database-health-monitor.yml']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py', 'ops/test_autopilot_cutover_routing_inventory.py', '.github/workflows/autopilot-reconcile-diagnostic.yml', '.github/workflows/autopilot-chatgpt-role-callback.yml', '.github/workflows/autopilot-codex-event-callback.yml', '.github/workflows/autopilot-paused-reconcile.yml', '.github/workflows/autopilot-mailbox-pre-rotation.yml', '.github/workflows/database-health-monitor.yml']
+    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py', 'ops/test_autopilot_cutover_routing_inventory.py', 'ops/test_oracle_light_route_install_trigger.py', '.github/workflows/autopilot-reconcile-diagnostic.yml', '.github/workflows/autopilot-chatgpt-role-callback.yml', '.github/workflows/autopilot-codex-event-callback.yml', '.github/workflows/autopilot-paused-reconcile.yml', '.github/workflows/autopilot-mailbox-pre-rotation.yml', '.github/workflows/database-health-monitor.yml']
   workflow_dispatch:
+    inputs:
+      install_route:
+        description: 'Explicitly install and probe the existing Oracle route'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,18 +32,53 @@ jobs:
       - run: python ops/test_oracle_light_route_lease.py
       - run: python ops/test_autopilot_github_db_route.py
       - run: python ops/test_autopilot_cutover_routing_inventory.py
+      - run: python ops/test_oracle_light_route_install_trigger.py
       - name: Validate shell syntax
         run: |
           ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-route-lease.yml
 
   tunnel:
     needs: contract
-    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.install_route == true &&
+      github.run_attempt == 1
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      # GitHub expression string comparisons ignore case. Recheck the exact
+      # manual scope before checkout, key material or remote installation.
+      - name: Validate exact manual install scope
+        shell: bash
+        timeout-minutes: 1
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          INSTALL_ROUTE: ${{ inputs.install_route }}
+        run: |
+          python -I -B - <<'PY'
+          import os
+          import re
+
+          def require(condition):
+              if not condition:
+                  raise SystemExit('ORACLE_ROUTE_INSTALL_SCOPE_REJECTED')
+
+          require(os.environ.get('EVENT_NAME') == 'workflow_dispatch')
+          require(os.environ.get('EVENT_REPOSITORY') == 'olegmed1-art/bridge-video-free')
+          require(os.environ.get('EVENT_REF') == 'refs/heads/main')
+          require(os.environ.get('RUN_ATTEMPT') == '1')
+          require(os.environ.get('INSTALL_ROUTE') == 'true')
+          require(re.fullmatch(r'[0-9a-f]{40}', os.environ.get('EVENT_SHA', '')) is not None)
+          PY
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Install fixed routing command and prove lease drain
         env:

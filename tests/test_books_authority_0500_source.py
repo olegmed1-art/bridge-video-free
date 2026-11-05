@@ -1,5 +1,7 @@
 """Offline guards for the narrow Books authority schema migration."""
 from pathlib import Path
+import json
+import re
 import unittest
 
 
@@ -51,6 +53,8 @@ class Books0500Source(unittest.TestCase):
         self.assertIn('pg_catalog.btrim(item.value->>1', self.assertion)
         self.assertNotIn('item.value#>>\'{}\'',''.join(
             line for line in self.assertion.splitlines() if 'k.conname=item.key' in line))
+        self.assertNotIn('btrim(pg_catalog.replace(row_.prosrc', self.assertion)
+        self.assertIn("E'\\n' || (item.value#>>'{}') || E'\\n'", self.assertion)
 
     def test_native_matrix_has_negative_boundaries(self):
         for marker in ('test_empty_install_and_exact_replay',
@@ -82,6 +86,29 @@ class Books0500Source(unittest.TestCase):
         self.assertIn('database/migrations/05??_*.sql', self.namespace_guard)
         self.assertIn('database/tests/5??_*.sql', self.namespace_guard)
         self.assertIn('books_*)', self.namespace_guard)
+
+    def test_function_bodies_keep_exact_dollar_quote_boundaries(self):
+        expected = json.loads(self.assertion.split(
+            'expected_bodies constant jsonb := $json_bodies$', 1)[1]
+            .split('$json_bodies$', 1)[0])
+        authored = dict(re.findall(
+            r'CREATE FUNCTION public\.(\w+)\(\).*?AS \$\$(.*?)\$\$;',
+            self.core, re.S))
+        self.assertEqual(set(authored), set(expected))
+        for name, body in expected.items():
+            self.assertEqual(authored[name], '\n' + body + '\n')
+
+            # Model the exact newline normalization requested by the SQL check.
+            accepted = '\n' + body + '\n'
+            self.assertEqual(accepted.replace('\r\n', '\n'), accepted)
+            self.assertEqual(accepted.replace('\n', '\r\n').replace('\r\n', '\n'), accepted)
+            for altered in (body, '\n' + body, body + '\n',
+                            '\n\n' + body + '\n', '\n' + body + '\n\n',
+                            ' ' + accepted, accepted + ' ',
+                            '\n' + body.replace('RAISE EXCEPTION', 'RETURN NULL', 1) + '\n',
+                            '\n' + body.replace('RETURN NEW', 'RETURN NULL', 1) + '\n'):
+                if altered != accepted:
+                    self.assertNotEqual(altered.replace('\r\n', '\n'), accepted)
 
 
 if __name__ == '__main__':
