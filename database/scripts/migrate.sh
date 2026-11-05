@@ -19,6 +19,23 @@ decode_value() {
 }
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-database/migrations}"
 EXTERNAL_HISTORY_FILE="${EXTERNAL_HISTORY_FILE:-database/external_migration_history.tsv}"
+MIGRATION_CHECKS_DIR="${MIGRATION_CHECKS_DIR:-$(dirname "$MIGRATIONS_DIR")/migration_checks}"
+
+verify_migration_postcondition() {
+  local key="$1" checksum="$2"
+  local check="$MIGRATION_CHECKS_DIR/$key.sql"
+  if [[ ! -f "$check" ]]; then
+    if [[ "$key" == "0500_books_authority_core" ]]; then
+      echo "Required Books authority postcondition missing" >&2
+      return 1
+    fi
+    return 0
+  fi
+  "${PSQL[@]}" -v migration_checksum="$checksum" \
+    -v books_expected_database="${BOOKS_AUTHORITY_EXPECTED_DATABASE:-__UNCONFIRMED__}" \
+    -v books_expected_owner="${BOOKS_AUTHORITY_EXPECTED_OWNER:-__UNCONFIRMED__}" -f "$check"
+}
+
 
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
   echo "Migration directory not found: $MIGRATIONS_DIR" >&2
@@ -203,6 +220,8 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   fi
 
   if [[ "$applied" == "t" ]]; then
+    # Opt-in metadata postconditions run before legacy NULL-checksum bootstrapping.
+    verify_migration_postcondition "$key" "$checksum"
     stored="$(decode_value "$(psql_value -c "SELECT replace(encode(convert_to(COALESCE(checksum,''),'UTF8'),'base64'), E'\\n','') FROM schema_migration WHERE migration_key = '$key';")")"
     if [[ -z "$stored" ]]; then
       echo "Bootstrapping checksum for already-applied migration $key"
@@ -224,8 +243,13 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   # the lock prevents two independent CI runners from applying the same migration.
   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
     -v migration_key="$key" \
+    -v migration_checksum="$checksum" \
+    -v books_expected_database="${BOOKS_AUTHORITY_EXPECTED_DATABASE:-__UNCONFIRMED__}" \
+    -v books_expected_owner="${BOOKS_AUTHORITY_EXPECTED_OWNER:-__UNCONFIRMED__}" \
     -v migration_file="$migration" <<'PSQL'
+SET statement_timeout='15s';
 SELECT pg_advisory_lock(hashtext(current_database()), hashtext('bridge_school_schema_migrations'));
+RESET statement_timeout;
 SELECT to_regclass('public.schema_migration') IS NOT NULL AS registry_exists \gset
 \if :registry_exists
   SELECT EXISTS (
@@ -259,6 +283,7 @@ PSQL
     echo "Failed to persist checksum for migration $key" >&2
     exit 1
   fi
+  verify_migration_postcondition "$key" "$checksum"
 done
 
 echo "Migration history verified."

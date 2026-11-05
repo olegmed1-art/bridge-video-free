@@ -67,7 +67,12 @@ BEGIN
                'actor_context_signing_secret',
                'source_rights_snapshot',
                'recovery_checkpoint',
-               'recovery_verification'
+               'recovery_verification',
+               'books_authority_object',
+               'books_authority_state',
+               'books_authority_state_audit',
+               'books_authority_attempt',
+               'books_authority_phase'
            )
     LOOP
         IF NOT has_table_privilege('bridge_school_reader', r.table_name, 'SELECT') THEN
@@ -83,6 +88,22 @@ BEGIN
         IF has_table_privilege('bridge_school_reader', required_table, 'SELECT') THEN
             RAISE EXCEPTION 'reader unexpectedly has SELECT on protected table %', required_table;
         END IF;
+    END LOOP;
+
+    -- Books authority tables are newly protected by 0500. They must not inherit
+    -- the ordinary-table reader grant or acquire direct app/worker SELECT.
+    FOREACH required_table IN ARRAY ARRAY[
+        'books_authority_object','books_authority_state','books_authority_state_audit',
+        'books_authority_attempt','books_authority_phase'
+    ] LOOP
+        FOREACH role_name IN ARRAY ARRAY[
+            'bridge_school_reader','bridge_school_app','bridge_school_worker'
+        ] LOOP
+            IF has_table_privilege(role_name, required_table, 'SELECT') THEN
+                RAISE EXCEPTION '% unexpectedly has SELECT on Books authority table %',
+                    role_name, required_table;
+            END IF;
+        END LOOP;
     END LOOP;
 
     IF has_table_privilege('bridge_school_reader','person','INSERT')

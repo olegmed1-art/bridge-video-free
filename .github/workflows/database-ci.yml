@@ -171,6 +171,8 @@ jobs:
     env:
       ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_school_ci
       DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/bridge_school_ci
+      BOOKS_AUTHORITY_EXPECTED_DATABASE: bridge_school_ci
+      BOOKS_AUTHORITY_EXPECTED_OWNER: bridge_ci_owner
 
     steps:
       - name: Checkout
@@ -300,6 +302,14 @@ jobs:
           chmod +x database/scripts/migrate.sh
           bash -n database/scripts/migrate.sh
           database/scripts/migrate.sh
+
+      - name: Qualify Books authority migration in disposable PostgreSQL 18 database
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B -m unittest discover -s tests -p test_books_authority_0500_source.py -v
+          python -B -m unittest discover -s database/tests -p test_books_authority_0500_postgres.py -v
 
       - name: Verify video Canon firewall Unicode boundaries
         shell: bash
