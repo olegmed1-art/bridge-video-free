@@ -46,19 +46,45 @@ components:
       controlled_onboarding: verified
       school: verified
     independent_backup_evidence:
-      workflow_run_id: 32932896224
-      artifact_id: 9593826932
-      artifact_name: neon-independent-backup-v1-20260826T050935Z-32932896224-1
-      encrypted_backup_sha256: d4a3eee080badc849fd5346536ee49b3bb1a1448a483febbfdb81b5b4132115b
-      encrypted_bytes: 6566288
-      artifact_expires_at_utc: "2026-09-30T05:09:36Z"
-      source_tables: 234
-      restored_tables: 234
-      source_schemas: 5
-      restored_schemas: 5
-      raw_dump_uploaded: false
-      restore_target: isolated_postgres18
-      observed_restore_result: success
+      receipts_url: https://github.com/olegmed1-art/bridge-video-free/issues/526
+      receipt_selection_note: >-
+        Use #526 to find current backup/restore receipts and check the selected
+        artifact's retention. The dated observations below do not establish
+        current backup availability, RPO/RTO, or whole-school recovery readiness.
+      latest_observed_receipt:
+        receipt_created_at_utc: "2026-11-21T09:46:11Z"
+        url: https://github.com/olegmed1-art/bridge-video-free/issues/526#issuecomment-7060794813
+        workflow_run_id: 44890916591
+        source_tables: 337
+        restored_tables: 337
+        source_schemas: 9
+        restored_schemas: 9
+        restore_target: isolated_postgres18
+      monthly_copy_observation_2026_11_01:
+        workflow_run_url: https://github.com/olegmed1-art/bridge-video-free/actions/runs/41292038594
+        monthly_artifact_id: 13076619915
+        monthly_artifact_name: monthly-neon-independent-backup-v1-20261101T091322Z-41292038594-1
+        artifact_expires_at_utc: "2027-01-30T09:11:39Z"
+        note: >-
+          Separate monthly upload observed. This workflow restores the daily
+          generation; restoration from this monthly artifact is not proven.
+      historical_restore_proof_2026_08_26:
+        note: >-
+          Historical restore proof only. The August artifact has expired;
+          do not treat it as an available backup or a current receipt.
+        workflow_run_id: 32932896224
+        artifact_id: 9593826932
+        artifact_name: neon-independent-backup-v1-20260826T050935Z-32932896224-1
+        encrypted_backup_sha256: d4a3eee080badc849fd5346536ee49b3bb1a1448a483febbfdb81b5b4132115b
+        encrypted_bytes: 6566288
+        artifact_expires_at_utc: "2026-09-30T05:09:36Z"
+        source_tables: 234
+        restored_tables: 234
+        source_schemas: 5
+        restored_schemas: 5
+        raw_dump_uploaded: false
+        restore_target: isolated_postgres18
+        observed_restore_result: success
     internal_checkpoint:
       branch_id: br-nameless-leaf-b108v431
       branch_name: recovery-governance-baseline-20260825
